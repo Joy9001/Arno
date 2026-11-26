@@ -63,7 +63,8 @@ obligations, EMIs, subscriptions, and card installments; goals with deadlines; a
 projection must not cross; people and splits; hand-updated asset accounts; learned
 merchant-to-category rules; typed agent memory; searchable conversation threads; probabilistic
 projection and affordability verdicts; citations; proactive briefings, reminders, risk checks,
-pattern detection, and user-scheduled read-only questions; statement, photo, and voice capture;
+pattern detection, and user-scheduled read-only questions; statement review, photo, and voice
+capture;
 CSV/JSON/`pg_dump` export.
 
 Durable constraints:
@@ -72,11 +73,12 @@ Durable constraints:
 - India is the only country implemented; country-specific code lives in one folder.
 - The UI is English-only. Chat replies in English by default and follows the user's language (or
   mix, such as Hinglish) only when they write in it.
-- Every number in an answer comes from a tool return or a script the agent ran; the model decides
-  what to compute, code computes it.
+- Every number in an answer comes from a tool return or a script the agent ran in an isolated
+  sandbox; the model decides what to compute, code computes it.
 - The agent never moves money. Advice is limited to facts and tradeoffs.
 - Writes land immediately with undo, except statement imports (review screen first) and lasting or
-  wide writes in a conversation that has read outside text (one confirm tap).
+  wide writes such as a category rule for every past row, archiving, or changing settings (one
+  confirm tap).
 - The instance is private-network only. No analytics, no public hosting, no third-party telemetry.
 - Open source under MIT; no GPL, AGPL, SSPL, or Elastic code in the shipped image.
 - Explicitly undecided or parked: native Android app, public-internet access, multicurrency,

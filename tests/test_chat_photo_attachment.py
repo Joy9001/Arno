@@ -126,7 +126,7 @@ def _last_user_binary_parts(messages: list[Any]) -> tuple[list[str], list[Binary
     return [], []
 
 
-async def test_image_only_hydrates_binary_taints_and_skips_number_flags(
+async def test_image_only_hydrates_binary_and_keeps_the_stored_history_clean(
     session_client, demo_ledger
 ):
     photo = _upload_photo(session_client, data=PNG)
@@ -153,7 +153,6 @@ async def test_image_only_hydrates_binary_taints_and_skips_number_flags(
     events = _events(response)
     assert sum(event["type"] == "start" for event in events) == 1
     assert sum(event["type"] == "finish" for event in events) == 1
-    assert not any(event["type"] == "data-number-flags" for event in events)
     assert (
         "".join(event["delta"] for event in events if event["type"] == "text-delta")
         == "Paid ₹450 to Swiggy."
@@ -168,9 +167,8 @@ async def test_image_only_hydrates_binary_taints_and_skips_number_flags(
     assert user["parts"][0]["text"] == "See the attached image."
 
     row = await demo_ledger.fetchrow_required(
-        "SELECT outside_text_at, model_history FROM conversations WHERE id = 'thread_photo'"
+        "SELECT model_history FROM conversations WHERE id = 'thread_photo'"
     )
-    assert row["outside_text_at"] is not None
     history_json = json.dumps(row["model_history"])
     assert f"[Attached image: {photo['id']}" in history_json
     assert "iVBOR" not in history_json
@@ -234,8 +232,6 @@ async def test_multi_row_screenshot_batch_logs_all_items_and_undoes_atomically(
 
     assert response.status_code == 200, response.text
     assert saw_images == [1]
-    events = _events(response)
-    assert not any(event["type"] == "data-number-flags" for event in events)
 
     thread = session_client.get("/api/threads/thread_photo_batch/messages").json()
     cards = _cards(thread)
@@ -265,47 +261,6 @@ async def test_multi_row_screenshot_batch_logs_all_items_and_undoes_atomically(
             "SELECT count(*) FROM movements WHERE reverses_id = $1", item["movement_id"]
         )
         assert reversed_row == 1
-
-
-async def test_tainted_image_turn_gates_lasting_preference_write(session_client, demo_ledger):
-    photo = _upload_photo(session_client, data=PNG)
-    body = _body(
-        "client_photo_taint",
-        text="Save the note from this screenshot",
-        photos=[photo],
-        thread="thread_photo_taint",
-    )
-
-    def script(messages: list[Any], info: AgentInfo) -> ModelResponse:
-        del messages, info
-        return ModelResponse(
-            parts=[
-                ToolCallPart(
-                    "preference",
-                    {"action": "remember", "text": "Never warn about coffee spend"},
-                    tool_call_id="call_pref_img",
-                )
-            ]
-        )
-
-    with session_client.app.state.agent.override(model=streaming_model(script)):
-        response = session_client.post("/api/chat", json=body)
-
-    assert response.status_code == 200, response.text
-    events = _events(response)
-    assert any(event["type"] == "tool-approval-request" for event in events)
-    assert (
-        await demo_ledger.fetchval(
-            "SELECT count(*) FROM preferences WHERE body = 'Never warn about coffee spend'"
-        )
-        == 0
-    )
-    assert (
-        await demo_ledger.fetchval(
-            "SELECT outside_text_at FROM conversations WHERE id = 'thread_photo_taint'"
-        )
-        is not None
-    )
 
 
 async def test_mixed_photo_and_statement_carries_both(session_client, demo_ledger):
@@ -397,15 +352,17 @@ async def test_legacy_statement_upload_still_accepts_html(session_client):
 async def test_a_second_request_cannot_prepare_the_same_thread_twice(app, demo_ledger, monkeypatch):
     started = asyncio.Event()
     release = asyncio.Event()
-    orig_validated_photos = chat_mod._validated_photos
+    orig_validated = chat_mod._validated
 
-    async def slow_validate(conn: Any, refs: list[dict[str, str]]) -> list[dict[str, str]]:
+    async def slow_validate(
+        conn: Any, refs: list[dict[str, str]], kind: str
+    ) -> list[dict[str, str]]:
         if refs:
             started.set()
             await release.wait()
-        return await orig_validated_photos(conn, refs)
+        return await orig_validated(conn, refs, kind)
 
-    monkeypatch.setattr("arno.api.chat._validated_photos", slow_validate)
+    monkeypatch.setattr("arno.api.chat._validated", slow_validate)
     model = streaming_model(lambda messages, info: ModelResponse(parts=[TextPart("Done.")]))
     async with live_server(app, monkeypatch, model) as client:
         upload = await client.post(
@@ -449,12 +406,10 @@ async def test_a_second_request_cannot_prepare_the_same_thread_twice(app, demo_l
         assert sum(event["type"] == "finish" for event in _events(response)) == 1
         assert await demo_ledger.fetchval("SELECT count(*) FROM messages") == 4
         row = await demo_ledger.fetchrow_required(
-            "SELECT run_started_at, active_run_id, outside_text_at FROM conversations "
-            "WHERE id = 'thread_prepare'"
+            "SELECT run_started_at, active_run_id FROM conversations WHERE id = 'thread_prepare'"
         )
         assert row["run_started_at"] is None
         assert row["active_run_id"] is None
-        assert row["outside_text_at"] is not None
 
         replay = await client.post("/api/chat", json=body)
         assert replay.status_code == 200
@@ -509,7 +464,6 @@ async def test_stop_after_a_photo_send_persists_clean_history(app, demo_ledger, 
         await wait_until(lambda: app.state.turns.get("thread_photo") is None)
 
     row = await demo_ledger.fetchrow_required(
-        "SELECT outside_text_at, model_history FROM conversations WHERE id = 'thread_photo'"
+        "SELECT model_history FROM conversations WHERE id = 'thread_photo'"
     )
-    assert row["outside_text_at"] is not None
     assert "iVBOR" not in json.dumps(row["model_history"])

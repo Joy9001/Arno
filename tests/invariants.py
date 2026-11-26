@@ -31,7 +31,6 @@ from arno.engine.projection import CardAccount, CashEvent, LiquidAccount, Projec
 from arno.ledger.common import today
 from arno.ledger.errors import InvalidLedgerError
 from arno.ledger.schedule_payments import _capacity, payment_evidence, payment_status
-from arno.tools import read as read_tools
 from arno.tools import recaps as recap_tools
 
 SYSTEM_KINDS = {"spending", "income", "equity"}
@@ -653,10 +652,6 @@ async def _check_cross_paths(conn: Connection) -> None:
             "SELECT DISTINCT to_char(date, 'YYYY-MM') AS month FROM movements ORDER BY month"
         )
     ]
-    effective = {
-        str(row["movement_id"])
-        for row in await conn.fetch("SELECT movement_id FROM v_movement_state WHERE is_reversed")
-    }
     for month in months:
         start = date.fromisoformat(f"{month}-01")
         end = _month_end(start)
@@ -664,14 +659,12 @@ async def _check_cross_paths(conn: Connection) -> None:
         from_view = await _spending_from_view(conn, start, end)
         from_summary = await _spending_from_summary(conn, month)
         from_recap = await _spending_from_recap(conn, start, end)
-        from_movements, listed_ids, reversal_kinds = await _spending_from_query(
-            conn, month, start, end
-        )
+        from_legs = await _spending_from_legs(conn, start, end)
         paths = {
             "v_spending": from_view,
             "summarize_spending": from_summary,
             "recap spending_rows": from_recap,
-            "query_movements": from_movements,
+            "v_legs": from_legs,
         }
         for category in sorted(set().union(*paths.values())):
             values = {name: amounts.get(category, 0) for name, amounts in paths.items()}
@@ -680,16 +673,13 @@ async def _check_cross_paths(conn: Connection) -> None:
                 "cross_path_spending_mismatch",
                 f"{month}/{category}: " + ", ".join(f"{k}={v}" for k, v in values.items()),
             )
+        # The recap list's one grouped query agrees with the per-category sums.
+        period = recap_tools.month_period(start, today())
+        listed = (await recap_tools.period_totals(conn, [period]))[period.id]
         _expect(
-            not reversal_kinds,
-            "reversal_in_effective_rows",
-            f"query_movements for {month} returned reversal movements: {sorted(reversal_kinds)}",
-        )
-        _expect(
-            not (set(listed_ids) & set(effective)),
-            "reversed_movement_in_effective_rows",
-            f"query_movements for {month} returned movements a live reversal cancels",
-            tuple(sorted(set(listed_ids) & set(effective))),
+            (listed["paise"] if listed else 0) == sum(from_view.values()),
+            "recap_list_total_mismatch",
+            f"{month}: recap list total {listed} != v_spending sum {sum(from_view.values())}",
         )
 
 
@@ -722,7 +712,7 @@ async def _spending_from_view(conn: Connection, start: date, end: date) -> dict[
 
 
 async def _spending_from_summary(conn: Connection, month: str) -> dict[str, int]:
-    summary = await read_tools.summarize_spending(conn, group_by="category", period=month)
+    summary = await recap_tools.summarize_spending(conn, group_by="category", period=month)
     return {str(group["key"]): int(group["amount"]["paise"]) for group in summary["groups"]}
 
 
@@ -734,38 +724,22 @@ async def _spending_from_recap(conn: Connection, start: date, end: date) -> dict
     return {key: value for key, value in amounts.items() if value}
 
 
-async def _spending_from_query(
-    conn: Connection, month: str, start: date, end: date
-) -> tuple[dict[str, int], set[str], set[str]]:
-    amounts: dict[str, int] = defaultdict(int)
-    listed: set[str] = set()
-    reversal_kinds: set[str] = set()
-    cursor: str | None = None
-    while True:
-        page = await read_tools.query_movements(
-            conn, filters={"period": month}, limit=200, cursor=cursor
-        )
-        for row in page["rows"]:
-            listed.add(str(row["id"]))
-            if row["kind"] == "reversal":
-                reversal_kinds.add(str(row["id"]))
-            for transfer in row["transfers"]:
-                if transfer["from_kind"] == "spending":
-                    amounts[str(transfer.get("category_name") or "Uncategorized")] -= int(
-                        transfer["amount_paise"]
-                    )
-                if transfer["to_kind"] == "spending":
-                    amounts[str(transfer.get("category_name") or "Uncategorized")] += int(
-                        transfer["amount_paise"]
-                    )
-        cursor = page["next_cursor"]
-        if not cursor:
-            break
-    return (
-        {key: value for key, value in amounts.items() if value},
-        listed,
-        reversal_kinds,
+async def _spending_from_legs(conn: Connection, start: date, end: date) -> dict[str, int]:
+    """The agent's own view: v_legs over effective movements, signed toward the spending side."""
+    rows = await conn.fetch(
+        """
+        SELECT coalesce(category_name, 'Uncategorized') AS category,
+               sum(CASE WHEN to_account_kind = 'spending' THEN amount_paise
+                        ELSE -amount_paise END)::bigint AS amount
+        FROM v_legs
+        WHERE date BETWEEN $1 AND $2 AND NOT is_reversal AND NOT is_reversed
+          AND (to_account_kind = 'spending' OR from_account_kind = 'spending')
+        GROUP BY 1
+        """,
+        start,
+        end,
     )
+    return {str(row["category"]): int(row["amount"]) for row in rows if int(row["amount"])}
 
 
 # --- e. views agree with the ledger -----------------------------------------------------------

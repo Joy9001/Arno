@@ -6,11 +6,8 @@ UI kit; they can't fetch outside images under `img-src`.
 
 from __future__ import annotations
 
-from typing import override
-
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from starlette.requests import Request
-from starlette.responses import Response
+from starlette.datastructures import MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 CONTENT_SECURITY_POLICY = (
     "default-src 'self'; "
@@ -24,11 +21,23 @@ CONTENT_SECURITY_POLICY = (
 )
 
 
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    @override
-    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
-        response = await call_next(request)
-        response.headers["Content-Security-Policy"] = CONTENT_SECURITY_POLICY
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["Referrer-Policy"] = "no-referrer"
-        return response
+class SecurityHeadersMiddleware:
+    """Pure ASGI, so a streamed reply is never buffered or wrapped."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        async def send_with_headers(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                headers["Content-Security-Policy"] = CONTENT_SECURITY_POLICY
+                headers["X-Content-Type-Options"] = "nosniff"
+                headers["Referrer-Policy"] = "no-referrer"
+            await send(message)
+
+        await self.app(scope, receive, send_with_headers)

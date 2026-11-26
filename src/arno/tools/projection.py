@@ -10,9 +10,19 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Sequence
 from dataclasses import replace
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from functools import lru_cache
-from typing import Any, Literal, cast
+from typing import Annotated, Any, Literal, Self, cast
+
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    TypeAdapter,
+    model_validator,
+)
 
 from arno.db.conn import Connection
 from arno.engine import series
@@ -70,7 +80,6 @@ from arno.ledger import schedules as schedules_mod
 from arno.ledger.common import balance_anchor, has_known_balance, ledger_balances_at
 from arno.ledger.common import today as ledger_today
 from arno.ledger.settings import read_settings
-from arno.tools.mark import mark
 
 
 # shortcut: max 2 concurrent off-loop projections and 90d fast-path cap on home/risk, revisit if
@@ -427,10 +436,7 @@ async def _series_forecasts(
             if row["amount_kind"] in ("fixed", "stepped")
             else tuple(int(value) for value in row["samples"])
         )
-        display_name = cast(
-            str,
-            mark(payee_name) if row["payee_outside_text"] else payee_name,
-        )
+        display_name = payee_name
         forecasts.append(
             SeriesForecast(
                 id=str(row["id"]),
@@ -510,10 +516,7 @@ async def _owed_events(
         balance = int(row["balance_paise"])
         signed = balance
         kind = "owed_receipt" if signed > 0 else "owed_payment"
-        # payees.display_name is NOT NULL, so its mark is never null either.
-        display_name = cast(
-            str, mark(row["display_name"]) if row["outside_text"] else row["display_name"]
-        )
+        display_name = cast(str, row["display_name"])
         events.append(
             CashEvent(
                 date=when,
@@ -614,8 +617,7 @@ async def _load_snapshot(
         expanded = expanded_by_id[str(row["id"])]
         if not expanded:
             continue
-        # schedules.name is NOT NULL, so its mark is never null either.
-        display_name = cast(str, mark(row["name"]) if row["outside_text"] else row["name"])
+        display_name = cast(str, row["name"])
         schedule_sources[str(row["id"])] = {
             "kind": "schedule",
             "id": row["id"],
@@ -626,11 +628,7 @@ async def _load_snapshot(
         goal = goal_by_schedule.get(row["id"])
         for occurrence in expanded:
             card = card_by_account.get(occurrence["account_id"])
-            # An occurrence's name comes from its schedule, which is NOT NULL.
-            name = cast(
-                str,
-                mark(occurrence["name"]) if occurrence["outside_text"] else occurrence["name"],
-            )
+            name = cast(str, occurrence["name"])
             occurrences.append(
                 Occurrence(
                     schedule_id=str(row["id"]),
@@ -826,217 +824,164 @@ async def load_inputs(
     return replace(build_inputs(snapshot), horizon_limit_days=horizon_limit_days)
 
 
-def _hypothetical(payload: dict[str, Any] | Hypothetical | None) -> Hypothetical | None:
+Date = date
+
+
+def _today_means_today(value: Any) -> Any:
+    return ledger_today() if value == "today" else value
+
+
+Day = Annotated[Date, BeforeValidator(_today_means_today)]
+Name = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
+Paise = Annotated[int, Field(gt=0, le=MAX_PAISE)]
+
+
+class _Strict(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ProjectHypothetical(_Strict):
+    amount_paise: Paise = Field(description="The purchase amount, in paise.")
+    date: Day = Field(description="The purchase date, YYYY-MM-DD.")
+    method: Literal["account", "card", "emi"] = Field(
+        default="account",
+        description="account: pay from a bank account now. card: put it on a card. "
+        "emi: split it into card instalments.",
+    )
+    emi_months: int | None = Field(
+        default=None, ge=2, le=48, description="Instalments for method=emi; 3 if omitted."
+    )
+    account: str | None = Field(
+        default=None, description="A card name for card or emi; the best card if omitted."
+    )
+    emi_rate_percent: float | None = Field(
+        default=None,
+        ge=0,
+        le=100,
+        description="The EMI's annual interest rate in percent, when the offer states it",
+    )
+    emi_fee_paise: int | None = Field(
+        default=None,
+        ge=0,
+        le=MAX_PAISE,
+        description="The EMI's processing fee in paise, when stated",
+    )
+    no_cost: bool = Field(
+        default=False, description="True for a no-cost EMI: the merchant pays the interest"
+    )
+
+    def to_engine(self) -> Hypothetical:
+        return Hypothetical(
+            amount_paise=self.amount_paise,
+            date=self.date,
+            method=self.method,
+            emi_months=self.emi_months,
+            account=self.account,
+            emi_rate_bps=(
+                round(self.emi_rate_percent * 100) if self.emi_rate_percent is not None else None
+            ),
+            emi_fee_paise=self.emi_fee_paise,
+            no_cost=self.no_cost,
+        )
+
+
+class _Span(_Strict):
+    start: Day = Field(description="First date the change applies, YYYY-MM-DD.")
+    until: Day | None = Field(
+        default=None, description="Inclusive last date, YYYY-MM-DD; open-ended if omitted."
+    )
+
+    @model_validator(mode="after")
+    def _ordered(self) -> Self:
+        if self.until is not None and self.until < self.start:
+            raise ValueError(f"until {self.until} must be on or after start {self.start}")
+        return self
+
+
+class StopIncomeChange(_Span):
+    kind: Literal["stop_income"]
+    schedule: Name | None = Field(
+        default=None,
+        description="The income schedule that stops, by name, such as the salary. Omit it only "
+        "when every income stops.",
+    )
+
+
+class PauseScheduleChange(_Span):
+    kind: Literal["pause_schedule"]
+    schedule: Name = Field(description="Active schedule or detected recurring charge to pause.")
+
+
+class ChangeAmountChange(_Span):
+    kind: Literal["change_amount"]
+    schedule: Name = Field(description="Active schedule name whose amount changes.")
+    amount_paise: Paise = Field(description="Replacement amount per occurrence, in paise.")
+
+
+class AddRecurringChange(_Span):
+    kind: Literal["add_recurring"]
+    name: Name = Field(description="Label for the added recurring flow.")
+    amount_paise: Paise = Field(description="Amount per occurrence, in paise.")
+    direction: Literal["out", "in"] = Field(
+        description="out: a new obligation or goal contribution. in: assumed new income."
+    )
+    every: Literal["month", "week", "year"] = Field(default="month", description="Cadence.")
+    goal: Name | None = Field(
+        default=None,
+        description="Active goal name when direction=out is a contribution to that goal.",
+    )
+
+    @model_validator(mode="after")
+    def _goal_is_outflow(self) -> Self:
+        if self.goal is not None and self.direction != "out":
+            raise ValueError("goal contributions must have direction 'out'")
+        return self
+
+
+class OneTimeChange(_Strict):
+    kind: Literal["one_time"]
+    name: Name = Field(description="Label for the one-off flow.")
+    amount_paise: Paise = Field(description="One-off amount, in paise.")
+    direction: Literal["out", "in"] = Field(
+        description="out: a one-off bill. in: an assumed one-off inflow such as a bonus."
+    )
+    date: Day = Field(description="Date of the one-off flow, YYYY-MM-DD.")
+
+
+ProjectChange = Annotated[
+    StopIncomeChange
+    | PauseScheduleChange
+    | ChangeAmountChange
+    | AddRecurringChange
+    | OneTimeChange,
+    Field(discriminator="kind"),
+]
+_CHANGES = TypeAdapter(Annotated[list[ProjectChange], Field(min_length=1, max_length=MAX_CHANGES)])
+
+
+def _hypothetical(
+    payload: ProjectHypothetical | dict[str, Any] | Hypothetical | None,
+) -> Hypothetical | None:
     if payload is None or isinstance(payload, Hypothetical):
         return payload
-    accepted = (
-        "amount_paise, date, method, emi_months, account, emi_rate_percent, emi_fee_paise, "
-        "and no_cost"
-    )
-    unknown = set(payload) - {
-        "amount_paise",
-        "date",
-        "method",
-        "emi_months",
-        "account",
-        "emi_rate_percent",
-        "emi_fee_paise",
-        "no_cost",
-    }
-    if unknown:
-        raise ValueError(f"hypothetical takes {accepted}, not {', '.join(sorted(unknown))}")
-    if "amount_paise" not in payload or "date" not in payload:
-        raise ValueError("a hypothetical needs amount_paise and date")
-    return Hypothetical(
-        amount_paise=int(payload["amount_paise"]),
-        date=(
-            ledger_today()
-            if payload["date"] == "today"
-            else payload["date"]
-            if isinstance(payload["date"], date)
-            else date.fromisoformat(str(payload["date"]))
-        ),
-        method=str(payload.get("method") or "account"),
-        emi_months=int(payload["emi_months"]) if payload.get("emi_months") else None,
-        account=payload.get("account"),
-        emi_rate_bps=(
-            round(float(payload["emi_rate_percent"]) * 100)
-            if payload.get("emi_rate_percent") is not None
-            else None
-        ),
-        emi_fee_paise=(
-            int(payload["emi_fee_paise"]) if payload.get("emi_fee_paise") is not None else None
-        ),
-        no_cost=bool(payload.get("no_cost")),
-    )
-
-
-def _parse_change_date(value: Any, *, field: str, today: date) -> date:
-    if isinstance(value, date) and not isinstance(value, datetime):
-        return value
-    if value == "today":
-        return today
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{field} must be a YYYY-MM-DD date")
-    try:
-        return date.fromisoformat(value.strip())
-    except ValueError as exc:
-        raise ValueError(f"{field} must be a YYYY-MM-DD date") from exc
-
-
-def _positive_int(value: Any, *, field: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{field} must be a positive integer")
-    if value > MAX_PAISE:
-        raise ValueError(f"{field} must be at most {MAX_PAISE} paise")
-    return value
-
-
-def _nonempty_str(value: Any, *, field: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{field} must be a non-empty string")
-    return value.strip()
+    return ProjectHypothetical.model_validate(payload).to_engine()
 
 
 def _parse_raw_changes(
-    raw_changes: Sequence[dict[str, Any]], *, as_of: date
+    raw_changes: Sequence[ProjectChange | dict[str, Any]], *, as_of: date
 ) -> list[dict[str, Any]]:
-    if isinstance(raw_changes, (str, bytes)) or not isinstance(raw_changes, Sequence):
-        raise ValueError("changes must be a list of 1 to 12 items")
-    if not 1 <= len(raw_changes) <= MAX_CHANGES:
-        raise ValueError(f"changes must contain 1 to {MAX_CHANGES} items")
-    allowed_fields: dict[str, set[str]] = {
-        "stop_income": {"kind", "start", "until", "schedule"},
-        "pause_schedule": {"kind", "schedule", "start", "until"},
-        "change_amount": {"kind", "schedule", "amount_paise", "start", "until"},
-        "add_recurring": {
-            "kind",
-            "name",
-            "amount_paise",
-            "direction",
-            "start",
-            "until",
-            "every",
-            "goal",
-        },
-        "one_time": {"kind", "name", "amount_paise", "direction", "date"},
-    }
-    parsed: list[dict[str, Any]] = []
-    max_offset = MAX_HORIZON_DAYS - 30
-    for item in raw_changes:
-        if not isinstance(item, dict):
-            raise ValueError("each change must be an object with a kind")
-        kind = item.get("kind")
-        if not isinstance(kind, str) or kind not in allowed_fields:
-            supported = ", ".join(sorted(allowed_fields))
-            raise ValueError(f"change kind must be one of {supported}")
-        unknown = set(item) - allowed_fields[kind]
-        if unknown:
-            raise ValueError(f"{kind} does not accept {', '.join(sorted(unknown))}")
-
-        if kind == "one_time":
-            name = _nonempty_str(item.get("name"), field="one_time.name")
-            amount_paise = _positive_int(item.get("amount_paise"), field="one_time.amount_paise")
-            direction_raw = _nonempty_str(item.get("direction"), field="one_time.direction")
-            if direction_raw not in ("out", "in"):
-                raise ValueError("one_time.direction must be 'out' or 'in'")
-            when = _parse_change_date(item.get("date"), field="one_time.date", today=as_of)
-            if when < as_of:
+    """Validate the what-ifs with the models above, then check them against the horizon."""
+    parsed = [change.model_dump() for change in _CHANGES.validate_python(list(raw_changes))]
+    last = as_of + timedelta(days=MAX_HORIZON_DAYS - 30)
+    for item in parsed:
+        for field in ("start", "date"):
+            if item.get(field) is not None and item[field] < as_of:
                 raise ValueError(
-                    f"change date {when.isoformat()} cannot be before {as_of.isoformat()}"
+                    f"change {field} {item[field].isoformat()} cannot be before {as_of.isoformat()}"
                 )
-            if (when - as_of).days > max_offset:
+        for field in ("start", "until", "date"):
+            if item.get(field) is not None and item[field] > last:
                 raise ValueError("change date is beyond the projection horizon")
-            parsed.append(
-                {
-                    "kind": kind,
-                    "name": name,
-                    "amount_paise": amount_paise,
-                    "direction": direction_raw,
-                    "date": when,
-                }
-            )
-            continue
-
-        start = _parse_change_date(item.get("start"), field=f"{kind}.start", today=as_of)
-        if start < as_of:
-            raise ValueError(
-                f"change start {start.isoformat()} cannot be before {as_of.isoformat()}"
-            )
-        if (start - as_of).days > max_offset:
-            raise ValueError("change date is beyond the projection horizon")
-        raw_until = item.get("until")
-        until = (
-            _parse_change_date(raw_until, field=f"{kind}.until", today=as_of)
-            if raw_until is not None
-            else None
-        )
-        if until is not None:
-            if until < start:
-                raise ValueError(
-                    f"change until {until.isoformat()} must be on or after start "
-                    f"{start.isoformat()}"
-                )
-            if (until - as_of).days > max_offset:
-                raise ValueError("change date is beyond the projection horizon")
-
-        if kind == "stop_income":
-            raw_sched = item.get("schedule")
-            schedule = (
-                _nonempty_str(raw_sched, field="stop_income.schedule")
-                if raw_sched is not None
-                else None
-            )
-            parsed.append({"kind": kind, "start": start, "until": until, "schedule": schedule})
-        elif kind == "pause_schedule":
-            schedule = _nonempty_str(item.get("schedule"), field="pause_schedule.schedule")
-            parsed.append({"kind": kind, "schedule": schedule, "start": start, "until": until})
-        elif kind == "change_amount":
-            schedule = _nonempty_str(item.get("schedule"), field="change_amount.schedule")
-            amount_paise = _positive_int(
-                item.get("amount_paise"), field="change_amount.amount_paise"
-            )
-            parsed.append(
-                {
-                    "kind": kind,
-                    "schedule": schedule,
-                    "amount_paise": amount_paise,
-                    "start": start,
-                    "until": until,
-                }
-            )
-        else:
-            name = _nonempty_str(item.get("name"), field="add_recurring.name")
-            amount_paise = _positive_int(
-                item.get("amount_paise"), field="add_recurring.amount_paise"
-            )
-            direction_raw = _nonempty_str(item.get("direction"), field="add_recurring.direction")
-            if direction_raw not in ("out", "in"):
-                raise ValueError("add_recurring.direction must be 'out' or 'in'")
-            raw_every = item.get("every")
-            every_raw = "month" if raw_every is None else raw_every
-            if not isinstance(every_raw, str) or every_raw not in ("month", "week", "year"):
-                raise ValueError("add_recurring.every must be 'month', 'week', or 'year'")
-            raw_goal = item.get("goal")
-            goal = (
-                _nonempty_str(raw_goal, field="add_recurring.goal")
-                if raw_goal is not None
-                else None
-            )
-            if goal is not None and direction_raw != "out":
-                raise ValueError("goal contributions must have direction 'out'")
-            parsed.append(
-                {
-                    "kind": kind,
-                    "name": name,
-                    "amount_paise": amount_paise,
-                    "direction": direction_raw,
-                    "start": start,
-                    "until": until,
-                    "every": every_raw,
-                    "goal": goal,
-                }
-            )
     return parsed
 
 
@@ -1053,17 +998,10 @@ def _raw_horizon_days(
     return scenario_horizon_days(as_of, specs, ask_horizon_days=ask_horizon_days)
 
 
-def _display_name(name: str, outside_text: bool) -> str:
-    return cast(str, mark(name) if outside_text else name)
-
-
-def _candidate_names(rows: Sequence[Any], name_key: str, outside_key: str | None) -> str:
+def _candidate_names(rows: Sequence[Any], name_key: str) -> str:
     if not rows:
         return "none"
-    return ", ".join(
-        _display_name(str(row[name_key]), bool(row[outside_key]) if outside_key else False)
-        for row in rows
-    )
+    return ", ".join(str(row[name_key]) for row in rows)
 
 
 async def _resolve_changes(
@@ -1136,17 +1074,17 @@ async def _resolve_changes(
                         start=item["start"],
                         until=item["until"],
                         source_id=str(row["id"]),
-                        label_name=_display_name(str(row["name"]), bool(row["outside_text"])),
+                        label_name=str(row["name"]),
                     )
                 )
             elif len(matches) > 1:
-                cands = _candidate_names(matches, "name", "outside_text")
+                cands = _candidate_names(matches, "name")
                 raise ValueError(f"multiple income schedules match {target!r}: {cands}")
             else:
                 non_income = [
                     row for row in schedule_rows if str(row["name"]).strip().lower() == key
                 ]
-                cands = _candidate_names(income_schedules, "name", "outside_text")
+                cands = _candidate_names(income_schedules, "name")
                 if non_income:
                     raise ValueError(
                         f"{target!r} is not an income schedule; active income schedules: {cands}"
@@ -1168,11 +1106,11 @@ async def _resolve_changes(
                         start=item["start"],
                         until=item["until"],
                         source_id=str(row["id"]),
-                        label_name=_display_name(str(row["name"]), bool(row["outside_text"])),
+                        label_name=str(row["name"]),
                     )
                 )
             elif len(sched_matches) > 1:
-                cands = _candidate_names(sched_matches, "name", "outside_text")
+                cands = _candidate_names(sched_matches, "name")
                 raise ValueError(f"multiple schedules match {target!r}: {cands}")
             else:
                 series_matches = [
@@ -1185,17 +1123,15 @@ async def _resolve_changes(
                             start=item["start"],
                             until=item["until"],
                             series_id=str(row["id"]),
-                            label_name=_display_name(
-                                str(row["display_name"]), bool(row["outside_text"])
-                            ),
+                            label_name=str(row["display_name"]),
                         )
                     )
                 elif len(series_matches) > 1:
-                    cands = _candidate_names(series_matches, "display_name", "outside_text")
+                    cands = _candidate_names(series_matches, "display_name")
                     raise ValueError(f"multiple recurring charges match {target!r}: {cands}")
                 else:
-                    sched_cands = _candidate_names(schedule_rows, "name", "outside_text")
-                    series_cands = _candidate_names(series_rows, "display_name", "outside_text")
+                    sched_cands = _candidate_names(schedule_rows, "name")
+                    series_cands = _candidate_names(series_rows, "display_name")
                     raise ValueError(
                         f"unknown schedule or recurring charge {target!r}; "
                         f"active schedules: {sched_cands}; "
@@ -1214,14 +1150,14 @@ async def _resolve_changes(
                         amount_paise=item["amount_paise"],
                         start=item["start"],
                         until=item["until"],
-                        label_name=_display_name(str(row["name"]), bool(row["outside_text"])),
+                        label_name=str(row["name"]),
                     )
                 )
             elif len(matches) > 1:
-                cands = _candidate_names(matches, "name", "outside_text")
+                cands = _candidate_names(matches, "name")
                 raise ValueError(f"multiple schedules match {target!r}: {cands}")
             else:
-                cands = _candidate_names(schedule_rows, "name", "outside_text")
+                cands = _candidate_names(schedule_rows, "name")
                 raise ValueError(f"unknown schedule {target!r}; active schedules: {cands}")
 
         elif kind == "add_recurring":
@@ -1235,10 +1171,10 @@ async def _resolve_changes(
                     goal_id = str(goal_matches[0]["id"])
                     goal_name = str(goal_matches[0]["name"])
                 elif len(goal_matches) > 1:
-                    cands = _candidate_names(goal_matches, "name", None)
+                    cands = _candidate_names(goal_matches, "name")
                     raise ValueError(f"multiple goals match {target_goal!r}: {cands}")
                 else:
-                    cands = _candidate_names(goal_rows, "name", None)
+                    cands = _candidate_names(goal_rows, "name")
                     raise ValueError(f"unknown goal {target_goal!r}; active goals: {cands}")
             direction: Literal["out", "in"] = "out" if item["direction"] == "out" else "in"
             every: Literal["month", "week", "year"] = (
@@ -1278,8 +1214,8 @@ async def project(
     conn: Connection,
     *,
     horizon_days: int | None = None,
-    hypothetical: dict[str, Any] | Hypothetical | None = None,
-    changes: Sequence[dict[str, Any]] | None = None,
+    hypothetical: ProjectHypothetical | dict[str, Any] | Hypothetical | None = None,
+    changes: Sequence[ProjectChange | dict[str, Any]] | None = None,
     as_of: date | None = None,
     runs: int = DEFAULT_RUNS,
     seed: int = DEFAULT_SEED,
@@ -1305,8 +1241,8 @@ async def project_with_inputs(
     conn: Connection,
     *,
     horizon_days: int | None = None,
-    hypothetical: dict[str, Any] | Hypothetical | None = None,
-    changes: Sequence[dict[str, Any]] | None = None,
+    hypothetical: ProjectHypothetical | dict[str, Any] | Hypothetical | None = None,
+    changes: Sequence[ProjectChange | dict[str, Any]] | None = None,
     as_of: date | None = None,
     runs: int = DEFAULT_RUNS,
     seed: int = DEFAULT_SEED,

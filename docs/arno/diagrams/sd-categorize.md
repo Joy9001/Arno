@@ -9,8 +9,8 @@ rules in one undoable write, and leaves the rest uncategorized, with the model's
 
 **Diagram type:** Flowchart. No semantic pattern matched.
 
-**What the budget forced out:** Own-account transfers are decided before commit, by the parser
-subagent and you, so they aren't here ([`../specs/import.md`](../specs/import.md#own-account-transfers-and-card-credits)).
+**What the budget forced out:** Own-account transfers are decided before commit, at the review
+screen, so they aren't here ([`../specs/import.md`](../specs/import.md#own-account-transfers-and-card-credits)).
 The payment apps marked "don't categorize by name", refunds taking the original purchase's
 category, and the stripped payment-rail codes are in [`../specs/import.md`](../specs/import.md#post-commit-categorization).
 8 nodes, 9 arrows; the accent marks the agent.

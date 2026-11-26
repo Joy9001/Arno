@@ -408,14 +408,16 @@ async def test_commit_loss_agent_write_tool_reports_unknown_without_retry(
             return ModelResponse(
                 parts=[
                     ToolCallPart(
-                        "record_movement",
+                        "record_movements",
                         {
-                            "movement": {
-                                "kind": "expense",
-                                "account": "SBI Bank",
-                                "amount_rupees": 100,
-                                "description": "Tea",
-                            }
+                            "movements": [
+                                {
+                                    "kind": "expense",
+                                    "account": "SBI Bank",
+                                    "amount_rupees": 100,
+                                    "description": "Tea",
+                                }
+                            ]
                         },
                         tool_call_id="tc_1",
                     )

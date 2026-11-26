@@ -24,7 +24,6 @@ from pydantic_ai.usage import RequestUsage
 from arno.agent.models import role_config
 from arno.agent.usage import DailyBudgetExceeded, check_daily_budget, record_usage
 from arno.db.conn import Connection
-from arno.tools.mark import clean_outside
 
 DEFAULT_TIMEOUT_SECONDS = 120.0
 MAX_PROMPT_CHARS = 500
@@ -65,7 +64,7 @@ async def payee_names_prompt(conn: Connection, *, limit: int = MAX_PAYEE_NAMES) 
         if not name or name.lower() in seen:
             continue
         seen.add(name.lower())
-        names.append(clean_outside(name))
+        names.append(name)
     if not names:
         return None
     prompt = "Payees: " + ", ".join(names)

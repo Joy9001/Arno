@@ -92,96 +92,71 @@ async def test_the_stream_endpoint_is_204_when_nothing_runs(session_client):
     assert response.status_code == 204
 
 
-def test_a_stored_approval_merges_into_a_closed_card():
+async def test_an_answered_confirm_card_settles_on_the_reply_that_offered_it(demo_ledger):
     from pydantic_ai.messages import (
-        ModelMessage,
-        ModelMessagesTypeAdapter,
         ModelRequest,
+        ModelResponse,
+        TextPart,
+        ToolCallPart,
         ToolReturnPart,
+        UserPromptPart,
     )
     from pydantic_ai.ui.vercel_ai.response_types import DataChunk
 
-    from arno.api.chat import _merge_saved_state
+    from arno.agent.history import save_records
 
-    history: list[ModelMessage] = [
+    card = {"card": "preference", "title": "Remembered", "text": "No rent warnings"}
+    await demo_ledger.execute("INSERT INTO conversations (id, title) VALUES ('thr_settle', 'x')")
+    asked = [
+        ModelRequest(parts=[UserPromptPart("remember this")]),
+        ModelResponse(parts=[ToolCallPart("preference", {"action": "remember"}, "call-1")]),
+    ]
+    await save_records(
+        demo_ledger,
+        thread_id="thr_settle",
+        run_id="run_1",
+        history=[],
+        turn_messages=asked,
+        ending="complete",
+        reply_id="msg_ask",
+    )
+    waiting = await demo_ledger.fetchval("SELECT content FROM messages WHERE client_id = 'msg_ask'")
+    assert waiting["parts"][0]["state"] == "approval-requested"
+
+    answered = [
         ModelRequest(
             parts=[
                 ToolReturnPart(
                     tool_name="preference",
-                    content={"status": "remembered", "text": "No rent warnings"},
-                    tool_call_id="call-1",
-                    metadata=[
-                        DataChunk(
-                            type="data-card",
-                            data={
-                                "card": "preference",
-                                "title": "Remembered",
-                                "text": "No rent warnings",
-                            },
-                        )
-                    ],
-                )
-            ]
-        )
-    ]
-    thread = {"model_history": ModelMessagesTypeAdapter.dump_python(history, mode="json")}
-    messages = [
-        {
-            "id": "msg-1",
-            "role": "assistant",
-            "parts": [
-                {
-                    "type": "tool-preference",
-                    "state": "approval-requested",
-                    "toolCallId": "call-1",
-                    "input": {"action": "remember"},
-                    "approval": {"id": "call-1"},
-                }
-            ],
-        }
-    ]
-    merged = _merge_saved_state(messages, thread)
-    part = merged[0]["parts"][0]
-    assert part["state"] == "output-available"
-    assert part["toolCallId"] == "call-1"
-    assert any(p.get("type") == "data-card" for p in merged[0]["parts"])
-
-
-def test_a_card_an_earlier_reply_shows_is_not_added_to_the_last_reply():
-    from pydantic_ai.messages import (
-        ModelMessage,
-        ModelMessagesTypeAdapter,
-        ModelRequest,
-        ToolReturnPart,
-    )
-    from pydantic_ai.ui.vercel_ai.response_types import DataChunk
-
-    from arno.api.chat import _merge_saved_state
-
-    card = {"card": "setup", "title": "Setup saved", "text": "Added account SBI"}
-    history: list[ModelMessage] = [
-        ModelRequest(
-            parts=[
-                ToolReturnPart(
-                    tool_name="update_setup",
-                    content={"status": "saved"},
+                    content={"status": "remembered"},
                     tool_call_id="call-1",
                     metadata=[DataChunk(type="data-card", data=card)],
                 )
             ]
+        ),
+        ModelResponse(parts=[TextPart("Saved.")]),
+    ]
+    await save_records(
+        demo_ledger,
+        thread_id="thr_settle",
+        run_id="run_2",
+        history=asked,
+        turn_messages=answered,
+        ending="complete",
+        reply_id="msg_done",
+    )
+
+    rows = {
+        row["client_id"]: row["content"]
+        for row in await demo_ledger.fetch(
+            "SELECT client_id, content FROM messages WHERE conversation_id = 'thr_settle'"
         )
-    ]
-    thread = {"model_history": ModelMessagesTypeAdapter.dump_python(history, mode="json")}
-    messages = [
-        {"id": "msg-1", "role": "assistant", "parts": [{"type": "data-card", "data": card}]},
-        {"id": "msg-2", "role": "user", "parts": [{"type": "text", "text": "next"}]},
-        {"id": "msg-3", "role": "assistant", "parts": [{"type": "text", "text": "Done."}]},
-    ]
-
-    merged = _merge_saved_state(messages, thread)
-
-    assert not any(part.get("type") == "data-card" for part in merged[2]["parts"])
-    assert sum(part.get("type") == "data-card" for part in merged[0]["parts"]) == 1
+    }
+    assert rows["msg_ask"]["parts"][0]["state"] == "output-available"
+    assert rows["msg_ask"]["parts"][0]["output"] == {"status": "remembered"}
+    cards = [p["data"] for p in rows["msg_done"]["parts"] if p.get("type") == "data-card"]
+    assert cards == [card]
+    assert not [p for p in rows["msg_ask"]["parts"] if p.get("type") == "data-card"]
 
 
 async def test_preferences_can_be_turned_off_and_deleted_for_good(session_client, demo_ledger):

@@ -56,10 +56,6 @@ uv run python -m tests.e2e.driver up --port 8125 --keep
 | `confirm-transfer ID LINE_ID` | confirm a line is a transfer between your own accounts |
 | `resolve ID LINE_ID RESOLUTION [--movement-id M] [--credit-kind K] [--category-id C]` | any other line resolution |
 | `commit ID [--confirm-adjustment]` / `reject ID` / `undo-import ID` | finish an import; the flag confirms the closing adjustment the review states |
-| `tasks [--limit N]` | imports with their parser task ids |
-| `task ID` | a parser task: state, report, transcript, imports |
-| `wait-task ID [--timeout S]` | poll a parser task until it finishes |
-| `answer TASK_ID ACCOUNT` | answer the parser's "which account is this?" question |
 | `state [--json]` | the ledger summary, straight from SQL |
 | `invariants` | `tests.invariants` against the same database |
 
@@ -154,49 +150,6 @@ data parts:
 
 The preference exists exactly once, with its undo id. `approve ... no` sends the same part with
 `"approved": false`, and the write never lands.
-
-### A statement attached in chat, through to review
-
-```bash
-uv run python -c "from tests.import_fixtures import sbi_csv; open('sbi-april-2026.csv','wb').write(sbi_csv())"
-uv run python -m tests.e2e.driver chat "Please import the statement I just attached." \
-    --file sbi-april-2026.csv
-```
-
-```
-tool calls:
-  - delegate_task({"agent_name": "parser", "task": "Import the statement files from this turn.",
-                   "background": true})
-      -> Task e562d2eb12f7452a8ad52a0113b41d62 is running in the background. ...
-next:
-  a subagent started: driver tasks
-```
-
-```
-$ uv run python -m tests.e2e.driver wait-task e562d2eb12f7452a8ad52a0113b41d62 --timeout 180
-task e562d2eb12f7452a8ad52a0113b41d62: finished ok
-  import imp_01M714RYC5E9RRTK1NNZTF8PX5  review  sbi-april-2026.csv
-report: {"status": "ready", "imports": [{"import_id": "imp_01M714RYC5E9RRTK1NNZTF8PX5",
-         "status": "in_review", "rows": 3, "debits": 2, "credits": 1,
-         "reason": "SBI savings statement (text export); opening 2,45,678.90 printed and matched,
-         running balance chain and period verified"}]}
-
-$ uv run python -m tests.e2e.driver import imp_01M714RYC5E9RRTK1NNZTF8PX5
-status: review
-account: SBI Salary
-period: 2026-04-01 to 2026-04-30
-check: VERIFIED
-opening: ₹2,45,678.90 (printed, evidenced)
-lines: 3 {"new": 3}
-next:
-  ready: driver commit imp_01M714RYC5E9RRTK1NNZTF8PX5
-```
-
-`driver task <id>` prints the parser's whole transcript (every `run_code` call with its result and
-the final report), which is what a browser shows on the run card.
-
-If the statement has no account the parser can infer, it asks; `driver task <id>` prints the
-question and `driver answer <task> "SBI Salary"` answers it with an account id or exact name.
 
 ## The truth, read straight from SQL
 
@@ -294,8 +247,6 @@ UI.
 
 - `tests/test_e2e_driver.py` empties every table in `DATABASE_URL`, like every test in this suite.
   Running it against the database you are driving leaves an empty ledger: `up --seed demo` again.
-- Parser task files under `ARNO_TASKS_DIR` are never cleared, so a `--seed` run of a database
-  that a previous run used keeps that run's task records. Only an id you ask for reaches them.
 - `state` lists an active schedule with its rule, not its due dates: expanding an RRULE is the
   app's job, not SQL's.
 - The driver itself has no browser, so it checks the wire, which is where the money paths are.

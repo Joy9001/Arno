@@ -1,382 +1,62 @@
-"""The agent's tools: the read tools behind `run_code`, and six write calls in front of it.
+"""The agent's tools: four reads and four writes, thin adapters over plain `tools/` functions.
 
-Descriptions are the model-facing contract. Read tools return `ToolReturn` with a data card; a
-card from a tool called inside a script is picked up from the `run_code` return after the run
-(system-design step 5).
-"""
+Descriptions are the model-facing contract. Tools return `ToolReturn` with a data card. The three
+lasting or account-wide writes ask for approval through PydanticAI's own `ApprovalRequired`."""
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import date
-from decimal import Decimal
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
 import asyncpg
-from pydantic import BaseModel, ConfigDict, Field
 from pydantic_ai import RunContext, ToolReturn
 from pydantic_ai.exceptions import ApprovalRequired, ModelRetry
-from pydantic_ai.toolsets import FunctionToolset, SetMetadataToolset
+from pydantic_ai.toolsets import FunctionToolset
 from pydantic_ai.ui.vercel_ai.response_types import DataChunk
 
 from arno.agent.deps import AgentDeps
-from arno.agent.presentation import (
-    PresentationError,
-    TableInput,
-    build_answer,
-)
-from arno.agent.write_models import Movement, MovementChanges, SetupData
+from arno.config import get_settings
 from arno.db.conn import Connection, connect
-from arno.engine.money import MAX_PAISE, DayCount, Offer, money
-from arno.engine.money import Prepay as PrepayPayload
-from arno.engine.money import amortize as amortize_fn
-from arno.engine.money import compound as compound_fn
-from arno.engine.money import infer_rate as infer_rate_fn
-from arno.ledger.accounts import LoanTermsError, loan_terms
-from arno.ledger.common import today as ledger_today
-from arno.tools import money as money_tools
 from arno.tools import projection as projection_tools
 from arno.tools import read as read_tools
-from arno.tools import recaps as recaps_tools
+from arno.tools import sandbox as sandbox_tools
 from arno.tools import write as write_tools
-from arno.tools.mark import (
-    clear_confirmed_marks,
-    contains_outside,
-    flag_outside_text,
-    is_conversation_flagged,
-)
+from arno.tools.projection import ProjectChange, ProjectHypothetical
+from arno.tools.write import Movement, MovementChanges, SetupData
 
 logger = logging.getLogger("arno.agent.toolset")
-
-
-# Typed read arguments, so a script sees the keys and a misspelled one fails instead of being
-# silently ignored (a dropped `categories` filter once returned the whole month as "food").
-class SpendFilters(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    account: str | None = Field(default=None, description="Account name.")
-    category: str | None = Field(default=None, description="One exact category name.")
-    payee: str | None = Field(default=None, description="Payee name or UPI ID.")
-    text: str | None = Field(default=None, description="Searches descriptions and notes.")
-
-
-class MovementFilters(SpendFilters):
-    period: str | None = Field(
-        default=None,
-        description=(
-            "this_week, last_week, this_month, last_month, last_30_days, this_year, "
-            '"2026-09", a single day "2026-11-10", or a range "2026-09-01..2026-09-15". '
-            "Weeks start Monday; an open period ends today."
-        ),
-    )
-    kind: str | None = Field(default=None, description="expense, income, transfer, split, ...")
-    min_paise: int | None = Field(default=None, description="Smallest transfer amount, paise.")
-    max_paise: int | None = Field(default=None, description="Largest transfer amount, paise.")
-    include_reversed: bool = Field(
-        default=False, description="Also list corrected-away entries and their reversals."
-    )
-
-
-class Prepay(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    amount_paise: int = Field(gt=0, le=MAX_PAISE, description="The lump sum, in paise.")
-    at_emi: int = Field(
-        default=1,
-        ge=1,
-        description="Paid before this EMI, counting from the next one: 1 is now, 13 is after "
-        "12 more EMIs.",
-    )
-    reduce: Literal["tenure", "emi"] = Field(
-        default="tenure", description="tenure: same EMI, finish sooner. emi: lower EMI."
-    )
-
-
-class LoanConventions(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    rest: Literal["monthly", "daily"] = Field(
-        default="monthly", description="Interest on the balance each month, or each day."
-    )
-    day_count: DayCount = Field(
-        default="30e/360", description="Day-count convention for a daily rest."
-    )
-    interest_unit_paise: int = Field(
-        default=1, gt=0, description="Round each month's interest to this many paise."
-    )
-    emi_rounding: Literal["half_up", "up"] = Field(
-        default="half_up", description="half_up: nearest. up: always up."
-    )
-    emi_unit_paise: int = Field(default=1, gt=0, description="Round the EMI to this many paise.")
-
-
-class ProjectHypothetical(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    amount_paise: int = Field(gt=0, le=MAX_PAISE, description="The purchase amount, in paise.")
-    date: str = Field(description="The purchase date, YYYY-MM-DD.")
-    method: Literal["account", "card", "emi"] = Field(
-        default="account",
-        description="account: pay from a bank account now. card: put it on a card. "
-        "emi: split it into card instalments.",
-    )
-    emi_months: int | None = Field(
-        default=None, ge=2, le=48, description="Instalments for method=emi; 3 if omitted."
-    )
-    account: str | None = Field(
-        default=None, description="A card name for card or emi; the best card if omitted."
-    )
-    emi_rate_percent: float | None = Field(
-        default=None,
-        ge=0,
-        le=100,
-        description="The EMI's annual interest rate in percent, when the offer states it",
-    )
-    emi_fee_paise: int | None = Field(
-        default=None,
-        ge=0,
-        le=MAX_PAISE,
-        description="The EMI's processing fee in paise, when stated",
-    )
-    no_cost: bool = Field(
-        default=False, description="True for a no-cost EMI: the merchant pays the interest"
-    )
-
-
-class StopIncomeChange(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    kind: Literal["stop_income"]
-    start: str = Field(description="First date without income, YYYY-MM-DD.")
-    until: str | None = Field(
-        default=None,
-        description="Inclusive last date without income, YYYY-MM-DD; open-ended if omitted.",
-    )
-    schedule: str | None = Field(
-        default=None,
-        description="The income schedule that stops, by name, such as the salary. Omit it only "
-        "when every income stops.",
-    )
-
-
-class PauseScheduleChange(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    kind: Literal["pause_schedule"]
-    schedule: str = Field(description="Active schedule or detected recurring charge name to pause.")
-    start: str = Field(description="First paused date, YYYY-MM-DD.")
-    until: str | None = Field(
-        default=None,
-        description="Inclusive last paused date, YYYY-MM-DD; open-ended if omitted.",
-    )
-
-
-class ChangeAmountChange(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    kind: Literal["change_amount"]
-    schedule: str = Field(description="Active schedule name whose amount changes.")
-    amount_paise: int = Field(
-        gt=0, le=MAX_PAISE, description="Replacement amount per occurrence, in paise."
-    )
-    start: str = Field(description="First date the new amount applies, YYYY-MM-DD.")
-    until: str | None = Field(
-        default=None,
-        description="Inclusive last date of the new amount, YYYY-MM-DD; open-ended if omitted.",
-    )
-
-
-class AddRecurringChange(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    kind: Literal["add_recurring"]
-    name: str = Field(description="Label for the added recurring flow.")
-    amount_paise: int = Field(gt=0, le=MAX_PAISE, description="Amount per occurrence, in paise.")
-    direction: Literal["out", "in"] = Field(
-        description="out: a new obligation or goal contribution. in: assumed new income."
-    )
-    start: str = Field(description="First occurrence date, YYYY-MM-DD.")
-    until: str | None = Field(
-        default=None,
-        description="Inclusive last occurrence date, YYYY-MM-DD; open-ended if omitted.",
-    )
-    every: Literal["month", "week", "year"] = Field(
-        default="month",
-        description="Recurrence cadence: month, week, or year.",
-    )
-    goal: str | None = Field(
-        default=None,
-        description="Active goal name when direction=out is a contribution to that goal.",
-    )
-
-
-class OneTimeChange(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    kind: Literal["one_time"]
-    name: str = Field(description="Label for the one-off flow.")
-    amount_paise: int = Field(gt=0, le=MAX_PAISE, description="One-off amount, in paise.")
-    direction: Literal["out", "in"] = Field(
-        description="out: a one-off bill. in: an assumed one-off inflow such as a bonus."
-    )
-    date: str = Field(description="Date of the one-off flow, YYYY-MM-DD.")
-
-
-ProjectChange = Annotated[
-    StopIncomeChange
-    | PauseScheduleChange
-    | ChangeAmountChange
-    | AddRecurringChange
-    | OneTimeChange,
-    Field(discriminator="kind"),
-]
 
 
 def _card_data(card: dict[str, Any]) -> list[DataChunk]:
     return [DataChunk(type="data-card", data=card)]
 
 
-def _cards_data(cards: list[dict[str, Any]]) -> list[DataChunk] | None:
-    return [DataChunk(type="data-card", data=card) for card in cards] or None
-
-
-def rupees(paise: int) -> str:
-    """Format integer paise as rupees, the way the app writes money: 12345678 is "₹1,23,456.78".
-    Print this beside a figure you will quote instead of dividing by 100 by hand."""
-    return money(int(paise))["text"]
-
-
-async def _read_call(
-    fn: Callable[[Connection], Awaitable[dict[str, Any]]],
-) -> dict[str, Any]:
-    async with connect() as conn:
-        return await fn(conn)
-
-
 async def _finish_read(
     ctx: RunContext[AgentDeps],
     payload: dict[str, Any],
     *,
-    kind: str | None = None,
+    kind: str,
     context: dict[str, Any] | None = None,
 ) -> ToolReturn:
-    # Flag before returning to a `run_code` script so a script crash cannot exfiltrate raw SQL rows.
-    if not ctx.deps.flagged and contains_outside(payload):
-        async with connect() as conn:
-            await flag_outside_text(conn, ctx.deps.conversation_id)
-        ctx.deps.flagged = True
     card = payload.pop("_card", None)
     cards: list[dict[str, Any]] = []
-    if kind is not None:
-        registration = ctx.deps.presentation.register_read(kind, payload, context=context)
-        payload["ui_results"] = registration.descriptors
-        if card:
-            card = {**card, "result_id": registration.primary_id}
-        if card:
-            cards.append(card)
-        if registration.fallback:
-            cards.append(registration.fallback)
-    elif card:
-        cards.append(card)
-    return ToolReturn(return_value=payload, metadata=_cards_data(cards))
-
-
-async def get_financial_context(ctx: RunContext[AgentDeps]) -> ToolReturn:
-    """The user's whole picture: today's date, settings, every account with its balance and the
-    age of that balance (age_days), whether it is active, a loan's rate_bps and tenure_months, a
-    card's next_statement_close, the next_bill_due for spend made today, and any stored finance
-    terms (finance_rate_bps, min_due_bps, min_due_floor), each schedule's next four runs
-    (next_dates, each with date and weekday), the next 30 days of events (each with date and
-    weekday; a null amount carries a note saying why), goals, who owes what, remembered
-    preferences, scheduled_questions, open imports (status, account, period, line counts; read
-    them before saying anything about an import), what setup is missing, and data warnings. A memory
-    that changed shows its previous value with changed_at; a floor, schedule amount, or goal
-    priority shows the same as floor_history, amount_history, or priority_history. Name both values
-    and the old one's date when the user states a value that contradicts one. The sandbox has no
-    clock, so get today's date here."""
-    payload = await _read_call(read_tools.get_financial_context)
-    return await _finish_read(ctx, payload, kind="context")
-
-
-async def query_movements(
-    ctx: RunContext[AgentDeps],
-    filters: MovementFilters | None = None,
-    limit: int = 50,
-    cursor: str | None = None,
-) -> ToolReturn:
-    """List individual movements with their transfers, category, payee, and evidence. Use it to
-    find a row or see what's behind a number. For totals, use summarize_spending. period takes
-    this_week, last_week, this_month, last_month, last_30_days, this_year, "2026-09", a single day
-    "2026-11-10", or a range "2026-09-01..2026-09-15". A corrected entry and its reversal are
-    hidden and not counted."""
-    plain = filters.model_dump(exclude_none=True) if filters else None
-    try:
-        payload = await _read_call(
-            lambda conn: read_tools.query_movements(conn, filters=plain, limit=limit, cursor=cursor)
-        )
-    except ValueError as exc:
-        raise ModelRetry(str(exc)) from exc
-    return await _finish_read(
-        ctx,
-        payload,
-        kind="movements",
-        context={
-            "period": {"label": plain.get("period")} if plain and plain.get("period") else None,
-            "filters": plain,
-        },
+    registration = ctx.deps.presentation.register_read(kind, payload, context=context)
+    payload["ui_results"] = registration.descriptors
+    if card:
+        cards.append({**card, "result_id": registration.primary_id})
+    if registration.fallback:
+        cards.append(registration.fallback)
+    return ToolReturn(
+        return_value=payload, metadata=[DataChunk(type="data-card", data=c) for c in cards] or None
     )
-
-
-async def summarize_spending(
-    ctx: RunContext[AgentDeps],
-    group_by: Literal["category", "payee", "account", "month", "week", "none"],
-    period: str,
-    filters: SpendFilters | None = None,
-) -> ToolReturn:
-    """Totals of money spent, net of refunds, grouped however you need. Loan principal, card
-    bills, investments, and money others owe never count as spending. To compare periods, call it
-    twice. period is this_week, last_week, this_month, last_month, last_30_days, this_year,
-    "2026-09", a day "2026-11-10", or a range "2026-09-01..2026-09-15" (weeks start Monday). count
-    is the number of entries, with a corrected entry and its reversal left out. It returns one
-    object, never a list: read total as result["total"], and groups as a list of dicts each with
-    key, amount (paise), and count, so result["groups"][0]["key"]."""
-    plain = filters.model_dump(exclude_none=True) if filters else None
-    try:
-        payload = await _read_call(
-            lambda conn: read_tools.summarize_spending(
-                conn, group_by=group_by, period=period, filters=plain
-            )
-        )
-    except ValueError as exc:
-        raise ModelRetry(str(exc)) from exc
-    return await _finish_read(
-        ctx,
-        payload,
-        kind="spending",
-        context={"group_by": group_by, "filters": plain},
-    )
-
-
-async def recap(ctx: RunContext[AgentDeps], period: str) -> ToolReturn:
-    """The recap of a day, week, or month: what was spent against the period before, money in and
-    out, where it went, the biggest change, the biggest and most frequent spends, and repeat
-    charges with no schedule. The same stories the Recaps page shows. period is a recap ID
-    ("month-2026-10", "week-2026-11-02", "day-2026-11-08") or yesterday, this_week, last_week,
-    this_month, last_month, or "2026-10"."""
-    try:
-        payload = await _read_call(lambda conn: recaps_tools.recap(conn, period))
-    except ValueError as exc:
-        raise ModelRetry(str(exc)) from exc
-    return await _finish_read(ctx, payload)
 
 
 async def run_query(ctx: RunContext[AgentDeps], sql: str) -> ToolReturn:
-    """Read-only PostgreSQL (2-second timeout), only for questions the typed tools can't answer,
-    including conversation search. get_financial_context already returns balances, goals, who owes
-    what, and schedules; query_movements and summarize_spending cover movements and spending.
-    Use the exact view columns below. For a table, read its columns from
-    information_schema.columns before the first query instead of guessing.
+    """Read-only PostgreSQL (2-second timeout, at most 1,000 rows): the way to read the ledger.
+    Balances, spending, movements, schedules, goals, who owes what, memories, imports, and
+    conversation search are all here. Use the exact view columns below. For a table, read its
+    columns from information_schema.columns before the first query instead of guessing.
 
     Views (prefer these):
     - v_legs: movement_id, transfer_id, date, movement_kind, description, from_account_id,
@@ -421,6 +101,7 @@ async def run_query(ctx: RunContext[AgentDeps], sql: str) -> ToolReturn:
     - settings: single-row instance config (currency, time zone, cash floor, horizon)
 
     Conventions:
+    - Weekday: to_char(date, 'Dy') in SQL; never work one out yourself.
     - Account IDs are acc_* everywhere; all money amounts are integer paise.
     - Signs: v_legs is positive from -> to; v_spending is + into spending, - out;
       v_accounts.balance_paise and v_balances are cumulative net (+ asset or receivable, - card
@@ -470,9 +151,9 @@ async def project(
     scenario change."""
     if horizon_days is not None and not 1 <= horizon_days <= 3650:
         raise ModelRetry("horizon_days is 1 to 3650")
-    purchase = hypothetical.model_dump(exclude_none=True) if hypothetical else None
+    purchase = hypothetical.model_dump(exclude_none=True, mode="json") if hypothetical else None
     raw_changes = (
-        [change.model_dump(exclude_none=True) for change in changes]
+        [change.model_dump(exclude_none=True, mode="json") for change in changes]
         if changes is not None
         else None
     )
@@ -481,8 +162,8 @@ async def project(
             result = await projection_tools.project(
                 conn,
                 horizon_days=horizon_days,
-                hypothetical=purchase,
-                changes=raw_changes,
+                hypothetical=hypothetical,
+                changes=changes,
             )
         except ValueError as exc:
             raise ModelRetry(str(exc)) from exc
@@ -515,347 +196,42 @@ async def project(
     )
 
 
-async def amortize(
-    ctx: RunContext[AgentDeps],
-    loan: str | None = None,
-    principal_paise: int | None = None,
-    annual_rate: float | None = None,
-    months: int | None = None,
-    emi_paise: int | None = None,
-    prepay: Prepay | None = None,
-    conventions: LoanConventions | None = None,
-    fee_paise: int = 0,
-) -> ToolReturn:
-    """Loan maths: EMI, total interest, payoff date, and the monthly schedule. Pass a loan's name to
-    use its outstanding balance, rate, and real EMI, or pass the terms. Without a rate, an EMI plus
-    the principal and the months gives the rate. Pass fee_paise for an upfront processing fee to
-    get net_disbursed, total_cost, and apr_percent. Add prepay to compare a lump-sum prepayment, for
-    example prepay={"amount_paise": 5000000, "at_emi": 13}. Set conventions to match a bank's
-    rounding when its statement differs by paise. Use this instead of writing the formula. It
-    returns the schedule, not a card: show it with present. When complete_cost is false, do not
-    call the total the full cost; explain not_included."""
-    start: date | None = ledger_today()
-    rate: float | None
-    if loan:
+async def run_python(
+    ctx: RunContext[AgentDeps], code: str, attachment_ids: list[str] | None = None
+) -> dict[str, Any]:
+    """Run Python in an isolated sandbox for modelling the ledger cannot do: amortization, compound
+    growth, tax or what-if arithmetic, and reading an uploaded file. It has no database, no
+    network, and no clock; read the data first with run_query and paste what you need into the
+    script. Print what you want to see; write a JSON-serializable result to result.json to get it
+    back as result_json. attachment_ids lists uploaded files (att_...) to place in the script's
+    working directory under their own filenames. Any figure you state must come from the output."""
+    try:
         async with connect() as conn:
-            try:
-                terms = await loan_terms(conn, loan)
-            except LoanTermsError as exc:
-                raise ModelRetry(exc.message) from exc
-        principal = terms["principal_paise"]
-        rate = terms["annual_rate"]
-        count = terms["months"]
-        emi_paise = terms["emi_paise"]
-        # A loan with no rate stored reads as 0; its EMI then holds the real one.
-        if rate == 0 and emi_paise is not None:
-            rate = None
-    else:
-        if principal_paise is None or months is None:
-            raise ModelRetry(
-                "Pass a loan name, or principal_paise and months with a rate or an EMI"
+            return await sandbox_tools.run_python(
+                conn,
+                code=code,
+                attachment_ids=attachment_ids or [],
+                sandbox_url=get_settings().sandbox_url,
             )
-        if annual_rate is None and emi_paise is None:
-            raise ModelRetry("Pass annual_rate, or an EMI to infer it from")
-        principal = principal_paise
-        rate = annual_rate
-        count = months
-
-    conventions_args = conventions.model_dump() if conventions is not None else {}
-    assumptions: list[str] | None = None
-    if rate is None:
-        if emi_paise is None:
-            raise ModelRetry("Pass annual_rate, or an EMI to infer it from")
-        try:
-            fit = infer_rate_fn(int(principal), int(count), int(emi_paise), **conventions_args)
-        except ValueError as exc:
-            raise ModelRetry(str(exc)) from exc
-        low = fit["low_bps_x100"]
-        high = fit["high_bps_x100"]
-        if not fit.get("matches_emi") or low is None or high is None:
-            raise ModelRetry(fit["note"])
-        # An EMI a zero rate explains is a zero-rate loan (a no-cost EMI), not a small rate.
-        rate = 0.0 if low == 0 else (low + high) / 2 / 10_000
-        assumptions = [f"{low / 10_000:.4f}% to {high / 10_000:.4f}% a year, inferred from the EMI"]
-        # A stated EMI was evidence for the rate, so the rate now computes the EMI. A named loan
-        # keeps its real EMI, which can take a month more or less than its tenure.
-        if not loan:
-            emi_paise = None
-    try:
-        # Loan terms come from rows and sandbox calls; normalize them before the maths.
-        result = amortize_fn(
-            int(principal),
-            float(rate),
-            int(count),
-            emi_paise=emi_paise,
-            start_date=start,
-            prepay=PrepayPayload(**prepay.model_dump()) if prepay is not None else None,
-            assumptions=assumptions,
-            processing_fee_paise=int(fee_paise),
-            **conventions_args,
-        )
-    except ValueError as exc:
+    except sandbox_tools.SandboxInputError as exc:
         raise ModelRetry(str(exc)) from exc
-    payload: dict[str, Any] = dict(result)
-    apr = money_tools.apr_percent(result.get("apr"))
-    if apr is not None:
-        payload["apr_percent"] = apr
-    card = {"card": "amortize", "title": "Loan schedule", **payload}
-    registered = ctx.deps.presentation.register_calculation("amortize", payload, card)
-    card["result_id"] = registered.result_id
-    # Thirty `amortize` calls in one script used to render thirty identical loan schedules. A
-    # calculation is a value to compute with; `present` is how it reaches the answer.
-    return ToolReturn(return_value={**payload, "ui_results": [registered.descriptor()]})
 
 
-async def card_payoff(
-    ctx: RunContext[AgentDeps],
-    card: str | None = None,
-    balance_paise: int | None = None,
-    monthly_rate_percent: float | None = None,
-    payment_paise: int | None = None,
-    minimum_percent: float | None = None,
-    minimum_floor_paise: int | None = None,
-) -> ToolReturn:
-    """Credit card payoff maths: months to clear, total finance charge, GST, payoff date, the
-    monthly schedule, and cost_of_carrying, the finance charge plus GST, which is what carrying
-    the balance costs. Pass a card account's name to use its ledger balance and
-    stored terms, or pass balance_paise and monthly_rate_percent in percent a month. Any term
-    passed here overrides the card's stored term. Leave payment_paise unset to model paying only
-    the minimum due, or pass a fixed monthly payment in paise. Override the minimum-due rule with
-    minimum_percent and minimum_floor_paise. Use this instead of writing the formula. It returns
-    the schedule, not a card: show it with present. When complete_cost is false, do not call the
-    total the full cost; explain not_included."""
-    start: date | None = ledger_today()
-    if card is not None:
-        async with connect() as conn:
-            try:
-                result = await money_tools.card_payoff(
-                    conn,
-                    card=card,
-                    balance_paise=balance_paise,
-                    monthly_rate_percent=monthly_rate_percent,
-                    payment_paise=payment_paise,
-                    minimum_percent=minimum_percent,
-                    minimum_floor_paise=minimum_floor_paise,
-                    start_date=start,
-                )
-            except (money_tools.ToolInputError, ValueError) as exc:
-                raise ModelRetry(str(exc)) from exc
-    else:
-        try:
-            result = await money_tools.card_payoff(
-                None,
-                balance_paise=balance_paise,
-                monthly_rate_percent=monthly_rate_percent,
-                payment_paise=payment_paise,
-                minimum_percent=minimum_percent,
-                minimum_floor_paise=minimum_floor_paise,
-                start_date=start,
-            )
-        except (money_tools.ToolInputError, ValueError) as exc:
-            raise ModelRetry(str(exc)) from exc
-    card_payload = {"card": "card_payoff", "title": "Card payoff", **result}
-    registered = ctx.deps.presentation.register_calculation("card_payoff", result, card_payload)
-    card_payload["result_id"] = registered.result_id
-    return ToolReturn(return_value={**result, "ui_results": [registered.descriptor()]})
-
-
-async def compare_offers(ctx: RunContext[AgentDeps], offers: list[Offer]) -> ToolReturn:
-    """Compare two or more offers for one purchase in input order; it never chooses a product.
-    Each result has cash_price_paise, discount_paise, cashback_paise, interest_paise,
-    gst_on_interest_paise, processing_fee_paise, gst_on_fee_paise, total_paid_paise,
-    net_cost_paise after cashback, difference_vs_cash_paise (net cost minus cash price),
-    difference_vs_offers (this offer's net cost minus each other offer's; quote these instead of
-    subtracting), instalments_paise (each month's charge, empty for cash), and apr_percent (null
-    when no offer is financed). The apr interval uses annual bps_x100 units.
-    Financing needs kind (card_emi or loan), annual_rate_bps, months, and processing_fee_paise;
-    a missing rate is refused, so ask for it. If complete_cost is false, do not call
-    total_paid_paise the full cost; explain not_included.
-    """
-    try:
-        result = money_tools.compare_offers(offers)
-    except (ValueError, KeyError) as exc:
-        raise ModelRetry(str(exc)) from exc
-    return ToolReturn(return_value={"offers": result})
-
-
-async def compound(
-    ctx: RunContext[AgentDeps],
-    monthly_paise: int,
-    annual_rate: float,
-    months: int,
-    start_paise: int = 0,
-) -> ToolReturn:
-    """Growth of a monthly investment at an assumed annual rate. The rate is an assumption, not a
-    prediction or advice: state it in your answer. Show it with present."""
-    try:
-        result = compound_fn(monthly_paise, annual_rate, months, start_paise=start_paise)
-    except ValueError as exc:
-        raise ModelRetry(str(exc)) from exc
-    card = {"card": "compound", "title": "Growth at an assumed rate", **result}
-    registered = ctx.deps.presentation.register_calculation("compound", result, card)
-    card["result_id"] = registered.result_id
-    return ToolReturn(return_value={**result, "ui_results": [registered.descriptor()]})
-
-
-async def show_chart(
-    ctx: RunContext[AgentDeps],
-    type: Literal["line", "bar", "stacked_bar", "donut"],
-    title: str,
-    series: list[dict[str, Any]],
-    unit: Literal["paise", "count", "percent"] = "paise",
-    as_of: str | None = None,
-) -> ToolReturn:
-    """Show the user a chart: line, bar, stacked_bar, or donut. Take values from variables in your
-    script, never typed by hand. Use one when a shape says more than a sentence."""
-    if not series:
-        raise ModelRetry("a chart needs at least one series")
-    if len(series) > 8:
-        raise ModelRetry("a chart takes at most 8 series")
-    if type == "donut" and len(series) != 1:
-        raise ModelRetry("a donut has exactly one series")
-    checked: list[dict[str, Any]] = []
-    for item in series:
-        name = str(item.get("name") or "")
-        points = item.get("points") or []
-        if not name:
-            raise ModelRetry('every series needs a name, for example {"name": "Rent"}')
-        if not isinstance(points, list) or not points:
-            raise ModelRetry(
-                f"series {name!r} has no points. One valid series is "
-                '{"name": "Rent", "points": [{"x": "2026-09", "y": 2800000}]}.'
-            )
-        if len(points) > 400:
-            raise ModelRetry(f"series {name!r} has more than 400 points")
-        cleaned: list[dict[str, Any]] = []
-        for point in points:
-            if not isinstance(point, dict) or "x" not in point or "y" not in point:
-                raise ModelRetry("each point is {'x': str, 'y': int}")
-            value = point["y"]
-            if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise ModelRetry("chart values must be numbers")
-            if isinstance(value, float):
-                if not value.is_integer():
-                    raise ModelRetry(
-                        "chart values must be whole numbers; round the value in your script "
-                        "and pass the rounded number"
-                    )
-                value = int(value)
-            cleaned.append({"x": str(point["x"]), "y": value})
-        checked.append({"name": name, "points": cleaned})
-    chart_id = f"cht_{abs(hash((title, type, str(checked)))):x}"
-    spec = {
-        "chart_id": chart_id,
-        "type": type,
-        "title": title,
-        "series": checked,
-        "unit": unit,
-        "as_of": as_of,
-    }
-    card = {"card": "chart", **spec}
-    registered = ctx.deps.presentation.register_calculation("chart", {"shown": True}, card)
-    card["result_id"] = registered.result_id
-    return ToolReturn(
-        return_value={
-            "chart_id": chart_id,
-            "shown": True,
-            "ui_results": [registered.descriptor()],
-        },
-        metadata=_card_data(card),
-    )
-
-
-async def show_table(ctx: RunContext[AgentDeps], table: TableInput) -> ToolReturn:
-    """Show a table you computed in your script. Pass columns with an explicit type (money,
-    number, text, or date), rows of cells, and optionally the ui_results ids it came from. Money
-    cells are integer paise. At most 12 columns and 50 rows; a comparison is better as a table
-    than as prose."""
-    try:
-        registered = ctx.deps.presentation.register_table(table)
-    except PresentationError as exc:
-        raise ModelRetry(str(exc)) from exc
-    card = {
-        "card": "result",
-        "result_id": registered.result_id,
-        "snapshot": registered.snapshot,
-    }
-    return ToolReturn(
-        return_value={
-            "table_id": registered.result_id,
-            "shown": True,
-            "ui_results": [registered.descriptor()],
-        },
-        metadata=_card_data(card),
-    )
-
-
-async def present(ctx: RunContext[AgentDeps], display: dict[str, Any]) -> ToolReturn:
-    """Compose the answer from this turn's ui_results. display is a bounded tree:
-    {"_type": "Stack" | "Comparison" | "Summary" | "Table" | "Chart" | "Receipt",
-     "children": [...], "result_id": "res_1"}. Containers have children; leaves have a result_id
-    and no other props. Use only a view the result offers. Comparison aligns sections and never
-    computes a difference.
-    Example: {"_type": "Stack", "children": [{"_type": "Table", "result_id": "res_1"}]}."""
-    try:
-        card, return_value = build_answer(ctx.deps.presentation, display)
-    except PresentationError as exc:
-        raise ModelRetry(str(exc)) from exc
-    return ToolReturn(return_value=return_value, metadata=_card_data(card))
-
-
-def build_read_toolset() -> SetMetadataToolset[AgentDeps]:
-    return FunctionToolset(
-        tools=[
-            get_financial_context,
-            query_movements,
-            summarize_spending,
-            recap,
-            project,
-            run_query,
-            amortize,
-            card_payoff,
-            compare_offers,
-            compound,
-            rupees,
-            show_chart,
-            show_table,
-            present,
-        ],
-        timeout=60,
-    ).with_metadata(code_mode=True)
+def build_read_toolset() -> FunctionToolset[AgentDeps]:
+    return FunctionToolset(tools=[run_query, project, run_python], timeout=60)
 
 
 # Writes --------------------------------------------------------------------------------------
 
 
-async def _conversation_flagged(ctx: RunContext[AgentDeps]) -> bool:
-    if ctx.deps.flagged:
-        return True
-    async with connect() as conn:
-        flagged = await is_conversation_flagged(conn, ctx.deps.conversation_id)
-    if flagged:
-        ctx.deps.flagged = True
-    return flagged
-
-
-async def _gate(ctx: RunContext[AgentDeps], change: str) -> None:
-    """Lasting or wide writes ask first once the thread has read outside text.
-
-    The flag can be set by a read earlier in the same turn, so it is read from the conversation
-    row, not only from the snapshot taken when the turn started.
-    """
-    if await _conversation_flagged(ctx) and not ctx.tool_call_approved:
+def _ask_first(ctx: RunContext[AgentDeps], needed: bool) -> None:
+    """Stop for the user's tap when `needed`; count the offer and, on the resumed call, the yes."""
+    if not needed:
+        return
+    if not ctx.tool_call_approved:
         ctx.deps.approvals_offered += 1
-        raise ApprovalRequired(
-            {
-                "change": change,
-                "reason": (
-                    "This conversation has read statement or photo text, and this change lasts."
-                ),
-            }
-        )
-    if ctx.tool_call_approved:
-        ctx.deps.approvals += 1
+        raise ApprovalRequired
+    ctx.deps.approvals += 1
 
 
 async def _call_write(
@@ -888,65 +264,33 @@ def _write_return(payload: dict[str, Any]) -> ToolReturn:
     return ToolReturn(return_value=payload, metadata=_card_data(card) if card else None)
 
 
-async def record_movement(
-    ctx: RunContext[AgentDeps],
-    movement: Movement,
-    not_duplicate: bool = False,
-) -> ToolReturn:
-    """Log money that moved: expense, income, transfer between your own accounts (card bill, SIP,
-    saving to a goal), split (whole bill and your share; each person and their share), loan EMI
-    (total paid), refund, or settlement (direction says who paid whom). Say what happened; code
-    works out the transfers. Ask first if the amount is missing or a split isn't clear. `date` is
-    ISO, omit for today, never a future date. `account` is optional; code uses the payee's usual
-    account, or the busiest/default one. Pass `category` only if the user named one; otherwise
-    pass `category_guess`. Amounts are rupees in `amount_rupees`, never paise. Pass `payee` only
-    when they name a merchant or a person, never a placeholder like "Unknown shop". Include
-    `attachment_id` and `upi_ref` when logging from an image if visible.
-    Example: {"kind": "expense", "amount_rupees": 450, "payee": "Swiggy",
-    "category": "Food & Dining"}."""
-    payload_movement = movement.model_dump(exclude_none=True, mode="python")
-    if ctx.tool_call_id:
-        payload_movement["tool_call_id"] = ctx.tool_call_id
-    flagged = await _conversation_flagged(ctx)
-    payload = await _call_write(
-        lambda conn: write_tools.record_movement(
-            conn,
-            movement=payload_movement,
-            message_id=ctx.deps.message_id,
-            conversation_id=ctx.deps.conversation_id,
-            flagged=flagged,
-            user_texts=ctx.deps.user_texts,
-            not_duplicate=not_duplicate,
-            capture_kind=ctx.deps.capture_kind,
-            capture_ref=ctx.deps.capture_ref,
-        )
-    )
-    return _write_return(payload)
-
-
 async def record_movements(
     ctx: RunContext[AgentDeps],
     movements: list[Movement],
     attachment_id: str | None = None,
     not_duplicate: bool = False,
 ) -> ToolReturn:
-    """Atomically log 1 to 50 movements in one transaction with a single Undo card.
-
-    Use this when logging multiple transactions from a multi-row screenshot or message instead of
-    calling `record_movement` in a loop. Identical entries within the same list are all logged
-    together; duplicates against pre-existing ledger entries are surfaced before writing anything.
-    Pass `attachment_id` when all rows came from one uploaded image (or per movement).
-    """
-    payload_movements = [m.model_dump(exclude_none=True, mode="python") for m in movements]
-    flagged = await _conversation_flagged(ctx)
+    """Log 1 to 50 movements of money that moved, in one step with one undo_id. Each movement is
+    an expense, income, transfer between your own accounts (card bill, SIP, saving to a goal),
+    split (whole bill and your share; each person and their share), loan EMI (total paid), refund,
+    or settlement (direction says who paid whom). Say what happened; code works out the
+    transfers. Ask first if an amount is missing or a split isn't clear. `date` is ISO, omit for
+    today, never a future date. `account` is optional; code uses the payee's usual account, or the
+    busiest one. Pass `category` only if the user named one; otherwise pass `category_guess`.
+    Amounts are rupees in `amount_rupees`, never paise. Pass `payee` only when they name a
+    merchant or a person, never a placeholder like "Unknown shop". For a multi-row screenshot or
+    message, put every row in this one call; pass `attachment_id` when the rows came from one
+    uploaded image, and `upi_ref` per row when visible. A possible duplicate of an existing entry
+    comes back before anything is written; pass not_duplicate=true only after the user says it
+    is a separate payment.
+    Example: {"movements": [{"kind": "expense", "amount_rupees": 450, "payee": "Swiggy",
+    "category": "Food"}]}."""
     payload = await _call_write(
         lambda conn: write_tools.record_movements(
             conn,
-            movements=payload_movements,
+            movements=[m.model_dump(exclude_none=True, mode="python") for m in movements],
             message_id=ctx.deps.message_id,
             conversation_id=ctx.deps.conversation_id,
-            flagged=flagged,
-            user_texts=ctx.deps.user_texts,
             not_duplicate=not_duplicate,
             capture_kind=ctx.deps.capture_kind,
             capture_ref=ctx.deps.capture_ref,
@@ -966,10 +310,10 @@ async def correct_movement(
     """Fix a logged movement: category, payee, note, expected date, date, one-off, amount, account,
     or delete it. Omit fields that stay the same. Amounts are rupees in `amount_rupees`. For a
     category or payee, scope sets how far it goes: this row, this row and future ones, or all rows
-    past and future ('ramesh@okaxis is my landlord')."""
-    if scope != "this":
-        change = changes.model_dump(exclude_none=True)
-        await _gate(ctx, f"Correct movement {movement_id} ({scope}): {change}")
+    past and future ('ramesh@okaxis is my landlord'); a wider scope asks the user to confirm.
+    To match a movement to a schedule occurrence, or remove that match, pass only
+    `schedule_payment`; find the movement's ID with run_query first and never invent a payment."""
+    _ask_first(ctx, scope != "this")
     payload = await _call_write(
         lambda conn: write_tools.correct_movement(
             conn,
@@ -994,103 +338,41 @@ async def update_setup(
         "settings",
         "scheduled_question",
         "baseline",
+        "preference",
     ],
     action: Literal["add", "update", "archive"],
     data: SetupData,
 ) -> ToolReturn:
     """Change setup: accounts, balances, schedules, goals, categories, payees, settings (the floor),
-    scheduled questions, and baselines. Not for money that moved. Amounts are rupees in
-    `*_rupees` fields, except `*_paise` fields (`emi_fee_paise`, `min_due_floor_paise`). A
-    schedule uses an iCalendar RRULE; `last4` is only the last four digits; the floor is the
-    minimum balance to keep; `rate_percent` is annual; `as_of` dates a stated balance; a baseline
-    is typical daily spend.
+    scheduled questions, baselines, and remembered preferences. Not for money that moved. Archiving
+    anything and changing settings ask the user to confirm. Amounts are rupees in `*_rupees`
+    fields, except `*_paise` fields (`emi_fee_paise`, `min_due_floor_paise`). A schedule uses an
+    iCalendar RRULE; `last4` is only the last four digits; the floor is the minimum balance to
+    keep; `rate_percent` is annual; `as_of` dates a stated balance; a baseline is typical daily
+    spend.
     A balance is signed: a card's or a loan's `balance_rupees` is the amount owed, so ₹500 in
     credit is -500 for that card, passed once and not retried with the other sign.
     For action "add" on a card, a positive credit limit, a statement day, and a due day are
     required. If the user does not know one, leave the card pending instead of guessing. Record a
     card's EMI rate and fee in `emi_rate_percent` and `emi_fee_paise`, and its finance terms in
     `finance_rate_percent` (percent a month), `min_due_percent`, and `min_due_floor_paise`, only
-    when the issuer states them. A bank needs only a name, and its balance and last4 are optional.
-    An update changes only the fields you pass.
+    when the issuer states them. An update changes only the fields you pass.
+    A preference entity is a lasting memory. A preference is how the user wants you to behave or
+    talk ("Use Hinglish when I do"), a fact is true about their world ("Mira is my flatmate"), and
+    a rule is how they want their money data treated ("Family transfers are essential"). add saves
+    one (`text`, `kind`, and a stable `subject` for the same topic); update changes a memory's
+    `text` or `kind` by `id`; archive forgets one. When a newly stated fact contradicts the
+    active value, name both values and the old one's date, then save the new value with the same
+    kind and subject. Never store a number the ledger owns.
     Example: {"entity": "settings", "action": "update", "data": {"floor_rupees": 30000}}."""
-    payload_data = data.model_dump(exclude_none=True, mode="python")
-    summary = payload_data.get("name") or payload_data.get("account") or payload_data
-    await _gate(ctx, f"{action} {entity}: {summary}")
+    _ask_first(ctx, action == "archive" or entity == "settings")
     payload = await _call_write(
         lambda conn: write_tools.update_setup_item(
             conn,
             entity=entity,
             action=action,
-            data=payload_data,
+            data=data.model_dump(exclude_none=True, mode="python"),
             message_id=ctx.deps.message_id,
-        )
-    )
-    if ctx.tool_call_approved and payload.get("status") != "outcome_unknown":
-        confirmed = [str(value) for value in payload_data.values() if isinstance(value, str)]
-        if confirmed:
-            try:
-                async with connect() as conn:
-                    await clear_confirmed_marks(conn, confirmed)
-            except Exception:  # noqa: BLE001 - the write landed; a stale mark is not a failed write
-                logger.warning("could not clear a confirmed outside-text mark")
-    return _write_return(payload)
-
-
-async def schedule_payment(
-    ctx: RunContext[AgentDeps],
-    schedule: str,
-    due_date: date,
-    movement_id: str,
-    action: Literal["link", "unlink"] = "link",
-    amount_rupees: Decimal | None = None,
-) -> ToolReturn:
-    """Match a recorded movement to one schedule occurrence, or remove that match. This never
-    records new money. Use the schedule name or ID and its holiday-adjusted ISO due date. Find
-    the actual movement with query_movements first; do not invent a payment from an elapsed date
-    or a confirmed schedule. A match must be due within 31 days after the movement's date; a far
-    one is refused with the nearest open occurrence. A partial payment accepts amount_rupees; omit
-    it to use the movement's remaining eligible amount. Existing matches are idempotent. Matching
-    and unmatching each have undo; reversed movements never count as paid."""
-    payload = await _call_write(
-        lambda conn: write_tools.schedule_payment(
-            conn,
-            schedule=schedule,
-            due_date=due_date,
-            movement_id=movement_id,
-            action=action,
-            amount_rupees=amount_rupees,
-            message_id=ctx.deps.message_id,
-        )
-    )
-    return _write_return(payload)
-
-
-async def preference(
-    ctx: RunContext[AgentDeps],
-    action: Literal["remember", "forget", "classify"],
-    text: str | None = None,
-    id: str | None = None,
-    kind: Literal["preference", "fact", "rule"] | None = None,
-    subject: str | None = None,
-) -> ToolReturn:
-    """Remember a lasting preference, fact, or rule about the user, forget one, or reclassify one.
-    A preference is how the user wants you to behave or talk, such as "Use Hinglish when I do." A
-    fact is true about the user's world, such as "Mira is my flatmate." A rule is how the user
-    wants their money data treated, such as "Family transfers are essential expenses." Call it
-    unprompted when you notice one, and choose the kind. Use classify with the memory id and the
-    new kind to change an existing memory's kind. Pass a stable subject for the same topic; when a
-    newly stated fact contradicts the active value, name both values and the date of the old one,
-    then save the new value with the same kind and subject. Never store a number the ledger owns."""
-    await _gate(ctx, f"{action} {kind or 'memory'}: {text or id}")
-    payload = await _call_write(
-        lambda conn: write_tools.preference(
-            conn,
-            action=action,
-            text=text,
-            preference_id=id,
-            message_id=ctx.deps.message_id,
-            kind=kind,
-            subject=subject,
         )
     )
     return _write_return(payload)
@@ -1111,21 +393,7 @@ async def undo(ctx: RunContext[AgentDeps], undo_id: str | None = None) -> ToolRe
 
 
 def build_write_toolset() -> FunctionToolset[AgentDeps]:
-    return FunctionToolset(
-        tools=[
-            record_movement,
-            record_movements,
-            correct_movement,
-            update_setup,
-            schedule_payment,
-            preference,
-            undo,
-        ]
-    )
+    return FunctionToolset(tools=[record_movements, correct_movement, update_setup, undo])
 
 
-__all__ = [
-    "AgentDeps",
-    "build_read_toolset",
-    "build_write_toolset",
-]
+__all__ = ["AgentDeps", "build_read_toolset", "build_write_toolset"]

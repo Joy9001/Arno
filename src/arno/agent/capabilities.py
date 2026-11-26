@@ -1,87 +1,79 @@
-"""The harness capability list, in the order system-design step 6 settled.
+"""Capabilities and the history processor the agent runs with.
 
-Each value is a starting point. Tests drive them with `FunctionModel`; real token counts and cache
-behavior are measured from traces at L2.
+Phoenix trace attributes (`RootSpanIO`, `InferenceContext`), tool errors that become a result the
+model can explain, a history processor that trims old tool payloads near the context limit, and
+the model settings and usage limits every run shares.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import AsyncIterable
 from dataclasses import replace
-from typing import Any, override
+from typing import Any, cast, override
 
 from pydantic import BaseModel
-from pydantic_ai import ModelSettings, RunContext
-from pydantic_ai.capabilities import (
-    AbstractCapability,
-    Caching,
-    ModelFallback,
-    WrapRunHandler,
-)
+from pydantic_ai import ModelSettings, RunContext, UsageLimits
+from pydantic_ai.capabilities import AbstractCapability, WrapRunHandler
 from pydantic_ai.messages import (
     AgentStreamEvent,
+    ModelMessage,
     ModelRequest,
-    ToolReturn,
+    ModelResponse,
     ToolReturnPart,
     UserPromptPart,
 )
-from pydantic_ai.models import Model, ModelRequestContext
-from pydantic_ai.models.fallback import FallbackModel
-from pydantic_ai_harness.code_mode import CodeMode
-from pydantic_ai_harness.compaction import (
-    ClearToolResults,
-    FallbackCompaction,
-    SlidingWindowCompaction,
-    SummarizingCompaction,
-    TieredCompaction,
-    is_pinned,
-)
-from pydantic_ai_harness.guardrails import InputGuardrail
-from pydantic_ai_harness.subagents import is_task_report
-from pydantic_ai_harness.system_reminders import SystemReminders
-from pydantic_ai_harness.tool_output_limits import (
-    Band,
-    ToolOutputLimits,
-    Truncate,
-    TruncationStrategy,
-)
-from pydantic_ai_harness.warn_on_cache_busts import WarnOnCacheBusts
+from pydantic_ai.models import ModelRequestContext
 
 from arno.agent.deps import AgentDeps
-from arno.agent.images import ImageAttachments
 from arno.agent.models import DEFAULT_CONTEXT_WINDOW
-from arno.agent.redaction import redact_text, redaction_detectors
-from arno.agent.usage import COST_STOP_ERRORS, usage_hooks
-from arno.db.conn import connect
-from arno.ledger.common import today as ledger_today
-from arno.tools.mark import contains_outside, flag_outside_text
+from arno.agent.usage import COST_STOP_ERRORS
 
 logger = logging.getLogger("arno.agent")
 
-RUN_CODE_TOOL = "run_code"
-
+# Tools whose returns record what changed, so trimming never drops them.
 WRITE_TOOLS = frozenset(
     {
-        "record_movement",
         "record_movements",
         "correct_movement",
         "update_setup",
-        "schedule_payment",
-        "preference",
         "undo",
     }
 )
+TRIM_AT = 0.7
+KEEP_RECENT = 10
+TRIMMED = "[Earlier tool result removed to save space. Read it again if you need it.]"
 
-SUMMARY_PROMPT = (
-    "Summarize this conversation for the agent continuing it. Keep what they asked for, "
-    "the decisions made, open questions, and the IDs of rows you acted on. Copy the figures a "
-    "decision rests on exactly as they were said (an agreed amount, a floor, a date, a rate, a "
-    "rule); a summary that keeps the decision without its figure loses what was decided. Leave "
-    "out balances and statement totals, which can be read again from the ledger. Leave out "
-    "statement and photo text.\n\n"
-    "{messages}"
-)
+
+def trim_old_tool_payloads(
+    ctx: RunContext[Any], messages: list[ModelMessage], *, window: int | None = None
+) -> list[ModelMessage]:
+    """When the last request nears the context window, blank older read-tool returns."""
+    limit = window or int(os.environ.get("LLM_CONTEXT_WINDOW", DEFAULT_CONTEXT_WINDOW))
+    used = next(
+        (
+            message.usage.input_tokens
+            for message in reversed(messages)
+            if isinstance(message, ModelResponse) and message.usage.input_tokens
+        ),
+        0,
+    )
+    if used < limit * TRIM_AT:
+        return messages
+    cutoff = len(messages) - KEEP_RECENT
+    trimmed: list[ModelMessage] = []
+    for index, message in enumerate(messages):
+        if index < cutoff and isinstance(message, ModelRequest):
+            parts = [
+                replace(cast(Any, part), content=TRIMMED)
+                if isinstance(part, ToolReturnPart) and part.tool_name not in WRITE_TOOLS
+                else part
+                for part in message.parts
+            ]
+            message = replace(message, parts=parts)
+        trimmed.append(message)
+    return trimmed
 
 
 def _content_text(content: Any) -> str:
@@ -97,7 +89,7 @@ def _content_text(content: Any) -> str:
 
 
 def _current_user_text(ctx: RunContext[Any]) -> str | None:
-    """The prompt this run is answering, never the pinned snapshot or older turns."""
+    """The prompt this run is answering."""
     if ctx.prompt is not None:
         text = _content_text(ctx.prompt)
         if text:
@@ -107,7 +99,7 @@ def _current_user_text(ctx: RunContext[Any]) -> str | None:
         if not isinstance(message, ModelRequest):
             continue
         for part in reversed(message.parts):
-            if isinstance(part, UserPromptPart) and not is_pinned(part):
+            if isinstance(part, UserPromptPart):
                 text = _content_text(part.content)
                 if text:
                     return text
@@ -141,9 +133,7 @@ class RootSpanIO(AbstractCapability[Any]):
         if ctx.trace_include_content and span.is_recording():
             text = _current_user_text(ctx)
             if text:
-                # Same policy as the guardrail and stored history: this runs before the
-                # guardrail, so the preview would otherwise show the raw prompt.
-                span.set_attribute("input.value", redact_text(text))
+                span.set_attribute("input.value", text)
                 span.set_attribute("input.mime_type", "text/plain")
         try:
             result = await handler()
@@ -231,8 +221,6 @@ class ToolErrorsToModel(AbstractCapability[AgentDeps]):
         from arno.jobs.runner import JobGaveUp
 
         if isinstance(error, (JobGaveUp, *COST_STOP_ERRORS)):
-            # Code Mode transports nested exceptions through Monty. Even a snippet that catches
-            # one must not dispatch another tool/model or finish this run as successful.
             self._cost_stop = error
             raise error
         logger.error("tool %s failed (%s)", call.tool_name, type(error).__name__)
@@ -241,262 +229,6 @@ class ToolErrorsToModel(AbstractCapability[AgentDeps]):
             "tool": call.tool_name,
             "message": "The tool failed. Tell the user plainly and say what is missing.",
         }
-
-
-def _has_outside(value: Any) -> bool:
-    """Adapt PydanticAI return objects onto `mark.contains_outside`."""
-    if isinstance(value, ToolReturn):
-        return any(
-            _has_outside(item) for item in (value.return_value, value.content, value.metadata)
-        )
-    if isinstance(value, ToolReturnPart):
-        return _has_outside(value.content) or _has_outside(value.metadata)
-    if isinstance(value, dict):
-        return any(
-            (key == "outside_text" and item is True) or _has_outside(key) or _has_outside(item)
-            for key, item in value.items()
-        )
-    if isinstance(value, (list, tuple)):
-        return any(_has_outside(item) for item in value)
-    return contains_outside(value)
-
-
-async def _flag_conversation(ctx: RunContext[AgentDeps]) -> None:
-    deps = ctx.deps
-    conversation_id = getattr(deps, "conversation_id", None)
-    if not conversation_id:
-        return
-    if not deps.flagged:
-        async with connect() as conn:
-            await flag_outside_text(conn, conversation_id)
-        deps.flagged = True
-
-
-class OutsideTextTaint(AbstractCapability[AgentDeps]):
-    """Persist conversation taint across tool returns, retry errors, and parser task reports."""
-
-    @override
-    async def after_tool_execute(
-        self, ctx: RunContext[AgentDeps], *, call: Any, tool_def: Any, args: Any, result: Any
-    ) -> Any:
-        if ctx.deps and not ctx.deps.flagged and _has_outside(result):
-            await _flag_conversation(ctx)
-        return result
-
-    @override
-    async def wrap_tool_execute(
-        self,
-        ctx: RunContext[AgentDeps],
-        *,
-        call: Any,
-        tool_def: Any,
-        args: Any,
-        handler: Any,
-    ) -> Any:
-        from pydantic_ai.exceptions import ModelRetry, ToolRetryError
-
-        try:
-            return await handler(args)
-        except ModelRetry as exc:
-            if ctx.deps and not ctx.deps.flagged and _has_outside(exc.message):
-                await _flag_conversation(ctx)
-            raise
-        except ToolRetryError as exc:
-            if ctx.deps and not ctx.deps.flagged and _has_outside(exc.tool_retry):
-                await _flag_conversation(ctx)
-            raise
-
-    @override
-    async def before_model_request(self, ctx: RunContext[AgentDeps], request_context: Any) -> Any:
-        deps = ctx.deps
-        if deps is None or not getattr(deps, "conversation_id", None) or deps.flagged:
-            return request_context
-        for message in request_context.messages:
-            if not isinstance(message, ModelRequest):
-                continue
-            if any(is_task_report(part) for part in message.parts):
-                await _flag_conversation(ctx)
-                break
-        return request_context
-
-
-# What a script can reach. Monty resolves only part of the standard library, so a name it
-# cannot import is answered with this list instead of the type checker's search paths.
-SANDBOX_MODULES = (
-    "json",
-    "datetime",
-    "math",
-    "re",
-    "itertools",
-    "functools",
-    "collections",
-    "decimal",
-    "random",
-    "time",
-    "hashlib",
-    "base64",
-    "bisect",
-    "copy",
-)
-# The read toolset's functions, which `run_code` takes over: a test keeps this list in step.
-SANDBOX_HELPERS = (
-    "amortize",
-    "card_payoff",
-    "compare_offers",
-    "compound",
-    "get_financial_context",
-    "present",
-    "project",
-    "query_movements",
-    "recap",
-    "rupees",
-    "run_query",
-    "show_chart",
-    "show_table",
-    "summarize_spending",
-)
-SANDBOX_ERRORS = ("Type error in code:", "Runtime error:")
-
-
-def sandbox_help() -> str:
-    """What a failed script could have used: its helpers, and the modules it may import."""
-    return (
-        "Inside run_code call only its helpers, never a write tool: "
-        + ", ".join(SANDBOX_HELPERS)
-        + ". The sandbox imports only "
-        + ", ".join(SANDBOX_MODULES)
-        + "; compute anything else from a tool return."
-    )
-
-
-class CodeModeHints(AbstractCapability[AgentDeps]):
-    """A failed `run_code` call names the helpers and modules it could have used."""
-
-    @override
-    async def wrap_tool_execute(
-        self,
-        ctx: RunContext[AgentDeps],
-        *,
-        call: Any,
-        tool_def: Any,
-        args: Any,
-        handler: Any,
-    ) -> Any:
-        from pydantic_ai.exceptions import ToolRetryError
-        from pydantic_ai.messages import ToolReturnPart
-
-        try:
-            return await handler(args)
-        except ToolRetryError as exc:
-            retry = exc.tool_retry
-            if call.tool_name != RUN_CODE_TOOL or not isinstance(retry, ToolReturnPart):
-                raise
-            message = str(retry.content)
-            if not message.startswith(SANDBOX_ERRORS):
-                raise
-            raise ToolRetryError(
-                replace(retry, content=f"{message.rstrip()}\n\n{sandbox_help()}")
-            ) from exc
-
-
-async def date_and_changes(ctx: RunContext[AgentDeps]) -> str:
-    """Today's date and how many writes landed since the pinned snapshot."""
-    day = ledger_today().isoformat()
-    if ctx.deps is None or not getattr(ctx.deps, "conversation_id", None):
-        return f"Today is {day}."
-    async with connect() as conn:
-        row = await conn.fetchrow(
-            "SELECT snapshot_at FROM conversations WHERE id = $1", ctx.deps.conversation_id
-        )
-        if row is None or row["snapshot_at"] is None:
-            return f"Today is {day}."
-        written = (
-            await conn.fetchrow_required(
-                "SELECT count(*) AS n FROM audit_log WHERE created_at > $1",
-                row["snapshot_at"],
-            )
-        )["n"]
-    if written:
-        return (
-            f"Today is {day}. Since your snapshot: {written} "
-            f"{'write' if written == 1 else 'writes'}; re-read before stating a balance."
-        )
-    return f"Today is {day}. Nothing has changed since your snapshot."
-
-
-def redaction_guardrail() -> InputGuardrail[AgentDeps]:
-    # The one detector list `redact_text` uses, so the model sees exactly what storage keeps.
-    return InputGuardrail(guard=redaction_detectors())
-
-
-def build_capabilities(
-    *,
-    primary: Model,
-    backup: Model | None = None,
-    context_window: int | None = None,
-    subagents: AbstractCapability[Any] | None = None,
-) -> list[AbstractCapability[Any]]:
-    window = int(
-        context_window or __import__("os").environ.get("LLM_CONTEXT_WINDOW", DEFAULT_CONTEXT_WINDOW)
-    )
-    target = min(100_000, window // 2)
-    keep = max(target // 5, 1)
-
-    summarization_capabilities: list[AbstractCapability[Any]] = [
-        InferenceContext(),
-        usage_hooks("summary"),
-    ]
-
-    summary_model: Model = FallbackModel(primary, backup) if backup is not None else primary
-    capabilities: list[AbstractCapability[Any]] = [
-        InferenceContext(),
-        RootSpanIO(),
-        redaction_guardrail(),
-        CodeMode(tools={"code_mode": True}),
-        Caching(),
-        WarnOnCacheBusts(),
-        SystemReminders(dynamic_reminders=[date_and_changes]),
-        ToolOutputLimits(
-            bands=[
-                Band(
-                    over=10_000,
-                    action=Truncate(max_chars=10_000, strategy=TruncationStrategy.head),
-                )
-            ],
-            tool_filter=["run_code"],
-        ),
-        TieredCompaction(
-            tiers=[
-                ClearToolResults(max_tokens=1, keep_pairs=5, exclude_tools=WRITE_TOOLS),
-                FallbackCompaction(
-                    fallback_chain=[
-                        SummarizingCompaction(
-                            model=summary_model,
-                            max_messages=1,
-                            keep_tokens=keep,
-                            keep_messages=20,
-                            keep_user_messages=True,
-                            receipts=True,
-                            summary_prompt=SUMMARY_PROMPT,
-                            summarization_capabilities=summarization_capabilities,
-                        ),
-                        SlidingWindowCompaction(max_messages=1, keep_tokens=keep, receipts=True),
-                    ]
-                ),
-            ],
-            target_tokens=target,
-        ),
-        ToolErrorsToModel(),
-        OutsideTextTaint(),
-        CodeModeHints(),
-        ImageAttachments(),
-    ]
-    if subagents is not None:
-        capabilities.append(subagents)
-    if backup is not None:
-        capabilities.append(ModelFallback(backup, sticky=False))
-    capabilities.append(usage_hooks("chat"))
-    return capabilities
 
 
 STALL_SECONDS = 600
@@ -514,28 +246,18 @@ async def drain_events(ctx: RunContext[Any], events: AsyncIterable[AgentStreamEv
         pass
 
 
-def turn_limits() -> Any:
-    from pydantic_ai import UsageLimits
-
-    return UsageLimits(request_limit=50, tool_calls_limit=100)
+# One request ceiling for every chat, import, and scheduled run.
+TURN_LIMITS = UsageLimits(request_limit=25)
 
 
 __all__ = [
     "MODEL_SETTINGS",
-    "SANDBOX_ERRORS",
-    "SANDBOX_HELPERS",
-    "SANDBOX_MODULES",
     "STALL_SECONDS",
-    "SUMMARY_PROMPT",
-    "CodeModeHints",
-    "OutsideTextTaint",
+    "TURN_LIMITS",
+    "WRITE_TOOLS",
+    "InferenceContext",
     "RootSpanIO",
     "ToolErrorsToModel",
-    "WRITE_TOOLS",
-    "build_capabilities",
-    "date_and_changes",
     "drain_events",
-    "redaction_guardrail",
-    "sandbox_help",
-    "turn_limits",
+    "trim_old_tool_payloads",
 ]

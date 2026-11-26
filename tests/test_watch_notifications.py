@@ -50,7 +50,7 @@ async def test_unread_badge_and_mark_read(session_client, db):
     assert session_client.get("/api/notifications").json()["unread_count"] == 0
 
 
-async def test_a_notification_opens_a_new_chat_and_preserves_outside_text(session_client, db):
+async def test_a_notification_opens_a_new_chat_seeded_with_it(session_client, db):
     row = await create_notification(
         db,
         kind="new_subscription",
@@ -70,32 +70,28 @@ async def test_a_notification_opens_a_new_chat_and_preserves_outside_text(sessio
     assert opened.status_code == 200, opened.text
     body = opened.json()
     assert body["thread_id"]
-    assert body["outside_text"] is True
-    assert "<outside>Netflix</outside>" in body["message"]
+    assert "Netflix" in body["message"]
 
-    thread = await db.fetchrow("SELECT * FROM conversations WHERE id = $1", body["thread_id"])
-    assert thread["outside_text_at"] is not None
     message = await db.fetchrow(
         "SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at",
         body["thread_id"],
     )
-    assert "<outside>Netflix</outside>" in message["body_text"]
+    assert "Netflix" in message["body_text"]
     assert (
         await db.fetchval("SELECT read_at FROM notifications WHERE id = $1", row["id"])
     ) is not None
 
 
 async def test_opening_a_notification_starts_arno_s_own_reply(session_client, db, monkeypatch):
-    calls: list[tuple[str, bool, bool]] = []
+    calls: list[str] = []
     prompts: list[str] = []
 
-    async def record(app, conn, *, thread, deps, policy=None, flagged=False, prompt=None):
-        del app, conn, policy
-        calls.append((str(thread["id"]), flagged, deps.flagged))
-        prompts.append(prompt[1] if prompt else "")
-        return str(thread["id"])
+    async def record(app, conn, *, thread, deps, prompt):
+        del app, conn, deps
+        calls.append(str(thread["id"]))
+        prompts.append(prompt[1])
 
-    monkeypatch.setattr("arno.api.watch.start_server_turn", record)
+    monkeypatch.setattr("arno.api.watch._start_seeded_turn", record)
     row = await create_notification(
         db,
         kind="risk_warning",
@@ -110,7 +106,7 @@ async def test_opening_a_notification_starts_arno_s_own_reply(session_client, db
     assert opened.status_code == 200, opened.text
     body = opened.json()
     assert body["started"] is True
-    assert calls == [(body["thread_id"], True, True)]
+    assert calls == [body["thread_id"]]
     seeded = await db.fetchrow(
         "SELECT role, body_text FROM messages WHERE conversation_id = $1 ORDER BY created_at",
         body["thread_id"],
@@ -296,8 +292,8 @@ async def test_notification_dedupe_key_inserts_once_and_orders_newest_first(db):
     assert first is not None
 
 
-def test_a_reminder_from_outside_text_marks_its_schedule_name():
-    text, outside = seed_chat_text(
+def test_a_reminder_seeds_its_schedule_name_and_amount():
+    text = seed_chat_text(
         {
             "kind": "reminder",
             "title": "Rent is due tomorrow",
@@ -305,8 +301,7 @@ def test_a_reminder_from_outside_text_marks_its_schedule_name():
             "data": {"name": "Rent", "outside_text": True},
         }
     )
-    assert outside is True
-    assert "<outside>Rent</outside> is due tomorrow" in text
+    assert "Rent is due tomorrow" in text
     assert "₹25,000" in text
 
 

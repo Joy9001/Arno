@@ -8,7 +8,7 @@ from arno.ledger.accounts import create_account, list_accounts
 from arno.ledger.audit import undo_group
 from arno.ledger.movements import correct_movement, list_movements, record_expense
 from arno.ledger.payees import create_payee
-from arno.tools.read import query_movements, summarize_spending
+from arno.tools.recaps import summarize_spending
 
 
 async def _bank(conn, name: str = "Pagination bank"):
@@ -288,36 +288,6 @@ async def test_list_movements_statement_count_is_independent_of_page_size(ledger
     large_rows, large_stmts = await count_queries(5)
     assert small_rows == 2
     assert large_rows == 5
-    assert small_stmts == large_stmts
-
-
-async def test_query_movements_statement_count_is_independent_of_page_size(ledger):
-    bank = await _bank(ledger)
-    food = await _category(ledger)
-    for index in range(6):
-        payee = await create_payee(
-            ledger,
-            display_name=f"Merchant {index}",
-            kind="merchant",
-            outside_text=index % 2 == 0,
-        )
-        await _expense(
-            ledger,
-            bank,
-            food,
-            description=f"Query row {index}",
-            when=date(2026, 10, 1) + timedelta(days=index),
-            payee_id=payee["id"],
-        )
-
-    small_page, small_stmts = await _count_statements(
-        ledger, lambda: query_movements(ledger, limit=2)
-    )
-    large_page, large_stmts = await _count_statements(
-        ledger, lambda: query_movements(ledger, limit=5)
-    )
-    assert len(small_page["rows"]) == 2
-    assert len(large_page["rows"]) == 5
     assert small_stmts == large_stmts
 
 

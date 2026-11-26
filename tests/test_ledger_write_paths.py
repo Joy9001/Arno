@@ -535,9 +535,9 @@ async def test_undo_and_undo_of_undo_keep_spending_inside_its_category(ledger):
 
 
 async def test_undoing_a_remembered_memory_deactivates_it(ledger):
-    remembered = await write_tools.preference(
+    remembered = await write_tools.change_preference(
         ledger,
-        action="remember",
+        action="add",
         text="Use UPI first",
         preference_id=None,
         message_id=None,
@@ -1065,12 +1065,12 @@ async def test_a_goal_contribution_is_savings_not_consumption(ledger):
 
 
 async def test_forgetting_a_memory_is_undoable(ledger):
-    remembered = await write_tools.preference(
-        ledger, action="remember", text="Use UPI first", preference_id=None, message_id=None
+    remembered = await write_tools.change_preference(
+        ledger, action="add", text="Use UPI first", preference_id=None, message_id=None
     )
-    forgotten = await write_tools.preference(
+    forgotten = await write_tools.change_preference(
         ledger,
-        action="forget",
+        action="archive",
         text=None,
         preference_id=remembered["id"],
         message_id=None,
@@ -1163,48 +1163,6 @@ async def test_a_future_expense_is_rejected_with_a_schedule_hint(ledger):
         await ledger.fetchval("SELECT count(*) FROM payees"),
         await ledger.fetchval("SELECT count(*) FROM audit_log"),
     ) == before
-
-
-async def test_a_flagged_thread_marks_a_new_payee_name_from_outside_text(ledger):
-    await _bank(ledger)
-
-    result = await write_tools.record_movement(
-        ledger,
-        {"kind": "expense", "amount_rupees": 100, "payee": "Unseen vendor"},
-        message_id=None,
-        conversation_id="cnv_audit_flagged",
-        flagged=True,
-        user_texts=("I paid for lunch",),
-        not_duplicate=True,
-    )
-
-    assert result["status"] == "recorded"
-    assert (
-        await ledger.fetchval(
-            "SELECT outside_text FROM payees WHERE display_name = 'Unseen vendor'"
-        )
-    ) is True
-    assert result["undo_id"]
-
-
-async def test_a_flagged_thread_keeps_a_name_the_user_typed_trusted(ledger):
-    await _bank(ledger)
-
-    await write_tools.record_movement(
-        ledger,
-        {"kind": "expense", "amount_rupees": 100, "payee": "Unseen vendor"},
-        message_id=None,
-        conversation_id="cnv_audit_typed",
-        flagged=True,
-        user_texts=("I paid Unseen vendor for lunch",),
-        not_duplicate=True,
-    )
-
-    assert (
-        await ledger.fetchval(
-            "SELECT outside_text FROM payees WHERE display_name = 'Unseen vendor'"
-        )
-    ) is False
 
 
 async def test_a_split_can_have_a_zero_share_of_mine(ledger):

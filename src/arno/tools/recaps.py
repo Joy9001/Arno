@@ -15,13 +15,12 @@ from datetime import date, timedelta
 from typing import Any
 
 from arno.db.conn import Connection
-from arno.engine.money import money
+from arno.engine.money import Money, money
 from arno.india.formatting import format_paise
 from arno.ledger.common import today as ledger_today
 from arno.ledger.movements import ledger_span
 from arno.tools import patterns
-from arno.tools.mark import CLOSE, OPEN, mark
-from arno.tools.read import summarize_spending
+from arno.tools.periods import resolve_period
 
 DAYS_LISTED = 7
 WEEKS_LISTED = 4
@@ -175,6 +174,249 @@ def parse_period(value: str, today: date) -> Period:
     return month_period(first, today)
 
 
+def _month_keys(start: date, end: date) -> list[str]:
+    keys: list[str] = []
+    cursor = date(start.year, start.month, 1)
+    while cursor <= end:
+        keys.append(f"{cursor.year:04d}-{cursor.month:02d}")
+        cursor = date(cursor.year + (cursor.month == 12), cursor.month % 12 + 1, 1)
+    return keys
+
+
+def _merge(intervals: list[tuple[date, date]]) -> list[list[date]]:
+    merged: list[list[date]] = []
+    for interval_start, interval_end in sorted(intervals):
+        if merged and interval_start <= merged[-1][1] + timedelta(days=1):
+            merged[-1][1] = max(merged[-1][1], interval_end)
+        else:
+            merged.append([interval_start, interval_end])
+    return merged
+
+
+async def coverage_by_span(
+    conn: Connection,
+    spans: list[tuple[date, date]],
+    *,
+    account_id: str | None = None,
+    today: date | None = None,
+) -> list[dict[str, Any]]:
+    """Which months of each span have a committed statement. A missing month is a gap, never zero.
+
+    Days after `today` are not a gap: the ledger cannot hold them, so no statement can cover
+    them. A month that has not started is unknown, never complete. Without an account filter,
+    every active account that has ever committed a statement must cover the month: one
+    account's statement must not make another account's spending look known. An account that
+    never imports statements (cash, a loan) never holds completeness back. Two queries serve
+    every span, so a list of periods costs the same as one.
+    """
+    day = today or ledger_today()
+    params: list[Any] = []
+    account_clause = ""
+    if account_id is not None:
+        account_clause = "AND account_id = $1"
+        params.append(account_id)
+    rows = await conn.fetch(
+        f"""
+        SELECT account_id, period_start, period_end
+        FROM imports
+        WHERE status = 'committed'
+          AND undone_at IS NULL
+          AND period_start IS NOT NULL AND period_end IS NOT NULL
+          {account_clause}
+        """,  # noqa: S608
+        *params,
+    )
+    if account_id is not None:
+        required = [str(account_id)]
+    else:
+        required = [
+            str(row["id"])
+            for row in await conn.fetch(
+                """
+                SELECT DISTINCT i.account_id AS id
+                FROM imports i
+                JOIN accounts a ON a.id = i.account_id
+                WHERE i.status = 'committed' AND i.undone_at IS NULL AND a.active
+                ORDER BY 1
+                """
+            )
+        ]
+    results: list[dict[str, Any]] = []
+    for start, end in spans:
+        intervals: dict[str, list[tuple[date, date]]] = {}
+        for row in rows:
+            if row["period_end"] >= start and row["period_start"] <= end:
+                intervals.setdefault(str(row["account_id"]), []).append(
+                    (row["period_start"], row["period_end"])
+                )
+        merged = {account: _merge(found) for account, found in intervals.items()}
+        gaps: list[str] = []
+        for key in _month_keys(start, end):
+            year, month = (int(part) for part in key.split("-"))
+            month_start = date(year, month, 1)
+            month_end = date(year, month, calendar.monthrange(year, month)[1])
+            # A month counts as covered only for the part of it that was asked about, and only
+            # when one statement (or adjacent statements) covers that whole part.
+            required_start = max(month_start, start)
+            required_end = min(month_end, end)
+            if required_start > day:
+                gaps.append(key)
+                continue
+            covered = bool(required) and all(
+                any(
+                    interval_start <= required_start and interval_end >= min(required_end, day)
+                    for interval_start, interval_end in merged.get(account, [])
+                )
+                for account in required
+            )
+            if not covered:
+                gaps.append(key)
+        span = _merge([interval for found in intervals.values() for interval in found])
+        covered_from = max(span[0][0], start) if span else None
+        covered_to = min(span[-1][1], end) if span else None
+        results.append(
+            {
+                "complete": not gaps,
+                "gaps": gaps,
+                "from": covered_from.isoformat() if covered_from else None,
+                "to": covered_to.isoformat() if covered_to else None,
+            }
+        )
+    return results
+
+
+async def coverage(
+    conn: Connection,
+    *,
+    account_id: str | None,
+    start: date,
+    end: date,
+    today: date | None = None,
+) -> dict[str, Any]:
+    """The coverage of one span; see `coverage_by_span`."""
+    return (await coverage_by_span(conn, [(start, end)], account_id=account_id, today=today))[0]
+
+
+async def _resolve_named(conn: Connection, table: str, value: str | None) -> str | None:
+    if value is None:
+        return None
+    value = value.strip()
+    if table == "accounts":
+        rows = await conn.fetch(
+            "SELECT id, name FROM v_accounts WHERE lower(name) = lower($1) AND active ORDER BY id",
+            value,
+        )
+    elif table == "categories":
+        rows = await conn.fetch(
+            "SELECT id, name FROM categories WHERE lower(name) = lower($1) AND active ORDER BY id",
+            value,
+        )
+    else:  # pragma: no cover - internal misuse
+        raise ValueError(table)
+    if not rows:
+        raise ValueError(f"No {table[:-1]} named {value!r}")
+    if len(rows) > 1:
+        # Two accounts or payees can share a name. Picking one would answer about a different
+        # set of rows without saying so.
+        candidates = ", ".join(f"{row['name']} ({row['id']})" for row in rows)
+        raise ValueError(f"{table[:-1].capitalize()} {value!r} is ambiguous: {candidates}")
+    return str(rows[0]["id"])
+
+
+SPEND_FILTERS = frozenset({"account", "category"})
+
+
+async def summarize_spending(
+    conn: Connection,
+    *,
+    group_by: str = "category",
+    period: str = "this_month",
+    filters: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Net spend (refunds offset purchases), grouped by category, payee, month, or not at all."""
+    if group_by not in {"category", "payee", "month", "none"}:
+        raise ValueError("group_by is category, payee, month, or none")
+    filters = filters or {}
+    unknown = sorted(set(filters) - SPEND_FILTERS)
+    if unknown:
+        raise ValueError(f"Unknown filter {unknown}. Filters take {sorted(SPEND_FILTERS)}.")
+    day = ledger_today()
+    start, end = resolve_period(period, day)
+    account_id = await _resolve_named(conn, "accounts", filters.get("account"))
+    category_id = await _resolve_named(conn, "categories", filters.get("category"))
+
+    key_sql = {
+        "category": "coalesce(c.name, 'Uncategorized')",
+        "payee": "coalesce(p.display_name, 'No payee')",
+        "month": "to_char(m.date, 'YYYY-MM')",
+        "none": "'total'",
+    }[group_by]
+
+    # The sum keeps every row, since a reversal nets its original to zero; the count leaves the
+    # pair out, so three grocery trips with one corrected entry count as three, not five.
+    params: list[Any] = [start, end]
+    clauses = [
+        "(t.from_account_id = sp.ledger_account_id OR t.to_account_id = sp.ledger_account_id)",
+        "m.date BETWEEN $1 AND $2",
+    ]
+    if account_id:
+        params.extend([account_id, account_id])
+        clauses.append(f"(fa.id = ${len(params) - 1} OR ta.id = ${len(params)})")
+    if category_id:
+        params.append(category_id)
+        clauses.append(f"ml.category_id = ${len(params)}")
+
+    rows = await conn.fetch(
+        f"""
+        SELECT {key_sql} AS key,
+               sum(
+                   CASE WHEN t.to_account_id = sp.ledger_account_id
+                        THEN t.amount ELSE -t.amount END
+               )::bigint AS amount_paise,
+               count(DISTINCT m.id) FILTER (
+                   WHERE ms.is_effective
+               )::bigint AS n
+        FROM movement_legs ml
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
+        JOIN movements m ON m.id = ml.movement_id
+        JOIN v_movement_state ms ON ms.movement_id = m.id
+        JOIN accounts sp ON sp.kind = 'spending'
+        LEFT JOIN v_accounts fa ON fa.ledger_account_id = t.from_account_id
+        LEFT JOIN v_accounts ta ON ta.ledger_account_id = t.to_account_id
+        LEFT JOIN categories c ON c.id = ml.category_id
+        LEFT JOIN payees p ON p.id = ml.payee_id
+        WHERE {" AND ".join(clauses)}
+        GROUP BY 1
+        ORDER BY 2 DESC, 1
+        """,  # noqa: S608
+        *params,
+    )
+    groups: list[dict[str, Any]] = []
+    for row in rows:
+        amount_paise = int(row["amount_paise"])
+        count = int(row["n"])
+        if amount_paise == 0 and count == 0:
+            # A movement a live reversal cancelled leaves nothing to show. It still keeps the
+            # period's total defined, but it must not appear as a ₹0 category.
+            continue
+        groups.append(
+            {
+                "key": row["key"],
+                "amount": money(amount_paise),
+                "count": count,
+            }
+        )
+    cov = await coverage(conn, account_id=account_id, start=start, end=end, today=day)
+    total_paise = sum(int(row["amount_paise"]) for row in rows)
+    total = money(total_paise) if rows or cov["complete"] else None
+    return {
+        "period": {"from": start.isoformat(), "to": end.isoformat()},
+        "groups": groups,
+        "total": total,
+        "coverage": cov,
+    }
+
+
 async def _spending_days(conn: Connection, start: date, end: date) -> set[date]:
     rows = await conn.fetch(
         """
@@ -191,6 +433,46 @@ async def _spending_days(conn: Connection, start: date, end: date) -> set[date]:
         end,
     )
     return {row["date"] for row in rows}
+
+
+async def period_totals(
+    conn: Connection, periods: list[Period], *, today: date | None = None
+) -> dict[str, Money | None]:
+    """Net spend of each period in one grouped query: a money value, or None when the period has
+    no entries and its statement coverage is incomplete."""
+    if not periods:
+        return {}
+    day = today or ledger_today()
+    rows = await conn.fetch(
+        """
+        SELECT q.id, sum(
+                   CASE WHEN t.to_account_id = sp.ledger_account_id
+                        THEN t.amount ELSE -t.amount END
+               )::bigint AS amount_paise, count(m.id) AS n
+        FROM unnest($1::text[], $2::date[], $3::date[]) AS q(id, d1, d2)
+        JOIN movements m ON m.date BETWEEN q.d1 AND q.d2
+        JOIN movement_legs ml ON ml.movement_id = m.id
+        JOIN pgledger_transfers t ON t.id = ml.transfer_id
+        JOIN accounts sp ON sp.kind = 'spending'
+        WHERE t.from_account_id = sp.ledger_account_id OR t.to_account_id = sp.ledger_account_id
+        GROUP BY q.id
+        """,
+        [period.id for period in periods],
+        [period.start for period in periods],
+        [min(period.end, day) for period in periods],
+    )
+    spent = {str(row["id"]): int(row["amount_paise"]) for row in rows}
+    covers = await coverage_by_span(
+        conn, [(period.start, min(period.end, day)) for period in periods], today=day
+    )
+    return {
+        period.id: (
+            money(spent[period.id])
+            if period.id in spent
+            else (money(0) if cover["complete"] else None)
+        )
+        for period, cover in zip(periods, covers, strict=True)
+    }
 
 
 async def list_periods(conn: Connection, *, today: date | None = None) -> list[Period]:
@@ -234,9 +516,9 @@ async def recap_list(conn: Connection, *, today: date | None = None) -> dict[str
     seen = {str(row["period_id"]) for row in await conn.fetch("SELECT period_id FROM recap_views")}
     latest = {period.id for period in latest_complete(periods).values()}
     items = []
+    totals = await period_totals(conn, periods, today=day)
     for period in periods:
-        spend = await summarize_spending(conn, group_by="none", period=period.span())
-        total = spend["total"]
+        total = totals[period.id]
         # The same rule the badge and the job use: a period is new only when it has spending.
         # A refund-only month has a negative total and is not new.
         is_new = (
@@ -264,14 +546,9 @@ async def recap_unseen(conn: Connection, *, today: date | None = None) -> int:
             [period.id for period in latest],
         )
     }
-    count = 0
-    for period in latest:
-        if period.id in seen:
-            continue
-        spend = await summarize_spending(conn, group_by="none", period=period.span())
-        if spend["total"] and spend["total"]["paise"] > 0:
-            count += 1
-    return count
+    unseen = [period for period in latest if period.id not in seen]
+    totals = await period_totals(conn, unseen, today=day)
+    return sum(1 for total in totals.values() if total and total["paise"] > 0)
 
 
 async def mark_seen(conn: Connection, period_id: str, *, today: date | None = None) -> None:
@@ -280,10 +557,6 @@ async def mark_seen(conn: Connection, period_id: str, *, today: date | None = No
         "INSERT INTO recap_views (period_id) VALUES ($1) ON CONFLICT (period_id) DO NOTHING",
         period.id,
     )
-
-
-def _plain(text: str) -> str:
-    return text.replace(OPEN, "").replace(CLOSE, "")
 
 
 def _change_line(total: int, before: int, label: str) -> str:
@@ -358,7 +631,7 @@ async def spending_rows(
         if payee == "No payee":
             clauses.append("p.display_name IS NULL")
         else:
-            params.append(_plain(payee))
+            params.append(payee)
             clauses.append(f"p.display_name = ${len(params)}")
     if movement_id is not None:
         params.append(movement_id)
@@ -440,8 +713,6 @@ async def recap(conn: Connection, period_id: str, *, today: date | None = None) 
     now = await summarize_spending(conn, group_by="category", period=period.span())
     before = await summarize_spending(conn, group_by="category", period=period.previous_span())
     total = int(now["total"]["paise"]) if now["total"] else 0
-    # Statement merchants are outside text: marked here, and the flag reaches the conversation.
-    outside = bool(now.get("outside_text"))
     before_total = int(before["total"]["paise"]) if before["total"] else 0
     comparable = now["coverage"]["complete"] and before["coverage"]["complete"]
     stories: list[dict[str, Any]] = []
@@ -458,7 +729,7 @@ async def recap(conn: Connection, period_id: str, *, today: date | None = None) 
                 "rows": {"story": "total", "key": None},
             }
         )
-        return _result(period, now, stories, outside)
+        return _result(period, now, stories)
 
     if total == 0:
         stories.append(
@@ -470,7 +741,7 @@ async def recap(conn: Connection, period_id: str, *, today: date | None = None) 
                 "rows": None,
             }
         )
-        return _result(period, now, stories, outside)
+        return _result(period, now, stories)
 
     stories.append(
         {
@@ -569,9 +840,6 @@ async def recap(conn: Connection, period_id: str, *, today: date | None = None) 
     if purchases:
         biggest = max(purchases, key=lambda row: (row["amount_paise"], row["date"]))
         who = biggest["payee"] or biggest["description"]
-        if biggest["outside_text"]:
-            who = mark(who) or who
-            outside = True
         stories.append(
             {
                 "key": "biggest",
@@ -588,7 +856,6 @@ async def recap(conn: Connection, period_id: str, *, today: date | None = None) 
     ]
     if named:
         frequent = sorted(named, key=lambda group: (-group["count"], group["key"]))[0]
-        outside = outside or OPEN in str(frequent["key"])
         stories.append(
             {
                 "key": "frequent",
@@ -604,10 +871,6 @@ async def recap(conn: Connection, period_id: str, *, today: date | None = None) 
         )
 
     recurring = await _recurring(conn, period)
-    for item in recurring:
-        if item.get("outside_text"):
-            item["merchant"] = mark(item["merchant"]) or item["merchant"]
-            outside = True
     if recurring:
         stories.append(
             {
@@ -632,17 +895,14 @@ async def recap(conn: Connection, period_id: str, *, today: date | None = None) 
                 "rows": None,
             }
         )
-    return _result(period, now, stories, outside)
+    return _result(period, now, stories)
 
 
-def _result(
-    period: Period, spend: dict[str, Any], stories: list[dict[str, Any]], outside: bool
-) -> dict[str, Any]:
+def _result(period: Period, spend: dict[str, Any], stories: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "period": period.public(),
         "stories": stories,
         "coverage": spend["coverage"],
-        "outside_text": outside,
     }
 
 

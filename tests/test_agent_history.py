@@ -1,160 +1,97 @@
-"""The pinned snapshot, the two records, cards surviving a reload, and output limits."""
+"""The two records, old threads, cards surviving a reload, and stored instructions."""
 
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from pydantic_ai.messages import (
     ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
+    TextContent,
     TextPart,
     ToolCallPart,
     ToolReturnPart,
+    UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo
-from pydantic_ai_harness.compaction import is_pinned
 
-from arno.agent.builder import build_agent
-from arno.agent.deps import AgentDeps
 from arno.agent.history import (
     create_thread,
-    ensure_history,
+    load_history,
     save_records,
 )
-from arno.tools import write as write_tools
 from tests.agent_helpers import streaming_model
 
 
-def _count_pins(history) -> int:
-    return sum(
-        1 for message in history for part in getattr(message, "parts", []) if is_pinned(part)
-    )
-
-
-async def test_a_new_thread_pins_the_snapshot_as_its_own_exchange(demo_ledger):
+async def test_a_new_thread_starts_with_an_empty_history(demo_ledger):
     thread = await create_thread(demo_ledger, title="new")
-    history, outside = await ensure_history(demo_ledger, thread)
-    assert len(history) == 2
-    assert _count_pins(history) == 1
-    assert history[1].parts[0].content == "Snapshot read."
-    saved = await demo_ledger.fetchrow(
-        "SELECT model_history, snapshot_at FROM conversations WHERE id = $1", thread["id"]
-    )
-    assert saved["snapshot_at"] is not None
-    assert _count_pins(ModelMessagesTypeAdapter.validate_python(saved["model_history"])) == 1
-    assert outside in (True, False)
+    assert load_history(thread) == []
 
 
-async def test_a_thread_start_snapshot_stays_pinned_and_a_balance_needs_a_live_read(
+async def test_a_thread_saved_with_a_pinned_snapshot_and_a_task_report_still_continues(
     session_client, demo_ledger
 ):
-    def intro(messages, info: AgentInfo) -> ModelResponse:
-        return ModelResponse(parts=[TextPart("Hello.")])
-
-    with session_client.app.state.agent.override(model=streaming_model(intro)):
-        first = session_client.post(
-            "/api/chat",
-            json={
-                "id": "thread-baseline",
-                "trigger": "submit-message",
-                "messages": [
-                    {
-                        "id": "client-baseline-intro",
-                        "role": "user",
-                        "parts": [{"type": "text", "text": "hi"}],
-                    }
-                ],
-            },
-        )
-    assert first.status_code == 200, first.text
-    initial_pin = await demo_ledger.fetchval(
-        "SELECT (model_history->0)::text FROM conversations WHERE id = 'thread-baseline'"
-    )
-
-    old_snapshot_at = datetime.now(UTC) - timedelta(hours=1)
+    """Old threads hold a harness-pinned snapshot part and delegation-report parts."""
+    old_history = [
+        ModelRequest(
+            parts=[
+                UserPromptPart(
+                    content=[TextContent('{"liquid_total": {"text": "₹1"}}', metadata="pin")]
+                )
+            ]
+        ),
+        ModelResponse(parts=[TextPart("Snapshot read.")]),
+        ModelRequest(
+            parts=[
+                UserPromptPart(
+                    content=[
+                        TextContent(
+                            "<task-report>The parser finished.</task-report>",
+                            metadata={"kind": "task_report"},
+                        )
+                    ]
+                )
+            ]
+        ),
+        ModelResponse(parts=[TextPart("The import is ready for review.")]),
+    ]
     await demo_ledger.execute(
-        "UPDATE conversations SET snapshot_at = $1 WHERE id = 'thread-baseline'",
-        old_snapshot_at,
-    )
-    written = await write_tools.update_setup_item(
-        demo_ledger,
-        entity="balance",
-        action="update",
-        data={"account": "HDFC Savings", "balance_rupees": "234567.89"},
-        message_id=None,
-    )
-    assert written["undo_id"]
-    assert await demo_ledger.fetchval("SELECT max(created_at) FROM audit_log") > old_snapshot_at
-
-    code = (
-        "context = await get_financial_context()\n"
-        'for account in context["accounts"]:\n'
-        '    if account["name"] == "HDFC Savings":\n'
-        '        print(account["balance"]["text"])'
+        "INSERT INTO conversations (id, title, model_history) VALUES ('thread-old', 'old', $1)",
+        json.loads(ModelMessagesTypeAdapter.dump_json(old_history)),
     )
 
-    def answer(messages, info: AgentInfo) -> ModelResponse:
-        returns = [
-            part
-            for message in messages
-            if isinstance(message, ModelRequest)
-            for part in message.parts
-            if isinstance(part, ToolReturnPart) and part.tool_name == "run_code"
-        ]
-        if not returns:
-            return ModelResponse(parts=[ToolCallPart("run_code", {"code": code})])
-        balance = returns[-1].content
-        assert isinstance(balance, dict), balance
-        amount = balance["output"].strip()
-        assert amount == "₹2,34,567.89"
-        return ModelResponse(parts=[TextPart(f"HDFC Savings has {amount}.")])
+    def reply(messages, info: AgentInfo) -> ModelResponse:
+        return ModelResponse(parts=[TextPart("Still here.")])
 
-    with session_client.app.state.agent.override(model=streaming_model(answer)):
-        second = session_client.post(
+    with session_client.app.state.agent.override(model=streaming_model(reply)):
+        response = session_client.post(
             "/api/chat",
             json={
-                "id": "thread-baseline",
+                "id": "thread-old",
                 "trigger": "submit-message",
                 "messages": [
-                    {
-                        "id": "client-baseline-balance",
-                        "role": "user",
-                        "parts": [{"type": "text", "text": "What is my HDFC balance right now?"}],
-                    }
+                    {"id": "client-old", "role": "user", "parts": [{"type": "text", "text": "hi"}]}
                 ],
             },
         )
-    assert second.status_code == 200, second.text
-
-    saved = await demo_ledger.fetchrow(
-        "SELECT (model_history->0)::text AS pin, snapshot_at, model_history "
-        "FROM conversations WHERE id = 'thread-baseline'"
+    assert response.status_code == 200, response.text
+    assert "Still here." in response.text
+    saved = await demo_ledger.fetchval(
+        "SELECT model_history FROM conversations WHERE id = 'thread-old'"
     )
-    assert saved["pin"] == initial_pin
-    assert saved["snapshot_at"] == old_snapshot_at
-    assert _count_pins(ModelMessagesTypeAdapter.validate_python(saved["model_history"])) == 1
-    thread = session_client.get("/api/threads/thread-baseline/messages").json()
-    reply = next(
-        message for message in reversed(thread["messages"]) if message["role"] == "assistant"
-    )
-    assert "₹2,34,567.89" in "\n".join(
-        part["text"] for part in reply["parts"] if part["type"] == "text"
-    )
+    assert len(ModelMessagesTypeAdapter.validate_python(saved)) > len(old_history)
 
 
-async def test_a_chart_card_survives_a_reload(session_client, demo_ledger):
-    code = (
-        'await show_chart(type="line", title="Balance", '
-        'series=[{"name": "SBI", "points": [{"x": "Oct", "y": 100000}]}])'
-    )
+async def test_a_query_card_survives_a_reload(session_client, demo_ledger):
+    args = {"sql": "SELECT 1 AS one"}
     calls = {"n": 0}
 
     def script(messages, info: AgentInfo) -> ModelResponse:
         calls["n"] += 1
         if calls["n"] == 1:
-            return ModelResponse(parts=[ToolCallPart("run_code", {"code": code})])
+            return ModelResponse(parts=[ToolCallPart("run_query", args)])
         return ModelResponse(parts=[TextPart("Here it is.")])
 
     body = {
@@ -174,14 +111,14 @@ async def test_a_chart_card_survives_a_reload(session_client, demo_ledger):
         for part in message.get("parts", [])
         if part.get("type") == "data-card"
     ]
-    assert cards and cards[0]["data"]["card"] == "chart"
+    assert cards and cards[0]["data"]["card"] == "query"
 
 
 async def test_save_records_keeps_model_history_and_the_transcript(demo_ledger):
     from pydantic_ai.messages import ModelRequest, UserPromptPart
 
     thread = await create_thread(demo_ledger, title="saved")
-    history, _ = await ensure_history(demo_ledger, thread)
+    history = load_history(thread)
     from arno.agent.history import record_user_message
 
     await record_user_message(
@@ -195,7 +132,6 @@ async def test_save_records_keeps_model_history_and_the_transcript(demo_ledger):
         demo_ledger,
         thread_id=thread["id"],
         run_id="run_saved",
-        ui_message_id="client-saved",
         history=history,
         turn_messages=turn,
         ending="complete",
@@ -221,24 +157,25 @@ async def test_a_multi_step_turn_is_saved_as_one_assistant_message(demo_ledger):
     from arno.agent.history import record_user_message
 
     thread = await create_thread(demo_ledger, title="steps")
-    history, _ = await ensure_history(demo_ledger, thread)
+    history = load_history(thread)
     await record_user_message(
         demo_ledger, thread_id=thread["id"], client_id="client-steps", text="balance"
     )
     started = datetime(2026, 1, 1, 10, 0, tzinfo=UTC)
     finished = datetime(2026, 1, 1, 10, 2, 13, tzinfo=UTC)
-    call = ToolCallPart("run_code", {"code": "print(1)"})
+    call = ToolCallPart("get_financial_context", {})
     turn = [
         ModelRequest(parts=[UserPromptPart("balance")]),
         ModelResponse(parts=[TextPart("Let me check."), call], timestamp=started),
-        ModelRequest(parts=[ToolReturnPart("run_code", "1", tool_call_id=call.tool_call_id)]),
+        ModelRequest(
+            parts=[ToolReturnPart("get_financial_context", "1", tool_call_id=call.tool_call_id)]
+        ),
         ModelResponse(parts=[TextPart("Your balance is 1.")], timestamp=finished),
     ]
     await save_records(
         demo_ledger,
         thread_id=thread["id"],
         run_id="run_steps",
-        ui_message_id="client-steps",
         history=history,
         turn_messages=turn,
         ending="complete",
@@ -254,7 +191,7 @@ async def test_a_multi_step_turn_is_saved_as_one_assistant_message(demo_ledger):
     assert stored["id"] == "msg_live_steps"
     assert [part["type"] for part in stored["parts"]] == [
         "text",
-        "tool-run_code",
+        "tool-get_financial_context",
         "text",
     ]
     timing = stored["metadata"]["timing"]
@@ -267,14 +204,14 @@ async def test_a_multi_step_turn_is_saved_as_one_assistant_message(demo_ledger):
 async def test_a_reloaded_multi_step_turn_is_one_assistant_message(session_client, demo_ledger):
     def script(messages, info: AgentInfo) -> ModelResponse:
         done = any(
-            getattr(part, "tool_name", None) == "run_code"
+            getattr(part, "tool_name", None) == "run_query"
             for message in messages
             for part in getattr(message, "parts", [])
         )
         if done:
             return ModelResponse(parts=[TextPart("All done.")])
         return ModelResponse(
-            parts=[TextPart("Checking."), ToolCallPart("run_code", {"code": "print(1)"})]
+            parts=[TextPart("Checking."), ToolCallPart("run_query", {"sql": "SELECT 1"})]
         )
 
     body = {
@@ -300,42 +237,10 @@ async def test_a_reloaded_multi_step_turn_is_one_assistant_message(session_clien
     assert assistant["id"] == live_id
     assert [
         part["type"] for part in assistant["parts"] if not part["type"].startswith("data-")
-    ] == ["text", "tool-run_code", "text"]
+    ] == ["text", "tool-run_query", "text"]
     assert assistant["metadata"]["timing"]["streamStartTime"] > 0
     assert assistant["metadata"]["timing"]["totalStreamTime"] >= 0
     assert assistant["metadata"]["custom"]["runStatus"] == "complete"
-
-
-async def test_tool_output_limits_truncate_only_the_return_to_the_model(demo_ledger):
-    agent = build_agent()
-    seen: list[list] = []
-
-    def script(messages, info: AgentInfo) -> ModelResponse:
-        seen.append(messages)
-        if not any(
-            getattr(part, "tool_name", None) == "run_code"
-            for message in messages
-            for part in getattr(message, "parts", [])
-        ):
-            code = "value = 'x' * 20000\nprint(len(value))"
-            return ModelResponse(parts=[ToolCallPart("run_code", {"code": code})])
-        return ModelResponse(parts=[TextPart("It was long.")])
-
-    with agent.override(
-        model=__import__("pydantic_ai.models.function", fromlist=["FunctionModel"]).FunctionModel(
-            script
-        )
-    ):
-        result = await agent.run("count", deps=AgentDeps(conversation_id="cnv_limit"))
-    part = next(
-        part
-        for message in result.all_messages()
-        for part in getattr(message, "parts", [])
-        if isinstance(part, ToolReturnPart) and part.tool_name == "run_code"
-    )
-    text = str(part.content)
-    assert "20000" in text
-    assert len(text) < 11_000
 
 
 def test_saved_history_keeps_the_instructions_on_the_last_request_only():

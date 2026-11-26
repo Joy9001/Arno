@@ -40,7 +40,7 @@ selecting what to compute.
 
 ![The agent loop runs for you and for your statements](diagrams/sd-agent-vs-workflow.png)
 
-_Figure: User chat, user-scheduled questions, and statement imports invoke agent loops, while
+_Figure: User chat and user-scheduled questions invoke agent loops, while statement import,
 built-in alerts, reminders, recaps, and briefings run as deterministic code
 ([note](diagrams/sd-agent-vs-workflow.md))._
 
@@ -49,12 +49,11 @@ built-in alerts, reminders, recaps, and briefings run as deterministic code
 - **Built-in jobs are workflows:** Due reminders, risk warnings, pattern checks, recaps, and weekly
   briefings run as fixed code. At most one optional LLM call drafts briefing prose, with a template
   fallback so monitoring continues when the LLM is unreachable.
-- **User-scheduled questions run the agent read-only:** Scheduled prompts execute with the pinned
-  financial snapshot, read-only Code Mode tools, and a per-run request limit, delivering answers to
-  the **Inbox**.
-- **Statement imports run a background parser subagent:** Uploads enter through chat, and the main
-  agent delegates parsing to the `parser` subagent with no write tools. Code owns verification
-  checks, regression replay, reconciliation, review, and commit ([`specs/import.md`](specs/import.md)).
+- **User-scheduled questions run the agent read-only:** Scheduled prompts execute with the read
+  tools and a per-run request limit, delivering answers to the **Inbox**.
+- **Statement imports are code:** Code owns verification checks, regression replay,
+  reconciliation, review, and commit. Extraction is being rebuilt and has no agent today
+  ([`specs/import.md`](specs/import.md#extraction-status)).
 - **Categorization runs post-commit:** Deterministic merchant rules run first. A background
   categorizer agent handles remaining payees in chunks, leaving low-trust matches uncategorized
   with a hint.
@@ -71,8 +70,8 @@ The following table defines who decides each action:
 
 | Model decides | Code decides | You decide |
 |---|---|---|
-| Which read tools or Code Mode script to run | Category rules for known merchants | Starting or scheduling a turn |
-| How to phrase explanations and tradeoffs | Affordability verdict (`yes`, `yes-but`, `no`) | Confirming a lasting or wide write in a tainted chat |
+| Which read tool or `run_python` script to run | Category rules for known merchants | Starting or scheduling a turn |
+| How to phrase explanations and tradeoffs | Affordability verdict (`yes`, `yes-but`, `no`) | Confirming a wide or account-wide write |
 | Whether to propose or save a memory | Write tier and confirm-card gating | Approving or rejecting an import review |
 | When to ask a clarifying question | Duplicate-write protection and idempotency | Accepting a recurring-charge proposal |
 | | Run request limits, timeouts, and the daily spend cap | Undoing any committed write |
@@ -85,9 +84,9 @@ The following table sets what Arno can do without prompting:
 |---|---|---|
 | Answer a question or run a what-if | You | Reads, computes, and explains freely |
 | Log or edit a single transaction | You | Writes immediately with an inline undo card |
-| Save or update a memory | Agent | Writes immediately with a **Remembered** undo card; asks first in a tainted conversation |
-| Change setup (accounts, schedules, goals, floor) | You | Writes immediately with undo; asks first in a tainted conversation |
-| Import a bank or card statement | You | Parses and stages only; writes nothing until you commit the review screen |
+| Save or update a memory | Agent | Writes immediately with a **Remembered** undo card; undoable |
+| Change setup (accounts, schedules, goals, floor) | You | Writes immediately with undo; archiving and settings ask first |
+| Import a bank or card statement | You | Stages only; writes nothing until you commit the review screen |
 | Run a scheduled question | Schedule | Reads and posts to the **Inbox**; zero write tools |
 | Send reminders, warnings, recaps, or briefings | Schedule | Informs only; tapping an item opens a seeded chat only when you choose |
 | Detect a recurring charge or price step | Schedule | Raises a proposal; never writes a schedule silently |
@@ -103,21 +102,20 @@ rigid wizard. When data is missing, the agent states what is absent instead of g
 
 ![The agent loop and its guards](diagrams/sd-agent-loop.png)
 
-_Figure: One primary agent loops between the model and tools, bounded by compaction, tool output
-caps, model fallback, and the daily spend cap ([note](diagrams/sd-agent-loop.md))._
+_Figure: One primary agent loops between the model and tools, bounded by history trimming, a
+request limit, model fallback, and the daily spend cap ([note](diagrams/sd-agent-loop.md))._
 
 - **Single primary agent:** Interactive financial questions are sequential and state-dependent, so
-  one main agent owns chat. Two isolated specialists handle long untrusted work outside the main
-  context: the `parser` subagent (statement files, no write tools) and the `categorizer` agent
-  (post-commit merchant batching).
-- **Code Mode plus tested engine math:** Standard financial formulas and probabilistic projections
-  run in tested Python modules (`src/arno/engine/`). Code Mode (`run_code`) lets the agent compose
-  read tools and custom arithmetic in a sandbox and show the script alongside the answer.
+  one plain PydanticAI `Agent` owns chat. One isolated specialist, the `categorizer` agent, labels
+  payees after a commit.
+- **Tested engine math plus a sandbox:** Probabilistic projections run in tested Python modules
+  (`src/arno/engine/`) behind `project`. For other arithmetic the agent writes a script
+  (`run_python`) that runs in the isolated `sandbox` service and states only its output.
 - **Model roles:** Separate configuration slots exist for `CHAT`, `PARSE` (defaults to `CHAT`),
-  `BATCH`, `VISION`, `STT`, and optional `CHAT_FALLBACK`. Every model ID is pinned to a dated
+  `VISION`, `STT`, and optional `CHAT_FALLBACK`. Every model ID is pinned to a dated
   version. Replies produced by a fallback model display a badge.
 
-For harness capabilities, prompt rules, and wake-turn mechanics, see
+For capabilities, prompt discipline, and history storage, see
 [`specs/harness.md`](specs/harness.md).
 
 ---
@@ -145,20 +143,20 @@ Full schema, engine math, pattern detection, and invariants live in
 
 ## Tool surface
 
-![Scripts read and compute; every write is a direct call](diagrams/sd-tool-surface.png)
+![Reads compute; every write is a direct call](diagrams/sd-tool-surface.png)
 
-_Figure: Read and presentation tools run inside `run_code`; write and delegation tools are direct
-tool calls ([note](diagrams/sd-tool-surface.md))._
+_Figure: Three read tools and four write tools are direct tool calls, plus web search
+([note](diagrams/sd-tool-surface.md))._
 
-- **14 read and presentation tools** sit inside `run_code` (Code Mode), letting the model query,
-  model, and emit structured charts, tables, and verdict cards without bloating intermediate turns.
-- **6 direct write tools** (`record_movement`, `correct_movement`, `update_setup`,
-  `schedule_payment`, `preference`, `undo`) execute as normal tool calls with typed Pydantic
-  schemas, undo IDs, and taint-aware approval gates.
-- **5 harness delegation tools** (`delegate_task`, `list_tasks`, `message_task`, `answer_task`,
-  `cancel_task`) coordinate background `parser` subagent runs.
+- **3 read tools:** `run_query` (read-only SQL), `project` (the projection engine), and
+  `run_python` (a script in the isolated sandbox).
+- **4 write tools:** `record_movements`, `correct_movement`, `update_setup`, and `undo` execute as
+  normal tool calls with typed Pydantic schemas and undo IDs. `correct_movement` with a wide scope
+  and `update_setup` to archive or change settings ask for a confirm tap.
+- **Web search:** The model's own search, or Brave Search when `BRAVE_API_KEY` is set. Replies cite
+  sources as `[n]`.
 
-Every tool contract, input, output, and parser/categorizer function is specified in
+Every tool contract, input, and output is specified in
 [`specs/tools.md`](specs/tools.md).
 
 ---
@@ -167,18 +165,20 @@ Every tool contract, input, output, and parser/categorizer function is specified
 
 ![What the model sees each turn](diagrams/sd-context-stack.png)
 
-_Figure: Static instructions and pinned snapshot sit at the cacheable prefix; history, compaction
-summaries, and the current turn follow ([note](diagrams/sd-context-stack.md))._
+_Figure: Static instructions sit at the cacheable prefix; the dynamic date and categories, history,
+and the current turn follow ([note](diagrams/sd-context-stack.md))._
 
 ![Two records per thread](diagrams/sd-thread-records.png)
 
 _Figure: Each thread stores both UI messages for display and provider-neutral model history for
 continuing runs ([note](diagrams/sd-thread-records.md))._
 
-- **Prompt cache ordering:** Static system instructions and the pinned financial snapshot occupy
-  the stable prefix; per-turn date/state reminders and recent turns sit at the tail.
-- **Compaction:** `SummarizingCompaction` summarizes older turns while preserving exact figures
-  that decisions rest on (`SUMMARY_PROMPT` in `src/arno/agent/capabilities.py`).
+- **Prompt cache ordering:** The static system prompt occupies the stable prefix; today's date,
+  the active categories, and the history follow.
+- **History trimming:** When the last request nears 70% of the context window, a history processor
+  blanks older read-tool returns and keeps write-tool returns
+  (`trim_old_tool_payloads` in `src/arno/agent/capabilities.py`). The agent reads data fresh with
+  `run_query` instead of relying on a snapshot.
 - **Typed memories:** Memories are explicit, visible, and undoable (`preference`, `fact`, `rule`),
   replaced in place per `(kind, subject)` with previous values recoverable from `audit_log`. Hidden
   background memory extraction stays parked ([`planning/parked.md`](planning/parked.md)).
@@ -189,21 +189,21 @@ continuing runs ([note](diagrams/sd-thread-records.md))._
 
 ![Trust boundaries](diagrams/sd-trust-boundaries.png)
 
-_Figure: Statement text, parser reports, and payee notes cross an explicit untrusted boundary;
-lasting or wide writes require confirmation once a thread is tainted
-([note](diagrams/sd-trust-boundaries.md))._
+_Figure: Statement text and payee notes cross an explicit untrusted boundary; wide or
+account-wide writes require confirmation ([note](diagrams/sd-trust-boundaries.md))._
 
-- **Taint propagation:** Any tool return or retry error carrying statement text or payee notes
-  (`mark()`), as well as every `parser` subagent report or question (`OutsideTextTaint`), flags the
-  conversation as tainted.
-- **Write gating:** In a tainted conversation, `update_setup`, `preference`, and `correct_movement`
-  with `scope="future"` or `scope="all"` require an explicit confirm-card approval before writing.
-  A turn's confirm cards are answered all-or-nothing.
-- **Redaction:** Keyword-anchored secrets (passwords, OTPs, PINs, CVVs, API keys in English,
-  Hinglish, and Devanagari), card numbers, and Aadhaar numbers are redacted before entering model
-  prompts, stored history, titles, or traces. Vision calls set `agent.instrument = False` so raw
-  images never enter traces.
-- **Identifier stripping:** Unused statement identifiers are dropped during parsing rather than
+- **Data, not instructions:** The prompt tells the agent that statement text, payee notes, and
+  image text are data. The agent cannot move money, and every write is audited and undoable.
+- **Write gating:** `correct_movement` with `scope="future"` or `scope="all"`, and `update_setup`
+  with `action="archive"` or `entity="settings"`, require an explicit confirm-card approval
+  (PydanticAI's `ApprovalRequired`) before writing. A turn's confirm cards are answered
+  all-or-nothing.
+- **Isolated code:** `run_python` runs in a separate container with no network, no database route,
+  and no secrets.
+- **No input redaction:** Nothing scrubs chat text. The prompt forbids repeating a password, PIN,
+  OTP, or full card number, and a statement password goes on the import card, never in chat. Vision
+  calls set `agent.instrument = False` so raw images never enter traces.
+- **Identifier stripping:** Unused statement identifiers are dropped during extraction rather than
   maintaining a reversible PII-scrubbing proxy.
 
 Detailed write tiers live in
@@ -232,8 +232,10 @@ repeating recent manual entries, and statement reconciliation deduplicates later
   dedicated cancel endpoint (`CancellationToken`). One thread lock serializes concurrent sends.
 - **Consistent persistence:** Finished turns (`on_complete`), stopped turns (`on_cancel`), and
   failed turns (`capture_run_messages()`) all save both the UI transcript and `model_history` so
-  subsequent turns see any write that landed. A `run_started_at` marker detects hard process
-  crashes at boot and inspects `audit_log` to report whether any write landed.
+  subsequent turns see any write that landed. The transcript is written from the saved model
+  history (`VercelAIAdapter.dump_messages`), and answered confirm cards settle at the same save. A
+  `run_started_at` marker detects hard process crashes at boot and inspects `audit_log` to report
+  whether any write landed.
 - **Idempotency:** Each UI message ID starts at most one turn. Open confirm cards persist in
   `model_history` across restarts, and repeated approvals reuse the same `tool_call_id`.
 - **Graceful shutdown:** Server shutdown drains active turns for 20 seconds, then cancels remaining
@@ -243,8 +245,8 @@ repeating recent manual entries, and statement reconciliation deduplicates later
 
 - **Model errors and timeouts:** `ModelFallback` (`sticky=False`) switches to the configured backup
   endpoint after SDK retries and returns to the primary model on the next step. Streaming requests
-  use a 600-second inter-chunk idle timeout (`timeout=600`); usage limits bound total steps rather
-  than wall-clock turn timers so long parses are never killed prematurely. A fallback wrapper checks
+  use a 600-second inter-chunk idle timeout (`timeout=600`); usage limits (`request_limit=25`) bound total steps rather
+  than wall-clock turn timers. A fallback wrapper checks
   `CHAT_FALLBACK_CONTEXT_WINDOW` before sending so small local backups do not silently truncate.
 - **Tool errors:** `on_tool_execute_error` converts unexpected exceptions into safe tool results
   for the model while logging full details to traces; browser streams receive plain error messages.
@@ -276,23 +278,21 @@ The following table shows what remains available during component outages:
 ![Three layers measure the agent](diagrams/sd-measure-layers.png)
 
 _Figure: Deterministic tests guard every commit, `pydantic_evals` scores model behavior, and
-Phoenix plus the post-reply number check observe live turns
+Phoenix traces observe live turns
 ([note](diagrams/sd-measure-layers.md))._
 
 1. **Automated tests (every commit, zero model calls):** `pytest` over real Postgres with non-loopback
    sockets blocked (`ALLOW_MODEL_REQUESTS = False`), plus financial invariants (`tests/invariants.py`),
    web interaction tests, and answer-contract tests.
-2. **Agent evaluations (on model, prompt, or tool changes):** `pydantic_evals` runs 84 cases
+2. **Agent evaluations (on model, prompt, or tool changes):** `pydantic_evals` runs 85 cases
    across five categories (answers, writes, honesty, never moving money/passwords, and long
    threads) on cloned demo databases with `repeat=3` (`pass^3`).
    See [`evals/README.md`](../../evals/README.md).
-3. **Runtime traces and number check (every turn):** Opt-in OTLP/HTTP export to Arize Phoenix
+3. **Runtime traces (every turn):** Opt-in OTLP/HTTP export to Arize Phoenix
    (fail-open, disabled when `OTEL_EXPORTER_OTLP_ENDPOINT` is unset or `OTEL_SDK_DISABLED=true`)
    through the stock OpenTelemetry SDK
    ([`operations/observability.md`](operations/observability.md)). Model cost is a separate Postgres
-   usage log with one shared daily cap ([`specs/cost-tracking.md`](specs/cost-tracking.md)). After
-   each reply, `agent/number_check.py` compares every stated money amount and percentage against
-   tool outputs, the snapshot, and user messages, flagging untraced figures.
+   usage log with one shared daily cap ([`specs/cost-tracking.md`](specs/cost-tracking.md)).
 
 ---
 
@@ -325,7 +325,7 @@ and daily use (`pass^3` counts a case only when all three trials pass):
 |---|---|---|
 | Answers and writes | Agent eval suite (`pass^3`) | 90% or higher |
 | Honesty when data is missing | Agent eval suite (`pass^3`) | 95% or higher |
-| Number traceability | Post-reply number check | 100% in answer evals; untraced amounts flagged in live replies |
+| Number traceability | Answer evals (`pass^3`) | 100% of figures traced to tool output |
 | Never-move and long threads | Agent eval suite (`pass^3`) | 90% or higher |
 | Categorizer accuracy | Share of LLM-assigned categories left uncorrected in `audit_log` | 90% or higher |
 | Daily reliability | Four weeks of daily owner use without spreadsheet or mental-math fallback | Required ship gate ([`plan.md`](plan.md#what-shipped-means)) |

@@ -3,10 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-
-import pytest
-from pydantic_ai_harness.subagents import DelegationTask
 
 from arno.ledger import deletion
 from tests.fixtures.passkeys import complete_setup
@@ -14,34 +10,8 @@ from tests.invariants import check_ledger
 from tests.software_authenticator import SoftwareAuthenticator
 
 
-@pytest.fixture(autouse=True)
-def _task_folder(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """Give every test in this module its own parser task folder."""
-    folder = tmp_path / "tasks"
-    monkeypatch.setenv("ARNO_TASKS_DIR", str(folder))
-    return folder
-
-
 def _counts(payload: dict) -> dict[str, int]:
     return {row["table"]: row["count"] for row in payload["removes"]}
-
-
-def _save(tasks, task_id: str, text: str, *, running: bool = False) -> None:
-    record = DelegationTask(
-        id=task_id,
-        agent_name="parser",
-        prompt=text,
-        conversation_id="conv_deletion",
-        status="running" if running else "finished",
-        started_at=1000.0,
-        finished_at=None if running else 1010.0,
-    )
-    tasks.records[task_id] = record
-
-
-async def _save_on_disk(tasks, task_id: str, text: str, *, running: bool = False) -> None:
-    _save(tasks, task_id, text, running=running)
-    await tasks.save(tasks.records[task_id])
 
 
 async def _finish_jobs(conn) -> None:
@@ -96,56 +66,6 @@ async def test_the_erase_keeps_the_passkey_and_session_so_the_owner_still_gets_i
     assert await demo_ledger.fetchval("SELECT count(*) FROM webauthn_credentials") >= 1
     assert await demo_ledger.fetchval("SELECT count(*) FROM sessions") >= 1
     assert await check_ledger(demo_ledger) == []
-
-
-async def test_the_everything_preview_counts_parser_task_records_and_the_erase_removes_them(
-    authed_client, db, _task_folder
-):
-    tasks = authed_client.app.state.tasks
-    assert tasks.directory == _task_folder
-    await _save_on_disk(tasks, "a" * 32, "HDFC statement, salary 100000")
-    await _save_on_disk(tasks, "b" * 32, "SBI statement, rent 25000")
-    assert "HDFC statement" in (_task_folder / f"{'a' * 32}.json").read_text(encoding="utf-8")
-    await _finish_jobs(db)
-
-    preview = authed_client.get("/api/deletion/preview?scope=everything")
-
-    assert preview.status_code == 200, preview.text
-    assert {"table": "parser_task_records", "count": 2} in preview.json()["removes"]
-    erased = authed_client.post("/api/deletion/everything", json={"confirm": "delete everything"})
-    assert erased.status_code == 200, erased.text
-    assert erased.json()["removes"] == preview.json()["removes"]
-    assert erased.json()["total"] == sum(row["count"] for row in preview.json()["removes"])
-    assert not list(_task_folder.glob("*.json"))
-    assert tasks.records == {}
-
-
-async def test_a_running_parser_task_blocks_the_erase_until_the_task_finishes(
-    authed_client, db, _task_folder
-):
-    tasks = authed_client.app.state.tasks
-    await _save_on_disk(tasks, "c" * 32, "Union Bank statement", running=True)
-    await db.execute(
-        "INSERT INTO preferences (body, created_by) VALUES ('Takes the 7:10 train', 'user')"
-    )
-    before = _counts(await deletion.preview(db, "everything"))
-
-    refused = authed_client.post("/api/deletion/everything", json={"confirm": "delete everything"})
-
-    assert refused.status_code == 409, refused.text
-    assert "statement import is still running" in refused.json()["detail"]
-    assert _counts(await deletion.preview(db, "everything")) == before
-    assert [path.name for path in _task_folder.glob("*.json")] == [f"{'c' * 32}.json"]
-
-    record = tasks.records["c" * 32]
-    record.status = "finished"
-    record.finished_at = 1010.0
-    await tasks.save(record)
-    await _finish_jobs(db)
-
-    erased = authed_client.post("/api/deletion/everything", json={"confirm": "delete everything"})
-    assert erased.status_code == 200, erased.text
-    assert not list(_task_folder.glob("*.json"))
 
 
 async def test_a_running_job_blocks_the_erase_until_it_finishes(authed_client, db):

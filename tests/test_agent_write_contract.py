@@ -5,13 +5,19 @@ from __future__ import annotations
 import json
 from datetime import date
 
-from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.messages import (
+    DeferredToolRequests,
+    DeferredToolResults,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+)
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from arno.agent.builder import build_agent
 from arno.agent.deps import AgentDeps
 from arno.agent.toolset import update_setup
-from arno.agent.write_models import AccountSetup
+from arno.tools.write import AccountSetup
 
 
 async def _deps(conn, thread_id: str, message_id: str) -> AgentDeps:
@@ -64,7 +70,7 @@ def _one_tool_script(tool_name: str, args: dict, answer: str = "Done."):
 
 
 def _expense_script(args: dict, answer: str = "Logged."):
-    return _one_tool_script("record_movement", args, answer)
+    return _one_tool_script("record_movements", {"movements": [args["movement"]]}, answer)
 
 
 def test_card_create_requirements_are_in_the_model_visible_contract():
@@ -135,7 +141,7 @@ async def test_expense_without_a_payee_is_a_row_with_no_payee(demo_ledger):
     )
     result = await _run(script, "Spent ₹250 at a hardware store.", deps)
     assert result.output == "Logged."
-    tool_return = _tool_return(result.all_messages(), "record_movement")
+    tool_return = _tool_return(result.all_messages(), "record_movements")
     assert tool_return is not None and tool_return.get("movement_id"), tool_return
     row = await demo_ledger.fetchrow(
         """
@@ -183,20 +189,22 @@ async def test_correction_takes_amount_rupees(demo_ledger):
     state: dict[str, str] = {}
 
     def script(messages, info: AgentInfo) -> ModelResponse:
-        written = _tool_return(messages, "record_movement")
+        written = _tool_return(messages, "record_movements")
         corrected = _tool_return(messages, "correct_movement")
         if written is None:
             return ModelResponse(
                 parts=[
                     ToolCallPart(
-                        "record_movement",
+                        "record_movements",
                         {
-                            "movement": {
-                                "kind": "expense",
-                                "amount_rupees": 450,
-                                "payee": "Swiggy",
-                                "category": "Food & Dining",
-                            }
+                            "movements": [
+                                {
+                                    "kind": "expense",
+                                    "amount_rupees": 450,
+                                    "payee": "Swiggy",
+                                    "category": "Food & Dining",
+                                }
+                            ]
                         },
                     )
                 ]
@@ -270,7 +278,12 @@ async def test_split_takes_people_and_shares(demo_ledger):
 async def test_preference_remembers_text(demo_ledger):
     deps = await _deps(demo_ledger, "cnv_wr_pref", "msg_wr_pref")
     script = _one_tool_script(
-        "preference", {"action": "remember", "text": "Mom's monthly transfer is not discretionary"}
+        "update_setup",
+        {
+            "entity": "preference",
+            "action": "add",
+            "data": {"text": "Mom's monthly transfer is not discretionary"},
+        },
     )
     await _run(script, "Remember that Mom's monthly transfer isn't discretionary.", deps)
     row = await demo_ledger.fetchrow(
@@ -286,7 +299,22 @@ async def test_floor_uses_settings_data(demo_ledger):
         "update_setup",
         {"entity": "settings", "action": "update", "data": {"floor_rupees": 30000}},
     )
-    await _run(script, "Set my floor to ₹30,000.", deps)
+    agent = build_agent()
+    with agent.override(model=FunctionModel(script)):
+        first = await agent.run("Set my floor to ₹30,000.", deps=deps, message_history=[])
+        # Account-wide settings wait for the user's tap; nothing is written before it.
+        assert isinstance(first.output, DeferredToolRequests)
+        assert deps.approvals_offered == 1 and deps.approvals == 0
+        before = await demo_ledger.fetchval("SELECT floor_paise FROM settings WHERE id = 1")
+        assert before != 3_000_000
+        await agent.run(
+            message_history=first.all_messages(),
+            deps=deps,
+            deferred_tool_results=DeferredToolResults(
+                approvals={call.tool_call_id: True for call in first.output.approvals}
+            ),
+        )
+    assert deps.approvals == 1
     row = await demo_ledger.fetchrow("SELECT floor_paise FROM settings WHERE id = 1")
     assert row["floor_paise"] == 3_000_000
 
@@ -369,23 +397,24 @@ async def test_schedule_payment_tool_matches_existing_money_and_returns_undo(led
     )
     deps = await _deps(ledger, "cnv_wr_match", "msg_wr_match")
     script = _one_tool_script(
-        "schedule_payment",
+        "correct_movement",
         {
-            "schedule": schedule["id"],
-            "due_date": today().isoformat(),
             "movement_id": movement["id"],
-            "amount_rupees": "600.00",
+            "changes": {
+                "schedule_payment": {
+                    "schedule": schedule["id"],
+                    "due_date": today().isoformat(),
+                    "amount_rupees": "600.00",
+                }
+            },
         },
     )
     result = await _run(script, "Match this recorded payment to rent.", deps)
-    payload = _tool_return(result.all_messages(), "schedule_payment")
+    payload = _tool_return(result.all_messages(), "correct_movement")
     assert payload is not None
     assert payload["occurrence"]["remaining_paise"] == 40_000
     assert payload["undo_id"]
     assert await ledger.fetchval("SELECT count(*) FROM schedule_payments") == 1
-    assert await ledger.fetchval(
-        "SELECT outside_text_at IS NOT NULL FROM conversations WHERE id=$1", deps.conversation_id
-    )
 
 
 def test_account_setup_caps_monthly_finance_rate_at_8_33_percent():

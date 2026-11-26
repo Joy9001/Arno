@@ -122,6 +122,8 @@ that control security headers, sessions, jobs, backups, and UI links.
 | `ARNO_COOKIE_SECURE` | `1` when `ARNO_RP_ORIGIN` starts with `https://`, else `0` | Controls the `Secure` attribute on `arno_session`. Leave unset in production. |
 | `ARNO_JOBS_ENABLED` | `1` | Runs the background job loop in `api`. Set to `0` for read-only processes or tests. |
 | `ARNO_VAPID_SUBJECT` | `mailto:arno@localhost` | Contact `mailto:` or `https:` URL sent with web push VAPID headers. |
+| `ARNO_SANDBOX_URL` | `http://sandbox:8001` | Address of the isolated code sandbox the `run_python` tool posts to. Compose sets it; for `uv run arno serve` on the host, run the sandbox container and point at its published port. |
+| `BRAVE_API_KEY` | Unset | Enables Brave Search for models without built-in web search. Without it and without a built-in search model, the agent has no web search. |
 | `ARNO_PHOENIX_UI_URL` | Unset | Browser URL for Phoenix (for example, `http://127.0.0.1:6006`). When set, **Settings** displays a link to open Phoenix; Arno never derives this URL from the collector endpoint. |
 | `ARNO_ENV_FILE` | `.env` | Environment file read by `api` in Compose. Override only for isolated checks. |
 | `PHOENIX_CSRF_TRUSTED_ORIGINS` | `http://127.0.0.1:6006` | Trusted CSRF origin list for the Phoenix UI. |
@@ -187,8 +189,8 @@ The following table lists every model role and its environment variables.
 
 | Role | Variables | Used for |
 |---|---|---|
-| Chat | `CHAT_PROVIDER`, `CHAT_BASE_URL`, `CHAT_API_KEY`, `CHAT_MODEL`, `LLM_CONTEXT_WINDOW` | Main agent loop, scheduled questions, categorizer agent, and summary prose |
-| Parse | `PARSE_PROVIDER`, `PARSE_BASE_URL`, `PARSE_API_KEY`, `PARSE_MODEL` | Optional parser subagent model; falls back to Chat when unset |
+| Chat | `CHAT_PROVIDER`, `CHAT_BASE_URL`, `CHAT_API_KEY`, `CHAT_MODEL`, `LLM_CONTEXT_WINDOW` | Main agent loop, scheduled questions, categorizer agent, and briefing prose |
+| Parse | `PARSE_PROVIDER`, `PARSE_BASE_URL`, `PARSE_API_KEY`, `PARSE_MODEL` | Optional statement-extraction model; falls back to Chat when unset |
 | Vision | `VISION_PROVIDER`, `VISION_BASE_URL`, `VISION_API_KEY`, `VISION_MODEL` | Receipt or UPI photos and statement pages with no text layer |
 | Speech-to-text | `STT_PROVIDER`, `STT_BASE_URL`, `STT_API_KEY`, `STT_MODEL`, `STT_LANGUAGE`, `STT_PAYEE_CONTEXT`, `STT_TIMEOUT_SECONDS` | Voice-note transcription |
 | Chat fallback | `CHAT_FALLBACK_PROVIDER`, `CHAT_FALLBACK_BASE_URL`, `CHAT_FALLBACK_API_KEY`, `CHAT_FALLBACK_MODEL`, `CHAT_FALLBACK_CONTEXT_WINDOW` | Optional backup endpoint when the primary chat endpoint fails |
@@ -306,8 +308,9 @@ The following table summarizes what leaves the host for each configured role or 
 
 | Role or service | Data sent | When |
 |---|---|---|
-| Chat | Financial snapshot (balances, account names, preferences), thread history, and tool returns | Every chat turn or scheduled question |
-| Parser subagent | Sample statement rows, including payee names and narrations | Each statement import; only sample rows when a saved parser replays cleanly |
+| Chat | Thread history and tool returns (query rows, projection results, and `run_python` output, which include balances, account names, and payees) | Every chat turn or scheduled question |
+| Web search | A search query. With a model that has built-in search, it goes to that model's provider; otherwise it goes to Brave Search when `BRAVE_API_KEY` is set. The prompt forbids personal details in a query | Only when the agent searches |
+| Code sandbox | Nothing: the `sandbox` container has no internet route | |
 | Vision | Receipt or UPI photo, or statement pages with no text layer | Each photo or textless statement page |
 | Speech-to-text | Recorded audio and, when `STT_PAYEE_CONTEXT=1`, active payee names | Each voice note |
 | Backups and push | Encrypted restic archive; contentless web push pings | Scheduled backup; on notification |

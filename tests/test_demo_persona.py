@@ -13,7 +13,7 @@ from arno.ledger.audit import undo_group
 from arno.ledger.goals import list_goals
 from arno.ledger.movements import list_movements
 from arno.ledger.schedules import list_schedules, upcoming
-from arno.tools import read as read_tools
+from arno.tools import recaps as recap_tools
 from tests.conftest import scratch_name
 
 DEMO_DAY = date(2026, 11, 1)
@@ -80,76 +80,16 @@ async def test_demo_persona_seeds_a_complete_indian_ledger(db):
     assert refreshed["HDFC Savings"]["balance_paise"] != before
 
 
-async def test_demo_persona_has_recent_statement_coverage(demo_ledger):
-    context = await read_tools.get_financial_context(demo_ledger)
-    hdfc = next(account for account in context["accounts"] if account["name"] == "HDFC Savings")
-
-    october = await read_tools.coverage(
-        demo_ledger,
-        account_id=hdfc["id"],
-        start=date(2026, 10, 1),
-        end=date(2026, 10, 31),
-    )
-    assert october == {
-        "complete": True,
-        "gaps": [],
-        "from": "2026-10-01",
-        "to": "2026-10-31",
-    }
-
-    july = await read_tools.coverage(
-        demo_ledger,
-        account_id=hdfc["id"],
-        start=date(2026, 7, 1),
-        end=date(2026, 7, 31),
-    )
-    assert july["complete"] is False
-    assert july["gaps"] == ["2026-07"]
-    assert july["from"] is None
-    assert july["to"] is None
-
-    # The 13-month snapshot still reports older gaps, but the covered range is the recent
-    # three months, not the whole window.
-    assert hdfc["covered"]["from"] == "2026-08-01"
-    assert hdfc["covered"]["to"] == "2026-10-31"
-    assert "2026-10" not in hdfc["covered"]["gaps"]
-
-
-async def test_summarize_and_query_report_covered_and_gap_periods(demo_ledger):
-    october = await read_tools.summarize_spending(demo_ledger, group_by="none", period="2026-10")
-    assert october["coverage"]["complete"] is True
-    assert october["coverage"]["gaps"] == []
-    assert october["coverage"]["from"] == "2026-10-01"
-    assert october["coverage"]["to"] == "2026-10-31"
-    assert october["total"] is not None
-
-    july = await read_tools.summarize_spending(demo_ledger, group_by="none", period="2026-07")
-    assert july["coverage"]["complete"] is False
-    assert july["coverage"]["gaps"] == ["2026-07"]
-    assert july["total"] is None
-
-    october_rows = await read_tools.query_movements(demo_ledger, filters={"period": "2026-10"})
-    assert october_rows["coverage"]["complete"] is True
-    assert october_rows["coverage"]["from"] == "2026-10-01"
-    assert october_rows["coverage"]["to"] == "2026-10-31"
-    assert october_rows["rows"]
-
-    july_rows = await read_tools.query_movements(demo_ledger, filters={"period": "2026-07"})
-    assert july_rows["coverage"]["complete"] is False
-    assert july_rows["coverage"]["gaps"] == ["2026-07"]
-    assert july_rows["rows"] == []
-
-
 async def test_demo_coverage_switch_leaves_the_oldest_month_open(db):
     summary = await seed_demo(db, today=DEMO_DAY, reset=True, coverage_gap=True)
     assert summary["statement_coverage"]["gap"] == "2026-08"
     assert summary["statement_coverage"]["months"] == ["2026-09", "2026-10"]
 
     hdfc = (await db.fetchrow("SELECT id FROM accounts WHERE name = 'HDFC Savings'"))["id"]
-    august = await read_tools.coverage(
+    august = await recap_tools.coverage(
         db, account_id=hdfc, start=date(2026, 8, 1), end=date(2026, 8, 31)
     )
-    september = await read_tools.coverage(
+    september = await recap_tools.coverage(
         db, account_id=hdfc, start=date(2026, 9, 1), end=date(2026, 9, 30)
     )
     assert august["complete"] is False
@@ -163,7 +103,7 @@ async def test_demo_statement_coverage_can_be_disabled(db):
     assert summary["statement_coverage"]["months"] == []
 
     hdfc = (await db.fetchrow("SELECT id FROM accounts WHERE name = 'HDFC Savings'"))["id"]
-    october = await read_tools.coverage(
+    october = await recap_tools.coverage(
         db, account_id=hdfc, start=date(2026, 10, 1), end=date(2026, 10, 31)
     )
     assert october["complete"] is False

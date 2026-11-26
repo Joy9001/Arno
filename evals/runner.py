@@ -28,6 +28,7 @@ from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
     ModelResponse,
+    NativeToolCallPart,
     TextPart,
     ToolCallPart,
     ToolReturnPart,
@@ -43,12 +44,11 @@ from arno.agent.builder import build_agent
 from arno.agent.deps import AgentDeps
 from arno.agent.history import (
     create_thread,
-    ensure_history,
+    load_history,
     mark_run_started,
     record_user_message,
 )
 from arno.agent.models import model_for
-from arno.agent.number_check import check_messages, classify_messages
 from arno.config import REPO_ROOT, get_settings
 from arno.db.conn import connect, current_database_url
 from arno.demo.template import drop_database
@@ -90,7 +90,8 @@ def _tool_attempts(messages: list[ModelMessage], run_id: str) -> list[ToolAttemp
         if getattr(message, "run_id", None) != run_id:
             continue
         for part in message.parts:
-            if isinstance(part, ToolCallPart):
+            # A model's own search arrives as a native call; it is still a search attempt.
+            if isinstance(part, ToolCallPart | NativeToolCallPart):
                 try:
                     args = part.args_as_dict()
                 except Exception:  # noqa: BLE001 - malformed args are still an attempt
@@ -121,15 +122,6 @@ def _completed_tools(messages: list[ModelMessage]) -> list[str]:
             if not isinstance(part, ToolReturnPart) or part.outcome != "success":
                 continue
             names.add(part.tool_name)
-            if part.tool_name != "run_code" or not isinstance(part.metadata, dict):
-                continue
-            nested = part.metadata.get("tool_returns")
-            if isinstance(nested, dict):
-                names.update(
-                    tool.tool_name
-                    for tool in nested.values()
-                    if isinstance(tool, ToolReturnPart) and tool.outcome == "success"
-                )
     return sorted(names)
 
 
@@ -205,9 +197,6 @@ async def _run_turn(
     completed_tools: list[str] = []
     attempts: list[ToolAttempt] = []
     approvals: list[ToolAttempt] = []
-    number_flags: list[str] = []
-    derived_flags: list[str] = []
-    money_flags: list[str] = []
     cost = Decimal("0")
     ending = "complete"
     error: str | None = None
@@ -227,11 +216,11 @@ async def _run_turn(
     async with connect() as conn:
         thread = await create_thread(conn, title=f"Eval {inp.case_id}")
         thread_id = str(thread["id"])
-        history, outside = await ensure_history(conn, thread)
+        history = load_history(thread)
         if meta.long_thread is not None:
             history = [*history, *_seed_long_thread(meta.long_thread)]
 
-        for index, text in enumerate(inp.messages):
+        for text in inp.messages:
             message_id = f"eval_{uuid.uuid4().hex}"
             run_id = f"run_{uuid.uuid4().hex}"
             user_row = await record_user_message(
@@ -244,8 +233,6 @@ async def _run_turn(
                 conversation_id=thread_id,
                 message_id=str(user_row["id"]),
                 run_id=run_id,
-                flagged=outside if index == 0 else await _flagged(conn, thread_id),
-                user_texts=(text,),
             )
             last_turn_at = datetime.now(UTC).isoformat()
             turn_start = time.perf_counter()
@@ -306,10 +293,6 @@ async def _run_turn(
                 # A card still pending: keep it in the transcript as a card, not only a call.
                 approvals.extend(_approval_attempts(result.output))
                 ending = "approval_required"
-            classified = classify_messages(reply, history)
-            number_flags.extend(shown for shown, _label in classified)
-            derived_flags.extend(shown for shown, label in classified if label == "derived")
-            money_flags.extend(check_messages(reply, history, kinds=("money",)))
             usage = result.usage
             if usage.cost is not None:
                 cost += usage.cost
@@ -323,9 +306,6 @@ async def _run_turn(
         conversation_id=str(thread["id"]) if "thread" in locals() else "",
         message_ids=message_ids,
         run_ids=run_ids,
-        number_flags=number_flags,
-        derived_flags=derived_flags,
-        money_flags=money_flags,
         cost_usd=float(cost) if cost else None,
         latency_s=latency,
         started_at=started_at,
@@ -339,11 +319,6 @@ async def _run_turn(
         trial_db=current_database_url(),
         history_messages=len(history),
     )
-
-
-async def _flagged(conn: Any, thread_id: str) -> bool:
-    row = await conn.fetchrow("SELECT outside_text_at FROM conversations WHERE id = $1", thread_id)
-    return bool(row and row["outside_text_at"] is not None)
 
 
 # ---------------------------------------------------------------------------
@@ -472,22 +447,12 @@ class Scorecard:
     started_at: str
     finished_at: str
     categories: dict[str, CategoryScore] = field(default_factory=dict)
-    number_flags: int = 0
-    derived_flags: int = 0
-    untraced_flags: int = 0
-    number_trials: int = 0
-    number_gate_failures: int = 0
-    cases_with_flags: int = 0
     median_cost_usd: float | None = None
     median_latency_s: float | None = None
     total_cases: int = 0
     total_trials: int = 0
     failures: list[str] = field(default_factory=list)
     notes: str = ""
-
-    @property
-    def number_gate_passed(self) -> bool:
-        return self.number_trials > 0 and self.number_gate_failures == 0
 
     @property
     def overall_rate(self) -> float:
@@ -566,18 +531,8 @@ def aggregate(
         for failure in group.failures:
             card.failures.append(f"{group.name}: {failure.error_message}")
         for case in group.runs:
-            if category == "answers":
-                card.number_trials += 1
-                number = case.assertions.get("number_check")
-                if number is None or not bool(number.value):
-                    card.number_gate_failures += 1
             output = case.output
             if isinstance(output, EvalOutput):
-                if output.number_flags:
-                    card.number_flags += len(output.number_flags)
-                    card.derived_flags += len(output.derived_flags)
-                    card.untraced_flags += len(output.number_flags) - len(output.derived_flags)
-                    card.cases_with_flags += 1
                 if output.cost_usd is not None:
                     costs.append(output.cost_usd)
                 if output.latency_s:
@@ -624,17 +579,6 @@ def format_scorecard(card: Scorecard) -> str:
     lines.extend(
         [
             "",
-            f"Number flags: **{card.number_flags}** "
-            f"across {card.cases_with_flags} case(s): "
-            f"**{card.derived_flags}** derived prose arithmetic, "
-            f"**{card.untraced_flags}** untraced.",
-            (
-                f"Number gate: **{'PASS' if card.number_gate_passed else 'FAIL'}** "
-                f"({card.number_trials - card.number_gate_failures}/{card.number_trials} "
-                "answer trials traced to a tool return)."
-                if card.number_trials
-                else "Number gate: **not run** (no answer trials)."
-            ),
         ]
     )
     if card.median_cost_usd is not None:
@@ -670,31 +614,6 @@ def _mask_dsn_password(dsn: str) -> str:
     return dsn
 
 
-def flag_transcript(
-    report: EvaluationReport[EvalInput, EvalOutput, EvalMeta],
-) -> str:
-    """Every passing or failing reply that stated a number with no tool trace."""
-    lines = ["# Number flags", ""]
-    for group in _report_groups(report):
-        for case in group.runs:
-            if not isinstance(case.output, EvalOutput) or not case.output.number_flags:
-                continue
-            lines.extend([f"## {case.name}", ""])
-            lines.append(f"- input: `{case.inputs.messages}`")
-            lines.append(f"- reply: {case.output.reply or '(empty)'}")
-            lines.append(f"- number flags: {case.output.number_flags}")
-            if case.output.trial_db:
-                lines.append(f"- trial db: `{_mask_dsn_password(case.output.trial_db)}`")
-            if case.output.attempts:
-                lines.append("- attempts:")
-                for attempt in case.output.attempts:
-                    lines.append(
-                        f"  - `{attempt.tool_name}` {json.dumps(attempt.args, ensure_ascii=False)}"
-                    )
-            lines.append("")
-    return "\n".join(lines)
-
-
 def failure_transcript(
     report: EvaluationReport[EvalInput, EvalOutput, EvalMeta],
 ) -> str:
@@ -720,7 +639,6 @@ def failure_transcript(
                 lines.append(f"- ending: {case.output.ending}")
                 if case.output.error:
                     lines.append(f"- error: `{case.output.error}`")
-                lines.append(f"- number flags: {case.output.number_flags}")
                 if case.output.trial_db:
                     lines.append(f"- trial db: `{_mask_dsn_password(case.output.trial_db)}`")
                 if case.output.attempts:
@@ -852,14 +770,6 @@ async def _run_eval(
                 stamped = results_dir / f"failures_{_slug(model_name)}_{stamp}.md"
                 stamped.write_text(transcripts, encoding="utf-8")
                 print(f"failure transcripts: {path} (also {stamped.name})")
-            if card.number_flags:
-                path = results_dir / f"flags_{_slug(model_name)}.md"
-                path.parent.mkdir(parents=True, exist_ok=True)
-                flags = flag_transcript(report)
-                path.write_text(flags, encoding="utf-8")
-                stamped = results_dir / f"flags_{_slug(model_name)}_{stamp}.md"
-                stamped.write_text(flags, encoding="utf-8")
-                print(f"number-flag transcripts: {path} (also {stamped.name})")
         return cards
     finally:
         if admin_dsn and run_template:

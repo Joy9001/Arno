@@ -157,17 +157,3 @@ async def test_a_content_filter_finish_is_not_an_output_cap(monkeypatch):
     )
     assert saved["save_note"] is None
     assert turn.note is None
-
-
-def test_unread_statement_note_lists_only_three_files_and_counts_the_rest():
-    note = turns.unread_statement_note(["a.csv", "b.csv", "c.csv", "d.csv"])
-    assert "a.csv, b.csv, c.csv and 1 more" in note
-    assert "statement files" in note
-    # Only three names are listed: a fourth file still gets counted, not named.
-    assert "d.csv" not in note
-
-
-def test_a_multiline_quote_is_a_blockquote_on_every_line():
-    from arno.agent.quote import quote_block
-
-    assert quote_block({"text": "first\nsecond\n", "messageId": "m1"}) == ("> first\n> second\n\n")

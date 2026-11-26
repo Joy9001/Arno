@@ -389,14 +389,14 @@ async def test_a_scheduled_question_can_be_renamed(ledger):
 
 
 async def test_reremembering_a_forgotten_memory_makes_one_new_active_row(ledger):
-    first = await write_tools.preference(
-        ledger, action="remember", text="Use UPI", preference_id=None, message_id=None
+    first = await write_tools.change_preference(
+        ledger, action="add", text="Use UPI", preference_id=None, message_id=None
     )
-    await write_tools.preference(
-        ledger, action="forget", text=None, preference_id=first["id"], message_id=None
+    await write_tools.change_preference(
+        ledger, action="archive", text=None, preference_id=first["id"], message_id=None
     )
-    again = await write_tools.preference(
-        ledger, action="remember", text="Use UPI", preference_id=None, message_id=None
+    again = await write_tools.change_preference(
+        ledger, action="add", text="Use UPI", preference_id=None, message_id=None
     )
     assert again["id"] != first["id"]
     assert (
@@ -414,14 +414,14 @@ async def test_reremembering_a_forgotten_memory_makes_one_new_active_row(ledger)
 
 
 async def test_forgetting_an_already_forgotten_memory_keeps_one_inactive_row(ledger):
-    remembered = await write_tools.preference(
-        ledger, action="remember", text="Pay rent first", preference_id=None, message_id=None
+    remembered = await write_tools.change_preference(
+        ledger, action="add", text="Pay rent first", preference_id=None, message_id=None
     )
-    await write_tools.preference(
-        ledger, action="forget", text=None, preference_id=remembered["id"], message_id=None
+    await write_tools.change_preference(
+        ledger, action="archive", text=None, preference_id=remembered["id"], message_id=None
     )
-    again = await write_tools.preference(
-        ledger, action="forget", text=None, preference_id=remembered["id"], message_id=None
+    again = await write_tools.change_preference(
+        ledger, action="archive", text=None, preference_id=remembered["id"], message_id=None
     )
     assert again["status"] == "forgotten"
     assert (

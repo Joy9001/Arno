@@ -533,26 +533,11 @@ async def send_push_for_kind(conn: Connection, kind: str, *, url: str = "/") -> 
         return 0
 
 
-def seed_chat_text(notification: dict[str, Any]) -> tuple[str, bool]:
-    """Build the first chat message from an inbox item, preserving outside-text markers.
-
-    Returns `(text, outside)`; `outside` tells the caller to set
-    `conversations.outside_text_at`, so a proposal carrying a statement merchant still asks for a
-    confirming tap before a lasting write.
-    """
+def seed_chat_text(notification: dict[str, Any]) -> str:
+    """Build the first chat message from an inbox item."""
     data = notification.get("data") or {}
     title = str(notification.get("title") or "Notification")
     body = str(notification.get("body") or "").strip()
-    # A pattern proposal names a merchant; a reminder names a schedule. Both can carry a payee
-    # name that came from a statement, so both are marked when the item is outside text.
-    label = data.get("merchant") or data.get("name")
-    outside = bool(data.get("outside_text"))
-    if outside and label:
-        from arno.tools.mark import mark
-
-        marked = mark(str(label)) or str(label)
-        title = title.replace(str(label), marked)
-        body = body.replace(str(label), marked)
     text = f"From my inbox: {title}"
     if body:
         text += f"\n\n{body}"
@@ -564,7 +549,7 @@ def seed_chat_text(notification: dict[str, Any]) -> tuple[str, bool]:
     if isinstance(movement_ids, list) and movement_ids:
         text += "\n\nPayments behind it: " + ", ".join(str(item) for item in movement_ids)
     text += "\n\nHelp me with this."
-    return text, outside
+    return text
 
 
 __all__ = [

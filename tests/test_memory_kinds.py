@@ -8,9 +8,9 @@ from arno.tools import write as write_tools
 
 
 async def _remember(db, text: str, kind: str | None = None) -> dict:
-    return await write_tools.preference(
+    return await write_tools.change_preference(
         db,
-        action="remember",
+        action="add",
         text=text,
         preference_id=None,
         message_id=None,
@@ -59,15 +59,15 @@ async def test_remembering_the_same_text_reclassifies_it_and_undo_restores_it(de
 async def test_classify_changes_the_kind_and_undo_restores_it(demo_ledger):
     created = await _remember(demo_ledger, "Mira is my flatmate")
 
-    classified = await write_tools.preference(
+    classified = await write_tools.change_preference(
         demo_ledger,
-        action="classify",
+        action="update",
         text=None,
         preference_id=created["id"],
         message_id=None,
         kind="fact",
     )
-    assert classified["status"] == "classified"
+    assert classified["status"] == "updated"
     assert classified["kind"] == "fact"
     assert classified["card"]["title"] == "Reclassified"
     assert classified["card"]["undo_id"] == classified["undo_id"]
@@ -91,9 +91,9 @@ async def test_classify_without_a_kind_is_rejected(demo_ledger):
     created = await _remember(demo_ledger, "Mira is my flatmate", kind="fact")
 
     with pytest.raises(write_tools.ToolInputError):
-        await write_tools.preference(
+        await write_tools.change_preference(
             demo_ledger,
-            action="classify",
+            action="update",
             text=None,
             preference_id=created["id"],
             message_id=None,

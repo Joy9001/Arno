@@ -14,15 +14,15 @@ The following tree shows the repository structure:
 
 ```text
 src/arno/
-  agent/       PydanticAI chat agent, instructions, capabilities, parser & categorizer agents,
-               usage log and daily cap, redaction, number check
-  api/         FastAPI app, middleware, routers, SSE chat stream, wake turns, run view
+  agent/       PydanticAI chat agent, instructions, capabilities, toolset, turns and history,
+               categorizer agent, usage log and daily cap
+  api/         FastAPI app, middleware, routers, SSE chat stream
   auth/        WebAuthn passkeys, opaque sessions, single-use enrollment links
-  capture/     Isolated receipt/UPI photo vision extraction and STT client
+  capture/     STT client and capture helpers
   db/          Connection cache, numbered SQL migrations, role bootstrap, vendored pgledger
   demo/        Synthetic demo persona seeder and template database helpers
   engine/      Pure scenario projection kernel, affordability, patterns, and money math
-  importers/   File readers, Monty sandbox, verification checks, gate, reconciliation,
+  importers/   File readers, verification checks, gate, reconciliation,
                commit/undo, seed rules, and categorization jobs
   india/       Default Indian categories, bank holiday calendar, ₹ formatting, prompt notes
   jobs/        Postgres job queue loop, RRULE schedules, briefing, reminders, risk, patterns,
@@ -32,7 +32,8 @@ src/arno/
   cli.py       Host administration CLI (`arno`)
 web/           Vite and React PWA (built to `web/dist` and served by the API)
 deploy/        Postgres role init script (`app-role.sh`)
-evals/         84-case `pydantic_evals` suite, graders, trial DB lifecycle
+sandbox/       Isolated `run_python` service (`server.py`, `Dockerfile`)
+evals/         85-case `pydantic_evals` suite, graders, trial DB lifecycle
 scripts/       Maintainer helper scripts
 tests/         Unit, integration, invariant (`tests/invariants.py`), and live E2E tests
 compose.yaml   Default Compose stack (`api`, `db`, plus optional `local-llm` and `obs` profiles)
@@ -40,7 +41,7 @@ compose.yaml   Default Compose stack (`api`, `db`, plus optional `local-llm` and
 
 ## API surface
 
-Arno runs as a single FastAPI process with **one worker** because active chat turns, parser tasks,
+Arno runs as a single FastAPI process with **one worker** because active chat turns
 and the job loop live in that process and boot recovery assumes single-process ownership. The API
 serves the compiled static web bundle from `web/dist`, keeping the web app and API on one origin
 with no CORS configuration. OpenAPI schema is exposed at `/api/openapi.json` (interactive docs are
@@ -57,15 +58,14 @@ The following table summarizes every API router and endpoint group mounted in
 | Home | `GET /api/home` composes account summary, 90-day default projection (configurable `horizon_days`), inbox preview, and recent activity |
 | Ledger | Accounts (`GET/POST/PATCH/DELETE /api/accounts`, `POST /api/accounts/{id}/statement-balance`), movements (`GET/POST /api/movements`, `GET /api/movements/{id}`, `POST /api/movements/{id}/correct`, `GET /api/ledger/span`), categories and rules (`/api/categories`, `/api/category-rules`), uncategorized queue (`GET /api/uncategorized`, `POST /api/uncategorized/answer`), schedules and payment evidence (`/api/schedules`, `GET /api/schedules/upcoming`, `GET /api/schedules/{id}/occurrences/{date}`, `POST/DELETE .../payments`), goals (`/api/goals`), people and payees (`/api/people`, `/api/payees`), settings and memory (`GET/PATCH /api/settings`, `PATCH /api/preferences/{id}/content`), and undo (`POST /api/undo`, `POST /api/undo/{undo_id}`) |
 | Projection | `GET /api/projection` and `GET /api/projection/workbook` (`.xlsx`, calculation version `2`): `horizon_days` 1–3,650, optional what-if `changes`, and hypothetical purchase terms (`amount_paise` and `emi_fee_paise` capped at `MAX_PAISE`, `emi_months` 2–48) |
-| Attachments and imports | `POST /api/attachments` (accepts `purpose="statement"` or `"photo"`, up to 25 MB), `DELETE /api/attachments/{id}` (purges stored statement bytes), `GET /api/attachments/{id}` (serves photos and audio with `Cache-Control: private, no-store`), `GET /api/imports`, `GET /api/import-history` (keyset paginated), `GET /api/imports/{id}`, `PATCH /api/imports/{id}/lines/{line_id}`, `POST /api/imports/{id}/password` (`GET` returns `405`), `POST /api/imports/{id}/opening`, `POST /api/imports/{id}/commit`, `POST /api/imports/{id}/reject`, `POST /api/imports/{id}/undo`, and `POST /api/imports/{id}/retry` |
-| Capture | `POST /api/transcribe` and `POST /api/transcribe/{attachment_id}` (audio upload and retry, up to 25 MB); `POST /api/chat/{thread_id}/photo` and `POST /api/chat/{thread_id}/photo/{attachment_id}` (isolated vision logging and retry) |
-| Tasks and layouts | `GET /api/tasks/{task_id}` (status, imports, plan, transcript, and `run_view`), `POST /api/tasks/{task_id}/answer` (binds account to parser question), `GET /api/layouts`, and `POST /api/layouts/{layout_id}/rollback` |
+| Attachments and imports | `POST /api/attachments` (accepts `purpose="statement"` or `"photo"`, up to 25 MB), `DELETE /api/attachments/{id}` (purges stored statement bytes), `GET /api/attachments/{id}` (serves photos and audio with `Cache-Control: private, no-store`), `GET /api/imports`, `GET /api/import-history` (keyset paginated), `GET /api/imports/{id}`, `PATCH /api/imports/{id}/lines/{line_id}`, `POST /api/imports/{id}/password`, `POST /api/imports/{id}/opening`, `POST /api/imports/{id}/commit`, `POST /api/imports/{id}/reject`, and `POST /api/imports/{id}/undo` |
+| Capture | `POST /api/transcribe` and `POST /api/transcribe/{attachment_id}` (audio upload and retry, up to 25 MB). Photos attach to chat turns and reach the main agent natively |
 | Recaps | `GET /api/recaps`, `GET /api/recaps/unseen`, `GET /api/recaps/{period_id}`, `GET /api/recaps/{period_id}/rows`, and `POST /api/recaps/{period_id}/seen` |
 | Watch (inbox, push, jobs, questions) | `GET /api/notifications`, `POST /api/notifications/read-all`, `POST /api/notifications/{id}/read`, `POST /api/notifications/{id}/chat`, `/api/push/{key,status,subscribe}`, CRUD `/api/scheduled-questions`, `GET /api/jobs`, `GET /api/jobs/activity` (pure-read activity poll), and `POST /api/jobs/{id}/retry` |
 | Audit history | `GET /api/history` (keyset-paginated audit log of undoable write groups) |
 | Diagnostics and backups | `GET /api/runtime-info` (configured model labels/hosts and optional `ARNO_PHOENIX_UI_URL`, never credentials or collector addresses) and `GET /api/backup/status` |
 | Export | `GET /api/export/scope` (lists excluded tables), `GET /api/export/json`, `GET /api/export/csv` (ZIP of CSVs with formula-injection quoting), and `GET /api/export/pg_dump` (all downloads require fresh passkey re-verification) |
-| Deletion | `GET /api/deletion/preview` (lists rows and parser task files affected) and `POST /api/deletion/everything` (requires fresh passkey re-verification and typed `"delete everything"` confirmation; refuses while a parser task is running) |
+| Deletion | `GET /api/deletion/preview` (lists the rows affected) and `POST /api/deletion/everything` (requires fresh passkey re-verification and typed `"delete everything"` confirmation) |
 
 Projection, affordability, and `.xlsx` workbook builds run off the event loop via
 `asyncio.to_thread` behind a shared two-slot semaphore after loading inputs in one read-only
@@ -124,8 +124,7 @@ https://<machine>.<tailnet>.ts.net/setup#t=<token>
 
 One Postgres `jobs` table, one `job_schedules` RRULE table (anchored in `Asia/Kolkata` with stored
 `dtstart`), and one `JobRunner` loop inside the API process execute all background jobs
-(`src/arno/jobs/runner.py` and `src/arno/jobs/schedules.py`). Statement imports are delegated
-subagent tasks (`TaskOwner`), and backups run inside the API process as the `backup_check` job.
+(`src/arno/jobs/runner.py` and `src/arno/jobs/schedules.py`). Backups run inside the API process as the `backup_check` job.
 
 The following table lists every job kind, its schedule or trigger, and its timeout policy:
 
@@ -181,7 +180,7 @@ in the FastAPI lifespan and closed after background jobs and active turns drain 
 - **Direct bypasses:** `connect()` opens an uncached direct connection whenever an explicit `dsn`
   or `role` is passed, on other event loops (CLI and worker threads), or when `current_database_url()`
   differs from the bound DSN (eval trials). `agent_ro` queries stay direct for fresh session
-  isolation, while `spend_store` and `tasks` keep dedicated pools with fail-closed behavior.
+  isolation.
 - **Outage recovery:** Reused connections are pre-pinged before handoff and discarded if dead.
   After `connect()` returns, reads and writes never retry automatically. Connection `TimeoutError`
   converts to `ConnectionError`, and `asyncpg` connection errors or `InternalClientError` map to
@@ -243,12 +242,12 @@ The following table summarizes Arno's threat model and implemented controls:
 | Lost restic password | Not defended (permanent data loss); must be backed up off-host |
 | VPS host or live host compromise | Not defended; in-database encryption is parked ([`parked.md`](../planning/parked.md)) |
 | Borrowed unlocked browser | Expiring sessions; exports, passkey changes, and erase-everything require passkey re-verification within five minutes |
-| Prompt injection in statements or photos | Statement parsing runs with no write or ledger tools; photos run a tool-less typed call; outside text is marked with `<outside>`; lasting or wide writes require confirm cards in flagged conversations |
+| Prompt injection in statements or photos | The prompt treats statement text, payee notes, and image text as data. The agent cannot move money, and every write is audited and undoable. Wide writes (`correct_movement` with `scope` other than `this`, and `update_setup` to archive or change settings) require a confirm card |
 | Forged or replayed confirm answer | Server-held history validates pending deferred calls once against stored arguments; partial multi-card answers are refused with HTTP `409` |
-| Secrets typed into chat | `InputGuardrail` and `redact_text` redact API keys, credit card numbers (Luhn and 4×4 `card_number`), PAN, spaced Aadhaar (with lookaround boundaries), and keyword-anchored passwords, OTPs, PINs, and CVVs across English, Hinglish, and Devanagari (`keyword_secret_data`); unlabelled bare secrets and bank account numbers still rely on user caution, and statement passwords use the dedicated import card field |
+| Secrets typed into chat | Nothing redacts chat input: a secret you type reaches the model provider and is stored in `model_history`. The prompt forbids repeating a password, PIN, OTP, or full card number. Statement passwords use the dedicated import card field, stay in memory only for the unlock, and are never persisted |
 | Data exfiltration through rendered output | Strict CSP (`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, plain-text links in agent replies, and `allowed_file_url_schemes=frozenset()` |
 | Agent-written SQL | `agent_ro` role: `SELECT` only on allowed read views/tables, `default_transaction_read_only = on`, `2s` statement timeout, single extended-protocol statement rolled back after read, `TEMP` revoked, no auth, secret, or raw `pgledger_*` grants |
-| Agent-written code | Monty sandbox: no filesystem, environment, or network access; memory, time, and suspension limits; frozen clock and RNG seed for parser replays |
+| Agent-written code | `run_python` posts the script to the `sandbox` service: a read-only container on an internal Docker network with no internet and no database route, a non-root user, 512 MB memory, one CPU, a 30-second timeout, a throwaway working directory, and no secrets. The script sees only the files it is sent |
 | Credential leakage in data exports | JSON and CSV exports exclude all eight `SECRET_TABLES`: `model_credentials`, `push_subscriptions`, `sessions`, `setup_tokens`, `users`, `vapid_keys`, `webauthn_challenges`, and `webauthn_credentials` (`pg_dump` stays complete for backup/restore) |
 | Supply-chain or copyleft dependency | Locked dependency files, a manual permissive-license check when a dependency changes, and `pip-audit` + `pnpm audit` in CI |
 | Upload flood or runaway model spend | 25 MB upload limit, single-user passkey gate, usage limits, and a fail-closed shared daily spend cap in Postgres (`llm_usage`) |

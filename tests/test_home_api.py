@@ -2,42 +2,10 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from arno.ledger.accounts import create_account
 from arno.ledger.common import today
 from arno.ledger.goals import create_goal
-from arno.ledger.schedules import create_schedule
 from arno.notifications import create_notification, mark_read
 from arno.tools import projection as projection_tools
-from arno.tools import read as read_tools
-
-
-async def test_a_fresh_balance_and_income_support_a_qualified_first_answer(session_client, ledger):
-    bank = await create_account(
-        ledger, kind="bank", name="Salary bank", opening_balance_paise=1_000_000
-    )
-    await create_schedule(
-        ledger,
-        kind="income_fixed",
-        name="Salary",
-        amount_paise=500_000,
-        account_id=bank["id"],
-        rule="FREQ=MONTHLY;BYMONTHDAY=1",
-        starts=today(),
-    )
-    context = await read_tools.get_financial_context(ledger)
-    projection = await projection_tools.project(ledger, runs=50)
-    response = session_client.get("/api/home?horizon_days=90")
-    assert response.status_code == 200
-    home = response.json()
-    assert context["liquid_total"]["paise"] == home["spendable_paise"] == 1_000_000
-    assert len(context["accounts"]) == len(context["schedules"]) == 1
-    assert context["schedules"][0]["name"] == "Salary"
-    assert "no income schedule" not in context["setup_gaps"]
-    assert "no estimated baselines" in context["setup_gaps"]
-    assert context["warnings"]
-    assert projection["safe_to_spend"] is not None
-    assert home["projection"]["safe_to_spend"] is not None
-    assert home["cash_quality"]["status"] == "known"
 
 
 async def test_home_composes_one_payload(session_client):

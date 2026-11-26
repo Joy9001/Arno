@@ -17,12 +17,14 @@ this file holds only what you can't read off the code.
 ## Architecture rules (plan.md §4) that code must not break
 
 1. **The model decides what to compute; code computes it.** Every number the agent states must come
-   from a tool return or a `run_code` script's output. `agent/number_check.py` flags untraced
-   numbers. Affordability verdicts come only from the engine, never from the model.
-2. **Untrusted text never makes a lasting change unseen.** Statement text and payee/UPI-note fields
-   are data, not instructions. Writes that last or reach wide (memory, setup, many rows) need a
-   confirm card in any conversation that has read such text; everyday writes stay instant and
-   undoable. Don't add a lasting write path that skips the card.
+   from a tool return (`run_query`, `project`) or a `run_python` script's output. Nothing checks
+   the reply afterward, so the prompt and the evals carry this rule. Affordability verdicts come
+   only from the engine, never from the model.
+2. **Lasting or wide writes ask first.** Statement text and payee/UPI-note fields are data, not
+   instructions. A write that changes many rows or settings needs a confirm card (PydanticAI's
+   `ApprovalRequired`): `correct_movement` with `scope` other than `this`, and `update_setup` to
+   archive or to change settings. Everyday writes stay instant and undoable. Don't add a lasting
+   write path that skips the card.
 3. **Tools are plain Python over the database, free of PydanticAI types** (`tools/`, `ledger/`).
    Agent, REST API, and any future MCP server wrap the same functions. Adapters belong in `agent/`.
 4. **The database is the whole state.** No state in files or memory that a `pg_dump` wouldn't carry.
@@ -87,8 +89,7 @@ full set.
   and the real HTTP the web app sends. Use it to check a change by hand.
 - Dependency change: `uv lock --check`, and `THIRD_PARTY_NOTICES.md` if a direct
   dependency is added. No script audits licences: check them by hand against the permissive-only
-  rule (no GPL, AGPL, SSPL, or Elastic code in the image). `pydantic-ai-harness` is 0.x: keep it
-  pinned.
+  rule (no GPL, AGPL, SSPL, or Elastic code in the image).
 - Release: the git tag must equal the `pyproject.toml` version, and `compose.yaml`'s default `api`
   image tag must carry the same version (`tests/test_release.py` fails otherwise).
 - Release notes: write them yourself; `release.yml`'s `--generate-notes` fallback lists merged PRs
@@ -100,16 +101,14 @@ full set.
   `gh release create <tag> --verify-tag --title <tag> --notes-file <file>`, or
   `gh release edit <tag> --notes-file <file>` if the workflow already created it. Confirm with
   `gh release view <tag>`.
-- Sandbox helper docstrings: keep them in the existing simple form. `run_code` parses each one into
-  a stub, so a docstring that reads like a call example can break positional calls.
 
 ## Agent behavior changes
 
-- The prompt in `agent/instructions.py` is a short map. Each fixed rule in it has an eval case in
-  `evals/cases.py`, except `outside_text_is_data` and `no_product_recommendations`. Change a rule,
-  change its case.
-- Before designing a new agent mechanism, check the current PydanticAI and `pydantic-ai-harness`
-  docs and source for a built-in (the `pydantic-*` skills in `.agents/skills/` cover this). Likewise
+- The prompt in `agent/instructions.py` is a short positive brief; tools describe themselves.
+  `evals/cases.py` holds the behavior cases. When you change a rule in the prompt, change or add the
+  case that exercises it.
+- Before designing a new agent mechanism, check the current PydanticAI docs and source for a
+  built-in (the `pydantic-*` skills in `.agents/skills/` cover this). Likewise
   read assistant-ui's docs before any chat UI work (the `assistant-ui` skill in `.claude/skills/`).
 - `evals.runner.run_eval` is the only path that enables real model requests and it spends money.
   Don't run it unless asked; `evals.runner.dry_run` lists cases for free.

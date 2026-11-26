@@ -1349,7 +1349,22 @@ def compound(
     }
 
 
+def apr_percent(fit: RateFit | None) -> float | None:
+    """Quotable annual APR percent rounded to two decimals from a RateFit interval."""
+    if fit is None:
+        return None
+    low = fit["low_bps_x100"]
+    high = fit["high_bps_x100"]
+    if low is None or high is None:
+        return None
+    if low == 0 and high == 0:
+        return 0.0
+    midpoint = (Decimal(low) + Decimal(high)) / Decimal(2) / Decimal(10_000)
+    return float(midpoint.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
 __all__ = [
+    "apr_percent",
     "MAX_PAISE",
     "Amortization",
     "CardEmi",

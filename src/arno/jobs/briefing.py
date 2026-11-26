@@ -10,7 +10,6 @@ from datetime import date, timedelta
 from typing import Any
 
 from arno.agent.models import primary_model
-from arno.agent.number_check import check as check_numbers
 from arno.db.conn import Connection, connect
 from arno.engine.money import money
 from arno.ledger import accounts as accounts_mod
@@ -19,7 +18,7 @@ from arno.ledger import schedules as schedules_mod
 from arno.ledger.common import today as ledger_today
 from arno.notifications import create_notification, send_push_for_kind
 from arno.tools import projection as projection_tools
-from arno.tools import read as read_tools
+from arno.tools import recaps as recap_tools
 
 logger = logging.getLogger("arno.jobs.briefing")
 
@@ -54,13 +53,13 @@ async def briefing_numbers(conn: Connection, *, as_of: date | None = None) -> di
     before_start = day - timedelta(days=13)
     before_end = day - timedelta(days=7)
 
-    this_week = await read_tools.summarize_spending(
+    this_week = await recap_tools.summarize_spending(
         conn, group_by="none", period=f"{week_start.isoformat()}..{day.isoformat()}"
     )
-    last_week = await read_tools.summarize_spending(
+    last_week = await recap_tools.summarize_spending(
         conn, group_by="none", period=f"{before_start.isoformat()}..{before_end.isoformat()}"
     )
-    categories = await read_tools.summarize_spending(
+    categories = await recap_tools.summarize_spending(
         conn, group_by="category", period=f"{week_start.isoformat()}..{day.isoformat()}"
     )
     current_paise = _sum_paise(this_week.get("total"))
@@ -301,17 +300,7 @@ async def send_weekly_briefing(
     prose_error = None
     try:
         prose = await write_prose(numbers, model=model)
-        flagged = check_numbers(prose, numbers, kinds=("money", "percent"))
-        if flagged:
-            # The template already carries exactly the computed numbers, so a prose number
-            # without a source in `numbers` is never published.
-            prose_error = "untraced number"
-            logger.info(
-                "weekly briefing prose carried untraced numbers (%s); using the template",
-                ", ".join(flagged[:3]),
-            )
-        else:
-            body = prose
+        body = prose
     except Exception as exc:  # noqa: BLE001 - ordinary prose failures use computed numbers
         from arno.agent.usage import COST_STOP_ERRORS
 

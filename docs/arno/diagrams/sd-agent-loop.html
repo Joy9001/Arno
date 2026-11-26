@@ -61,7 +61,7 @@
     <div class="diagram-container">
       <svg viewBox="0 0 960 500" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="sd-agent-loop-title sd-agent-loop-desc">
         <title id="sd-agent-loop-title">The agent loop and its guards</title>
-        <desc id="sd-agent-loop-desc">The one agent loops between the model and its tools until it gives a final answer; compaction and tool output limits keep the context small, a backup model covers errors, and circuit breakers stop a runaway turn and hand back a partial answer.</desc>
+        <desc id="sd-agent-loop-desc">The one agent loops between the model and its tools until it gives a final answer; history trimming keeps the context small, an approval gate holds wide writes for your tap, a backup model covers errors, and circuit breakers stop a runaway turn and hand back a partial answer.</desc>
         <defs>
           <marker id="arrow" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto"><polygon points="0 0, 8 3, 0 6" fill="#4f5d75"/></marker>
         </defs>
@@ -101,17 +101,17 @@
         <text x="116" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Backup model</text>
         <text x="116" y="92" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">takes over on errors</text>
 
-        <!-- Compaction (guard) -->
+        <!-- History trimming (guard) -->
         <rect x="264" y="48" width="200" height="64" rx="6" fill="#f5f5f5"/>
         <rect x="264" y="48" width="200" height="64" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
-        <text x="364" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Compaction</text>
-        <text x="364" y="92" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">keeps history inside the window</text>
+        <text x="364" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">History trimming</text>
+        <text x="364" y="92" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">blanks old read results</text>
 
         <!-- Tool output limits (guard) -->
         <rect x="600" y="48" width="200" height="64" rx="6" fill="#f5f5f5"/>
         <rect x="600" y="48" width="200" height="64" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
-        <text x="700" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Tool output limits</text>
-        <text x="700" y="92" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">big run_code returns trimmed</text>
+        <text x="700" y="76" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Approval gate</text>
+        <text x="700" y="92" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">wide writes wait for a tap</text>
 
         <!-- Model (focal) -->
         <rect x="264" y="168" width="200" height="80" rx="6" fill="#f5f5f5"/>
@@ -123,8 +123,8 @@
         <!-- Tools -->
         <rect x="600" y="168" width="200" height="80" rx="6" fill="#f5f5f5"/>
         <rect x="600" y="168" width="200" height="80" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
-        <text x="700" y="200" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Tools and Code Mode</text>
-        <text x="700" y="216" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">reads, scripts, writes;</text>
+        <text x="700" y="200" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Tools</text>
+        <text x="700" y="216" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">reads, sandbox, writes;</text>
         <text x="700" y="228" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">verdicts from the engine</text>
 
         <!-- Final answer -->
@@ -137,10 +137,10 @@
         <rect x="600" y="320" width="200" height="64" rx="6" fill="#f5f5f5"/>
         <rect x="600" y="320" width="200" height="64" rx="6" fill="rgba(45,49,66,0.03)" stroke="rgba(45,49,66,0.30)" stroke-width="1"/>
         <text x="700" y="348" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Circuit breakers</text>
-        <text x="700" y="364" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">spend and request ceilings</text>
+        <text x="700" y="364" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">daily spend cap, 25 requests</text>
 
         <!-- Callout -->
-        <text x="40" y="428" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif">Compaction keeps the context small; breakers stop a runaway. Neither touches a normal turn.</text>
+        <text x="40" y="428" fill="#2d3142" font-size="14" font-style="italic" font-family="'Instrument Serif', 'Noto Serif', serif">Trimming keeps the context small; breakers stop a runaway. Neither touches a normal turn.</text>
 
         <!-- Legend -->
         <line x1="40" y1="448" x2="920" y2="448" stroke="rgba(45,49,66,0.10)" stroke-width="0.8"/>

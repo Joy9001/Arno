@@ -83,26 +83,15 @@ def _body(message_id: str) -> dict:
     }
 
 
-async def test_a_run_code_query_card_streams_a_valid_client_chunk(session_client, demo_ledger):
+async def test_a_run_query_card_streams_a_valid_client_chunk(session_client, demo_ledger):
     def script(messages, info: AgentInfo) -> ModelResponse:
         if not any(
-            getattr(part, "tool_name", None) == "run_code"
+            getattr(part, "tool_name", None) == "run_query"
             for message in messages
             for part in getattr(message, "parts", [])
         ):
-            return ModelResponse(
-                parts=[
-                    ToolCallPart(
-                        "run_code",
-                        {
-                            "code": (
-                                "rows = await run_query("
-                                "sql='SELECT name FROM v_accounts LIMIT 1')\nprint(rows)"
-                            )
-                        },
-                    )
-                ]
-            )
+            args = {"sql": "SELECT name FROM v_accounts LIMIT 1"}
+            return ModelResponse(parts=[ToolCallPart("run_query", args)])
         return ModelResponse(parts=[TextPart("I read one account.")])
 
     with session_client.app.state.agent.override(model=streaming_model(script)):

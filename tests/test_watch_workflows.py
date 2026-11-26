@@ -19,7 +19,7 @@ from arno.ledger.common import today as ledger_today
 from arno.ledger.movements import record_expense, record_refund
 from arno.scheduled_questions import create_question
 from arno.tools.patterns import detect, detect_missed
-from arno.tools.read import summarize_spending
+from arno.tools.recaps import summarize_spending
 from tests.agent_helpers import streaming_model
 
 
@@ -380,9 +380,8 @@ async def test_a_price_step_notifies_once_and_rearms_on_the_next_step(ledger):
     assert row["data"]["step_date"] == "2026-06-05"
     assert row["dedupe_key"] == f"pattern:price:{cloud['id']}:2026-06-05"
 
-    text, outside = seed_chat_text(row)
-    assert outside is True
-    assert "<outside>Cloud Storage</outside>" in text
+    text = seed_chat_text(row)
+    assert "Cloud Storage" in text
 
     again = await run_pattern_detection(ledger, as_of=date(2026, 8, 20))
     assert not [item for item in again if item["kind"] == "price_change"]
@@ -644,9 +643,8 @@ async def test_a_schedule_price_step_notifies_once_and_dismissing_writes_nothing
     assert row["data"]["schedule_id"] == schedule["id"]
     assert row["dedupe_key"] == f"pattern:price:{schedule['id']}:2026-08-05"
 
-    text, outside = seed_chat_text(row)
-    assert outside is True
-    assert "<outside>Star Health</outside>" in text
+    text = seed_chat_text(row)
+    assert "Star Health" in text
     assert payments[2]["id"] in text
 
     again = await run_pattern_detection(ledger, as_of=date(2026, 9, 20))
@@ -919,24 +917,6 @@ async def test_briefing_does_not_compare_against_a_net_refund_week(ledger):
     assert numbers["spent"]["change_percent"] is None
     assert "That is down" not in payload["template"]
     assert "That is up" not in payload["template"]
-
-
-async def test_briefing_rejects_a_prose_number_the_data_never_contained(db):
-    def invents(messages, info):
-        del messages, info
-        return ModelResponse(parts=[TextPart("You spent ₹9,999 this week.")])
-
-    sent = await send_weekly_briefing(
-        db,
-        as_of=date(2026, 11, 1),
-        period="bad-number",
-        model=streaming_model(invents),
-    )
-    assert sent is not None
-    assert sent["data"]["prose"] == "template"
-    assert sent["data"]["prose_error"] == "untraced number"
-    assert sent["body"] == sent["data"]["template"]
-    assert "₹9,999" not in sent["body"]
 
 
 async def test_briefing_says_the_spend_total_is_incomplete_without_a_statement(ledger):

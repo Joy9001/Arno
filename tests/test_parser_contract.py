@@ -1,23 +1,14 @@
-"""The contract between a Code Mode script and the submitted parser script.
-
-Both call the same host functions, but only the submitted script runs in `run_script`'s sandbox,
-where `import_id` is optional and there are no `files` or `imports` variables.
-"""
+"""The submitted parser script's sandbox contract: `import_id` is optional there."""
 
 from __future__ import annotations
 
 import hashlib
 import io
 from datetime import date
-from types import SimpleNamespace
-from typing import cast
 
 import pypdfium2 as pdfium
-from pydantic_ai import RunContext
 
-from arno.agent import parser as parser_module
-from arno.agent.deps import AgentDeps
-from arno.agent.parser import open_imports, submit_parser_code
+from arno.agent.parser import submit_parser_code
 from arno.importers.monty import ScriptContext, run_script
 from arno.importers.pipeline import create_import
 from arno.importers.readers import Doc
@@ -96,27 +87,6 @@ def test_words_range_reads_every_page_of_a_long_statement():
     doc = Doc(_blank_pdf(74))
     assert doc.page_count() == 74
     assert len(doc.words_range(0, 73)) == 74
-
-
-async def test_a_pdf_past_the_page_cap_is_failed_and_never_read(ledger, monkeypatch):
-    monkeypatch.setattr(parser_module, "MAX_DOC_PAGES", 2)
-    attachment_id = await _att(ledger, _blank_pdf(3), "long.pdf")
-    deps = AgentDeps(conversation_id="conv_long", statement_attachments=(attachment_id,))
-
-    opened = await open_imports(
-        # A RunContext double: `open_imports` reads only `ctx.deps`.
-        cast(RunContext[AgentDeps], SimpleNamespace(deps=deps))
-    )
-
-    assert len(opened) == 1
-    import_id = opened[0]["import_id"]
-    assert opened[0]["too_large"] is True
-    assert opened[0]["pages"] == 3
-    assert "shorter date ranges" in opened[0]["reason"]
-    stored = await ledger.fetchrow("SELECT status, reason FROM imports WHERE id = $1", import_id)
-    assert stored["status"] == "failed"
-    assert "one import reads at most 2" in stored["reason"]
-    assert await ledger.fetchval("SELECT progress FROM imports WHERE id = $1", import_id) is None
 
 
 async def test_a_failed_gate_leaves_the_import_parsing_with_the_reason(ledger):

@@ -18,7 +18,6 @@ from pydantic_ai import BinaryContent, RunContext
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart
 from pydantic_ai.models import ModelRequestContext
-from pydantic_ai_harness.compaction import is_pinned
 
 from arno.agent.deps import AgentDeps
 from arno.db.conn import connect
@@ -96,7 +95,7 @@ def extract_image_refs(
         if not isinstance(message, ModelRequest):
             continue
         for part_idx, part in enumerate(message.parts):
-            if not isinstance(part, UserPromptPart) or is_pinned(part):
+            if not isinstance(part, UserPromptPart):
                 continue
             texts = (
                 [part.content]

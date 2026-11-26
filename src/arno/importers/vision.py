@@ -14,7 +14,6 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent, BinaryContent
 
 from arno.agent.models import vision_model
-from arno.agent.redaction import redact_text
 from arno.importers.readers import Doc
 
 logger = logging.getLogger("arno.importers.vision")
@@ -88,14 +87,6 @@ async def transcribe_page(doc: Doc, page: int = 0) -> dict[str, Any]:
             ]
         )
         transcribed = result.output.model_dump()
-        # The image itself cannot be text-redacted, and this output also feeds the parser's
-        # sandbox, which bypasses the tool wrapper: redact the page's text here.
-        for row in transcribed["rows"]:
-            row["description"] = redact_text(row["description"])
-            if row["upi_ref"]:
-                row["upi_ref"] = redact_text(row["upi_ref"])
-        if transcribed["note"]:
-            transcribed["note"] = redact_text(transcribed["note"])
         return transcribed
     except COST_STOP_ERRORS:
         raise

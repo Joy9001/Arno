@@ -109,7 +109,6 @@ async def test_password_is_write_only_and_never_stored(session_client, ledger):
         )
         == 0
     )
-    assert session_client.get(f"/api/imports/{import_id}/password").status_code == 405
     PASSWORDS.clear()
 
 

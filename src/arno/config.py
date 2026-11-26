@@ -73,8 +73,9 @@ class Settings:
     agent_ro_password: str | None
     backup_password: str | None
     pre_migration_dir: Path
-    tasks_dir: Path
     vapid_subject: str = "mailto:arno@localhost"
+    sandbox_url: str = "http://sandbox:8001"
+    brave_api_key: str | None = None
 
     @property
     def cookie_name(self) -> str:
@@ -138,10 +139,11 @@ class Settings:
                     Path(tempfile.gettempdir()) / "arno-pre-migration",
                 )
             ),
-            tasks_dir=Path(
-                os.environ.get("ARNO_TASKS_DIR", Path(tempfile.gettempdir()) / "arno-tasks")
-            ),
             vapid_subject=os.environ.get("ARNO_VAPID_SUBJECT", "mailto:arno@localhost").strip(),
+            sandbox_url=os.environ.get("ARNO_SANDBOX_URL", "http://sandbox:8001")
+            .strip()
+            .rstrip("/"),
+            brave_api_key=os.environ.get("BRAVE_API_KEY", "").strip() or None,
         )
 
 

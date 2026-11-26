@@ -6,14 +6,7 @@ import base64
 from datetime import timedelta
 
 import pytest
-from pydantic_ai.messages import (
-    ModelRequest,
-    ModelResponse,
-    ToolCallPart,
-    ToolReturnPart,
-)
 
-from arno.api.run_view import build_run
 from arno.ledger.accounts import create_account
 from arno.ledger.common import today
 from arno.ledger.errors import ConflictLedgerError
@@ -60,41 +53,6 @@ async def test_restoring_a_payment_whose_occurrence_is_gone_conflicts(ledger):
     }
     with pytest.raises(ConflictLedgerError):
         await validate_restored_payment(ledger, payment)
-
-
-def test_a_retried_script_step_reads_as_failed():
-    """A `run_code` retry is a tool return marked retried; its text is the error, not a result."""
-    messages = [
-        ModelResponse(
-            parts=[ToolCallPart("run_code", {"code": "await nothing_here()"}, tool_call_id="c1")]
-        ),
-        ModelRequest(
-            parts=[
-                ToolReturnPart(
-                    "run_code",
-                    "Type error in code: name 'nothing_here' is not defined",
-                    tool_call_id="c1",
-                    outcome="retried",
-                )
-            ]
-        ),
-    ]
-    events = [
-        {
-            "run_id": "run_a",
-            "seq": 1,
-            "kind": "tool_call_started",
-            "tool_name": "run_code",
-            "tool_call_id": "c1",
-            "timestamp": "2026-11-08T10:00:01+00:00",
-            "error": None,
-        }
-    ]
-
-    run = build_run(events=events, messages=messages, running=False, outcome="ok", limit=120)
-
-    assert run["steps"][0]["status"] == "failed"
-    assert "Type error" in (run["steps"][0]["error"] or "")
 
 
 async def test_vapid_keys_are_a_matching_pair(ledger):

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg viewBox="0 0 960 492" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="sd-trust-boundaries-title sd-trust-boundaries-desc" id="sd-trust-boundaries-root">
-        <title id="sd-trust-boundaries-title">Outside text reaches the agent, but lasting writes need you</title>
-        <desc id="sd-trust-boundaries-desc">Strangers' text enters through a parse run or vision call that has no write or ledger tools, and lands in the ledger as typed rows. When the agent reads it back, the read sets a flag on the thread. Every write the agent asks for passes the write gate: everyday writes go through at once with undo, and lasting writes in a flagged thread wait for your tap. The agent and parse run send data to the LLM endpoints you chose, and no other route leads out of your instance.</desc>
+        <title id="sd-trust-boundaries-title">Outside text reaches the agent, but wide writes need you</title>
+        <desc id="sd-trust-boundaries-desc">Strangers' text enters through a vision call that has no write or ledger tools, or through statement rows, and lands in the ledger as typed rows. The agent reads it back as data. Every write the agent asks for passes the write gate: everyday writes go through at once with undo, and wide writes wait for your tap. The agent sends data to the LLM endpoints you chose, and no other route leads out of your instance.</desc>
         <defs>
       <style>@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600&amp;family=Geist+Mono:wght@400;500;600&amp;family=Noto+Serif:ital@0;1&amp;family=Noto+Sans+KR:wght@400;500;600&amp;family=Noto+Serif+KR:wght@400&amp;family=Noto+Sans+TC:wght@400;500;600&amp;family=Noto+Serif+TC:wght@400&amp;display=swap');
       #sd-trust-boundaries-root { --color-paper:   #f5f5f5;
@@ -60,7 +60,7 @@
         <rect x="216" y="286" width="56" height="12" fill="#f5f5f5"/>
         <text x="244" y="295" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">EVERY TURN</text>
         <rect x="456" y="182" width="80" height="12" fill="#f5f5f5"/>
-        <text x="496" y="191" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">READ SETS FLAG</text>
+        <text x="496" y="191" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">READS DATA</text>
         <rect x="488" y="270" width="40" height="12" fill="#f5f5f5"/>
         <text x="508" y="279" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">WRITE</text>
         <rect x="668" y="206" width="56" height="12" fill="#f5f5f5"/>
@@ -70,7 +70,7 @@
         <rect x="616" y="344" width="32" height="12" fill="#f5f5f5"/>
         <text x="632" y="353" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">CHAT</text>
         <rect x="356" y="372" width="64" height="12" fill="#f5f5f5"/>
-        <text x="388" y="381" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">NO OUTBOUND</text>
+        <text x="388" y="381" fill="#4f5d75" font-size="8" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle" letter-spacing="0.06em">NO MONEY OUT</text>
 
         <!-- Strangers (external) -->
         <rect x="40" y="92" width="136" height="80" rx="6" fill="#f5f5f5"/>
@@ -89,7 +89,7 @@
         <!-- Parse run, vision call -->
         <rect x="312" y="92" width="152" height="80" rx="6" fill="#f5f5f5"/>
         <rect x="312" y="92" width="152" height="80" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
-        <text x="388" y="122" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Parse run, vision call</text>
+        <text x="388" y="122" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Vision call</text>
         <text x="388" y="140" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">no write or ledger tools;</text>
         <text x="388" y="153" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">typed fields out</text>
 
@@ -98,22 +98,22 @@
         <rect x="552" y="92" width="160" height="80" rx="6" fill="#2d3142" stroke="#4f5d75" stroke-width="1" fill-opacity="0.05"/>
         <text x="632" y="122" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Ledger, audit_log</text>
         <text x="632" y="140" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">every write audited;</text>
-        <text x="632" y="153" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">outside fields stay marked</text>
+        <text x="632" y="153" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">every write undoable</text>
 
         <!-- Agent run -->
         <rect x="312" y="252" width="152" height="80" rx="6" fill="#f5f5f5"/>
         <rect x="312" y="252" width="152" height="80" rx="6" fill="#ffffff" stroke="#2d3142" stroke-width="1"/>
         <text x="388" y="282" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Agent run</text>
-        <text x="388" y="300" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">reads, runs scripts,</text>
-        <text x="388" y="313" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">asks for writes</text>
+        <text x="388" y="300" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">reads, runs sandboxed</text>
+        <text x="388" y="313" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">code, asks for writes</text>
 
         <!-- Write gate (focal) -->
         <rect x="552" y="252" width="160" height="80" rx="6" fill="#f5f5f5"/>
         <rect x="552" y="252" width="160" height="80" rx="6" fill="#bf4520" stroke="#bf4520" stroke-width="1.2" fill-opacity="0.08"/>
         <text x="632" y="276" fill="#2d3142" font-size="12" font-weight="600" font-family="'Geist', system-ui, sans-serif" text-anchor="middle">Write gate</text>
         <text x="632" y="293" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">everyday: instant, undo</text>
-        <text x="632" y="306" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">lasting, in a flagged</text>
-        <text x="632" y="319" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">thread: waits for a tap</text>
+        <text x="632" y="306" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">wide scope, archive,</text>
+        <text x="632" y="319" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">settings: wait for a tap</text>
 
         <!-- You (input) -->
         <rect x="800" y="252" width="136" height="80" rx="6" fill="#f5f5f5"/>
@@ -123,7 +123,7 @@
         <text x="868" y="313" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace" text-anchor="middle">only one who confirms</text>
 
         <!-- Blocked route caption, below the boundary -->
-        <text x="336" y="415" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">no outbound tool; scripts reach nothing; links are plain text</text>
+        <text x="336" y="415" fill="#4f5d75" font-size="9" font-family="'Geist Mono', ui-monospace, monospace">no money-moving tool; the sandbox reaches nothing; links are plain text</text>
 
         <!-- Legend -->
         <line x1="24" y1="436" x2="936" y2="436" stroke="#2d3142" stroke-width="0.8" stroke-opacity="0.10"/>

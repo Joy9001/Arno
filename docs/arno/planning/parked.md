@@ -291,17 +291,3 @@ PostgreSQL database.
 
 **Trigger:** Keyword search over past conversations repeatedly misses prior context, or the owner
 keeps repeating facts that never get captured as typed memories.
-
-### Separate code sandbox
-
-**Why parked:** Monty executes model-written statement parsers in-process with no filesystem,
-environment, or network access, and handled every text-based format in the
-[Monty evaluation](../../research/monty-document-parsing/README.md). Alternative sandboxes carry
-higher Compose friction: Docker requires the host socket, BoxLite and Smol require `/dev/kvm`, and
-Bubblewrap is not designed as a boundary against a hostile agent.
-
-**Future shape:** A network-isolated sidecar holding only the active statement file, or BoxLite or
-Smol with `/dev/kvm` passed through as an optional Compose profile. The parser subagent
-instructions and verification checks stay unchanged.
-
-**Trigger:** A real bank statement format cannot be parsed inside Monty.

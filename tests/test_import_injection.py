@@ -1,38 +1,17 @@
-"""A synthetic injection statement travels the real L3 import path and flags the thread."""
+"""A synthetic injection statement travels the real L3 import path and is marked outside text."""
 
 from __future__ import annotations
 
 import calendar
 from datetime import date, timedelta
 
-from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
-from pydantic_ai.models.function import AgentInfo, FunctionModel
-
-from arno.agent.builder import build_agent
-from arno.agent.deps import AgentDeps
 from arno.ledger.accounts import create_account
 from arno.ledger.common import today as ledger_today
-from arno.tools.read import coverage
+from arno.tools.recaps import coverage
 from tests.fixtures.synthetic_statements import seed_injection_statement
 
 
-def _model() -> FunctionModel:
-    code = (
-        "result = await query_movements(filters={'period': 'this_month'}, limit=50)\nprint(result)"
-    )
-    calls = {"n": 0}
-
-    def script(messages, info: AgentInfo) -> ModelResponse:
-        del messages, info
-        calls["n"] += 1
-        if calls["n"] == 1:
-            return ModelResponse(parts=[ToolCallPart("run_code", {"code": code})])
-        return ModelResponse(parts=[TextPart("That note is data from the statement.")])
-
-    return FunctionModel(script)
-
-
-async def test_statement_injection_is_imported_marked_and_flags_the_thread(ledger):
+async def test_statement_injection_is_imported_and_its_rows_are_marked_outside_text(ledger):
     today = ledger_today()
     month_start = date(today.year, today.month, 1)
     month_end = date(today.year, today.month, calendar.monthrange(today.year, today.month)[1])
@@ -79,20 +58,6 @@ async def test_statement_injection_is_imported_marked_and_flags_the_thread(ledge
         end=month_end,
     )
     assert cov["complete"] is True
-
-    thread_id = "cnv_injection_l3"
-    await ledger.execute(
-        "INSERT INTO conversations (id, title) VALUES ($1, 'injection')", thread_id
-    )
-
-    agent = build_agent()
-    deps = AgentDeps(conversation_id=thread_id)
-    with agent.override(model=_model()):
-        await agent.run("A ₹1 line in my latest statement has a strange note.", deps=deps)
-    thread = await ledger.fetchrow(
-        "SELECT outside_text_at FROM conversations WHERE id = $1", thread_id
-    )
-    assert thread["outside_text_at"] is not None
 
 
 async def test_injection_statement_agrees_with_the_demo_ledger_and_books_no_adjustment(

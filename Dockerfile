@@ -36,8 +36,8 @@ RUN apt-get update \
 COPY --from=rclone/rclone:1.71.2 /usr/local/bin/rclone /usr/local/bin/rclone
 
 RUN useradd --create-home --uid 10001 fin \
-    && mkdir -p /app/pre-migration /app/tasks \
-    && chown fin:fin /app /app/pre-migration /app/tasks
+    && mkdir -p /app/pre-migration \
+    && chown fin:fin /app /app/pre-migration
 COPY --chown=fin:fin pyproject.toml uv.lock ./
 COPY --chown=fin:fin src ./src
 COPY --chown=fin:fin LICENSE README.md THIRD_PARTY_NOTICES.md ./

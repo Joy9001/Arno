@@ -3,19 +3,26 @@
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+    status,
+)
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from arno.agent import history as history_mod
-from arno.agent.deps import AgentDeps
-from arno.agent.turns import PreparationBusy, TurnBusy
-from arno.api.deps import Database, Session, current_session
-from arno.api.wake import paused_parser_tasks, start_server_turn
+from arno.api.deps import Database, current_session
 from arno.importers.commit import commit_import, reject_import, undo_import
 from arno.importers.pipeline import (
+    import_list_item,
     import_payload,
     list_imports,
     retry_with_password,
@@ -144,6 +151,55 @@ async def imports_list(conn: Database, limit: int = 50) -> dict[str, Any]:
     return {"items": await list_imports(conn, limit=min(max(limit, 1), 200))}
 
 
+@router.get("/import-history")
+async def import_history(
+    conn: Database,
+    limit: int = Query(default=25, ge=1, le=100),
+    cursor: str | None = None,
+) -> dict[str, Any]:
+    """Imports newest first, a page at a time with an opaque cursor for the next page.
+
+    `GET /api/imports` keeps its shape and cap for every current client; older statements stay
+    reachable through this keyset route. The order is `created_at DESC, id DESC`, so the id is
+    the deterministic tie-break.
+    """
+    where = ""
+    params: list[Any] = []
+    if cursor:
+        try:
+            created_at, _, import_id = cursor.rpartition("|")
+            seen = datetime.fromisoformat(created_at)
+            if not import_id or seen.tzinfo is None:
+                raise ValueError
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Invalid import history cursor.") from exc
+        where = "WHERE (i.created_at, i.id) < ($1, $2)"
+        params = [seen, import_id]
+    rows = await conn.fetch(
+        f"""
+        SELECT
+            i.id, i.status, i.period_start, i.period_end, i.check_status, i.counts,
+            i.reason, i.created_at, i.committed_at, i.undone_at,
+            a.filename, acc.name AS account_name,
+            (a.data IS NOT NULL AND a.purged_at IS NULL) AS file_present
+        FROM imports i
+        LEFT JOIN attachments a ON a.id = i.attachment_id
+        LEFT JOIN v_accounts acc ON acc.id = i.account_id
+        {where}
+        ORDER BY i.created_at DESC, i.id DESC
+        LIMIT ${len(params) + 1}
+        """,  # noqa: S608 - `where` is a fixed fragment, never user text
+        *params,
+        limit + 1,
+    )
+    page = rows[:limit]
+    more = len(rows) > limit
+    return {
+        "items": [import_list_item(row) for row in page],
+        "next_cursor": f"{page[-1]['created_at'].isoformat()}|{page[-1]['id']}" if more else None,
+    }
+
+
 @router.get("/imports/{import_id}")
 async def import_detail(import_id: str, conn: Database) -> dict[str, Any]:
     try:
@@ -244,79 +300,6 @@ async def resolve_import_line(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return await import_payload(conn, import_id)
-
-
-@router.get("/imports/{import_id}/password")
-def password_never_returned(import_id: str) -> dict[str, Any]:
-    """There is no password read path. This route exists to say so plainly."""
-    raise HTTPException(
-        status_code=405,
-        detail="A statement password is write-only and lives in memory for one import.",
-        headers={"Allow": "POST"},
-    )
-
-
-async def _start_parser_retry(
-    app: Any,
-    conn: Any,
-    *,
-    row: dict[str, Any],
-    session: dict[str, Any],
-) -> str:
-    """Start the chat turn that hands this import's stored file to the parser again.
-
-    The parser only runs from a chat turn, so a retry reuses that path: the same subagent, the
-    same instruction block about the attachment, and `create_import` returning the failed row.
-    """
-    tasks = app.state.tasks
-    record = tasks.records.get(str(row["task_id"])) if row["task_id"] else None
-    thread = (
-        await history_mod.get_thread(conn, record.conversation_id) if record is not None else None
-    )
-    if thread is None:
-        thread = await history_mod.create_thread(
-            conn, title=history_mod.title_for(f"Retry the import of {row['filename']}")
-        )
-    thread_id = str(thread["id"])
-    deps = AgentDeps(
-        conversation_id=thread_id,
-        user_id=str(session["user_id"]),
-        statement_attachments=(str(row["attachment_id"]),),
-        paused_parser_tasks=paused_parser_tasks(tasks, thread_id),
-    )
-    return await start_server_turn(app, conn, thread=thread, deps=deps)
-
-
-@router.post("/imports/{import_id}/retry")
-async def import_retry(
-    import_id: str, request: Request, session: Session, conn: Database
-) -> dict[str, Any]:
-    """Run the parser again on a failed import's stored file, as a new chat turn."""
-    row = await conn.fetchrow(
-        """
-        SELECT i.*, a.id AS attachment_id, a.filename,
-               (a.data IS NOT NULL AND a.purged_at IS NULL) AS file_present
-        FROM imports i
-        JOIN attachments a ON a.id = i.attachment_id
-        WHERE i.id = $1
-        """,
-        import_id,
-    )
-    if row is None:
-        raise HTTPException(status_code=404, detail="No such import")
-    if row["status"] != "failed":
-        raise HTTPException(status_code=409, detail=f"That import is {row['status']}")
-    if not row["file_present"]:
-        raise HTTPException(status_code=409, detail="The statement file is gone. Upload it again.")
-    if getattr(request.app.state, "turns", None) is None:
-        raise HTTPException(status_code=503, detail="The parser is not running.")
-    try:
-        thread_id = await _start_parser_retry(request.app, conn, row=dict(row), session=session)
-    except (TurnBusy, PreparationBusy) as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    payload = await import_payload(conn, import_id)
-    payload["thread_id"] = thread_id
-    return payload
 
 
 __all__ = ["MAX_UPLOAD_BYTES", "router"]

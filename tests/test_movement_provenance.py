@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from arno.api import provenance
+from arno.api.ledger import get_movement as movement_detail
 from arno.ledger.accounts import create_account
-from arno.ledger.movements import get_movement, record_expense
+from arno.ledger.movements import record_expense
 
 
 async def test_movement_detail_exposes_only_real_chat_provenance(ledger):
@@ -26,9 +26,7 @@ async def test_movement_detail_exposes_only_real_chat_provenance(ledger):
         capture={"kind": "chat", "ref": "msg_prov"},
     )
 
-    result = await provenance.attach_sources(
-        ledger, movement["id"], await get_movement(ledger, movement["id"])
-    )
+    result = await movement_detail(movement["id"], ledger)
 
     assert result["sources"] == [
         {
@@ -48,8 +46,6 @@ async def test_movement_detail_has_no_invented_source(ledger):
         ledger, account_id=bank["id"], amount_paise=5_000, description="Lunch"
     )
 
-    result = await provenance.attach_sources(
-        ledger, movement["id"], await get_movement(ledger, movement["id"])
-    )
+    result = await movement_detail(movement["id"], ledger)
 
     assert result["sources"] == []

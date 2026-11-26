@@ -26,7 +26,6 @@ from pydantic_ai.models.instrumented import InstrumentationSettings
 from pydantic_ai.ui.vercel_ai.request_types import SubmitMessage, TextUIPart, UIMessage
 
 from arno.agent import history as history_mod
-from arno.agent.capabilities import redaction_guardrail
 from arno.agent.deps import AgentDeps
 from arno.agent.images import ImageAttachments, with_photos
 from arno.ledger.audit import new_id
@@ -55,7 +54,7 @@ async def _insert_photo(conn: Any, data: bytes = VALID_PNG, *, filename: str = "
     return att_id
 
 
-async def test_with_photos_guardrail_cache_point_and_no_image_tools(demo_ledger):
+async def test_with_photos_cache_point_and_no_image_tools(demo_ledger):
     att_id = await _insert_photo(demo_ledger, filename="card.png")
     run_input = SubmitMessage(
         id="cnv_guard",
@@ -90,7 +89,7 @@ async def test_with_photos_guardrail_cache_point_and_no_image_tools(demo_ledger)
     agent: Agent[AgentDeps, str] = Agent(
         FunctionModel(script),
         deps_type=AgentDeps,
-        capabilities=[redaction_guardrail(), cap],
+        capabilities=[cap],
     )
     deps = AgentDeps(conversation_id="cnv_guard", image_attachments=(att_id,))
     await agent.run(updated.messages[0].parts[0].text, deps=deps)
@@ -100,8 +99,7 @@ async def test_with_photos_guardrail_cache_point_and_no_image_tools(demo_ledger)
     assert len(seen_prompts) == 1
     items = seen_prompts[0]
     joined_text = "\n".join(item for item in items if isinstance(item, str))
-    assert "[redacted:credit_card]" in joined_text
-    assert "4111 1111 1111 1111" not in joined_text
+    assert "Swiggy" in joined_text
     bins = [item for item in items if isinstance(item, BinaryContent)]
     assert len(bins) == 1
     assert bins[0].data == VALID_PNG

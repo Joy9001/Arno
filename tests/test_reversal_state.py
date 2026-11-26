@@ -33,8 +33,7 @@ from arno.ledger.payees import create_payee
 from arno.ledger.uncategorized import uncategorized_rows
 from arno.tools.patterns import _load_spend_payments
 from arno.tools.projection import load_inputs
-from arno.tools.read import query_movements, summarize_spending
-from arno.tools.recaps import _spending_days, recap
+from arno.tools.recaps import _spending_days, recap, summarize_spending
 
 
 async def _bank(conn, *, name: str = "Stage2 Bank", opening: int = 10_000_000) -> dict:
@@ -194,12 +193,6 @@ async def test_uncategorized_and_read_tools_restore_after_undo_of_undo(ledger):
 
     deleted = await correct_movement(ledger, m["id"], changes={"delete": True})
     assert await uncategorized_rows(ledger) == []
-    q_hidden = await query_movements(ledger, filters={"period": day.isoformat()})
-    assert [row["id"] for row in q_hidden["rows"]] == []
-    q_all = await query_movements(
-        ledger, filters={"period": day.isoformat(), "include_reversed": True}
-    )
-    assert len(q_all["rows"]) == 2
     assert (await list_movements(ledger, limit=20))["items"] == []
     span_rev = await ledger_span(ledger)
     assert span_rev == {"movements": 1, "spending": 1, "first_date": day.isoformat()}
@@ -210,8 +203,6 @@ async def test_uncategorized_and_read_tools_restore_after_undo_of_undo(ledger):
     # Reversal of reversal restores M cleanly everywhere.
     await undo_group(ledger, deleted["undo_id"])
     assert [row["id"] for row in await uncategorized_rows(ledger)] == [m["id"]]
-    q_restored = await query_movements(ledger, filters={"period": day.isoformat()})
-    assert [row["id"] for row in q_restored["rows"]] == [m["id"]]
     assert [row["id"] for row in (await list_movements(ledger, limit=20))["items"]] == [m["id"]]
     sum_restored = await summarize_spending(ledger, group_by="none", period=day.isoformat())
     assert sum_restored["total"]["paise"] == 33_000

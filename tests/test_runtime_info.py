@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 
-from arno.api.runtime_info import ROLES, payload
+from arno.api.ledger import RUNTIME_ROLES as ROLES
+from arno.api.ledger import get_runtime_info as payload
 
 
 def _clear_roles(monkeypatch) -> None:

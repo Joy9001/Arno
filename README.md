@@ -36,24 +36,26 @@ Chat in English, Hindi, or Hinglish, by text or voice.
 | "Every Sunday, tell me what I spent on food" | Schedules a read-only question that answers into your inbox |
 | A photo of a receipt or a UPI screenshot | Turns it into one transaction and keeps the image |
 
-It also imports bank and card statements (PDF, spreadsheet, or text, password-protected or not),
-learns each new layout once, and sends reminders for bills, EMIs, and card dues. It never moves
-money, never sees a statement password, and never recommends an investment.
+It also sends reminders for bills, EMIs, and card dues, and reconciles bank and card statements
+through a review screen. Reading rows out of a statement file is being rebuilt, so statement import
+is not available yet. It never moves money, never sees a statement password, and never recommends
+an investment.
 
 ## How it works
 
 <p align="center">
-  <img src="docs/arno/diagrams/readme-how-it-works.png" alt="How an Arno answer is made: your message goes to the agent, which calls plain-Python tools directly or through Code Mode scripts; the tools read the Postgres ledger and run the projection engine, and every reply passes a number check before it reaches you with verdict cards and citations." width="100%">
+  <img src="docs/arno/diagrams/readme-how-it-works.png" alt="How an Arno answer is made: your message goes to the agent, which calls plain-Python tools; the tools read the Postgres ledger, run the projection engine, and run scripts in an isolated sandbox, and the reply reaches you with verdict cards and citations." width="100%">
 </p>
 
 - The model decides what to compute, and code computes it. Every number in a reply has to come
-  from a tool return or a script the agent ran; a number check flags any that don't.
+  from a tool return or a script the agent ran in an isolated sandbox.
 - Affordability verdicts come from a seeded projection in plain Python. "Yes" means at least a 90%
   chance your balance stays above your floor, with no goal slipping and no bill missed.
 - One Postgres database holds the whole state, on a vendored copy of
   [pgledger](https://github.com/pgr0ss/pgledger). Money is stored in integer paise.
-- Text from statements and payee notes is treated as data. After a conversation reads it, any
-  lasting change (memory, setup, bulk writes) waits for your tap on a confirm card.
+- Text from statements and payee notes is treated as data. Wide changes (a category rule for every
+  past row, archiving, settings) wait for your tap on a confirm card; everyday writes are instant
+  and undoable.
 
 The [architecture guide](docs/arno/architecture.md) and [tool reference](docs/arno/specs/tools.md)
 go deeper. Decisions live in [`plan.md`](docs/arno/plan.md).

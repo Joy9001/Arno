@@ -47,7 +47,6 @@ services:
       ARNO_WEB_DIR: /app/web/dist
       ARNO_AUTO_MIGRATE: "1"
       ARNO_PRE_MIGRATION_DIR: /app/pre-migration
-      ARNO_TASKS_DIR: /app/tasks
       ARNO_SANDBOX_URL: http://sandbox:8001
       # Traces go to Phoenix over OTLP/HTTP via the stock OpenTelemetry SDK. The base URL is the
       # Phoenix address (the exporter appends /v1/traces); empty means tracing is off. This Compose
@@ -70,8 +69,6 @@ services:
     volumes:
       # A dump from before each migration. The image creates this path owned by the API user.
       - pre-migration-data:/app/pre-migration
-      # The parser subagent's task records. The step store in Postgres holds each run's steps.
-      - tasks-data:/app/tasks
       # The default local restic repository for the daily backup and `arno restore`.
       - backup-data:/backups
     ports:
@@ -153,6 +150,5 @@ volumes:
   db-data:
   backup-data:
   pre-migration-data:
-  tasks-data:
   ollama-data:
   phoenix-data:

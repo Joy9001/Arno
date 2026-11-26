@@ -147,9 +147,7 @@ async def test_a_recap_tells_every_story_from_the_rows(ledger):
     assert charge["amount"]["paise"] == 40_000
     assert charge["every"] == "week"
     assert charge["last_date"] == "2026-10-17"
-    # The cafe came from a statement: its name is marked, and the result says so.
-    assert "<outside>" in stories["frequent"]["figure"]["name"]
-    assert result["outside_text"] is True
+    assert stories["frequent"]["figure"]["name"] == "Blue Tokai"
 
 
 async def test_every_figure_opens_rows_that_sum_to_it(ledger):
@@ -169,7 +167,7 @@ async def test_every_figure_opens_rows_that_sum_to_it(ledger):
 
 
 async def test_a_known_total_with_a_gap_cannot_imply_a_complete_trend(ledger):
-    from arno.tools.read import summarize_spending
+    from arno.tools.recaps import summarize_spending
 
     seeded = await _seed(ledger)
     spend = await summarize_spending(ledger, group_by="category", period="2026-10")

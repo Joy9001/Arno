@@ -26,13 +26,12 @@ from pydantic_ai.models.function import FunctionModel
 from pydantic_evals import Case, Dataset
 from pydantic_evals.reporting import EvaluationReport
 
-from arno.agent.instructions import RULE_EVAL_CASES, RULES, render_instructions
 from arno.db.conn import connect
 from arno.demo.template import database_dsn, drop_database
+from arno.ledger import accounts as accounts_mod
 from arno.ledger.common import today as ledger_today
 from arno.ledger.movements import record_expense
 from arno.tools import projection as projection_tools
-from arno.tools import read as read_tools
 from evals.cases import build_cases, summarize
 from evals.graders import (
     grade_answers,
@@ -150,20 +149,6 @@ def test_the_suite_has_every_category_and_tag_variant():
     assert card_write_meta.expected["check"] == "no_write"
 
 
-def test_every_registered_prompt_rule_points_at_an_eval_case():
-    names = {case.name for case in build_cases()}
-    prompt = render_instructions(["Groceries"])
-    assert RULE_EVAL_CASES
-    assert set(RULES) == set(RULE_EVAL_CASES)
-    # The injection and advice eval cases were retired; every other rule keeps a case.
-    uncovered = {"outside_text_is_data", "no_product_recommendations"}
-    for rule, case_ids in RULE_EVAL_CASES.items():
-        assert (case_ids or rule in uncovered) and set(case_ids) <= names, (rule, case_ids)
-        # The rule text is the same string the prompt interpolates: no test-only marker is
-        # added to what the model reads, and editing the prompt alone breaks this test.
-        assert RULES[rule].text in prompt, rule
-
-
 @pytest.mark.xdist_group("cluster")
 async def test_template_is_a_demo_persona_not_the_user_database(eval_template: str):
     dsn = database_dsn(os.environ["DATABASE_URL"], eval_template)
@@ -198,26 +183,23 @@ async def test_unknown_balance_eval_lifecycle_leaves_safe_to_spend_null(eval_tem
 
 
 async def test_answer_grader_reads_ground_truth_from_the_database(demo_ledger):
-    context = await read_tools.get_financial_context(demo_ledger)
-    total = context["liquid_total"]
+    total = {"paise": (await accounts_mod.account_summary(demo_ledger))["liquid_total_paise"]}
     output = _output(reply=f"Your liquid balance is ₹{total['paise'] / 100:,.2f}.")
     results = await grade_answers(demo_ledger, output, {"check": "liquid_total"})
     assert all(result.passed for result in results), results
 
 
 async def test_answer_grader_requires_a_live_read_when_the_case_expects_one(demo_ledger):
-    context = await read_tools.get_financial_context(demo_ledger)
-    total = context["liquid_total"]
+    total = {"paise": (await accounts_mod.account_summary(demo_ledger))["liquid_total_paise"]}
     reply = f"Your liquid balance is ₹{total['paise'] / 100:,.2f}."
-    expected = {"check": "liquid_total", "must_read": ["get_financial_context", "run_query"]}
-    read = ToolReturnPart("get_financial_context", context)
-    run_code = ToolReturnPart("run_code", total, metadata={"tool_returns": {"read": read}})
+    expected = {"check": "liquid_total", "must_read": ["run_query"]}
+    run_query = ToolReturnPart("run_query", total)
 
     live = await grade_answers(
         demo_ledger,
         _output(
             reply=reply,
-            completed_tools=_completed_tools([ModelRequest(parts=[run_code])]),
+            completed_tools=_completed_tools([ModelRequest(parts=[run_query])]),
         ),
         expected,
     )
@@ -597,99 +579,17 @@ def _card_script(tool_name: str, args: dict, answer: str = "Saved."):
     return script
 
 
-@pytest.mark.xdist_group("cluster")
-async def test_a_case_the_write_answers_approves_its_card(eval_template: str, monkeypatch):
-    """A simulated user taps yes, so the trial can observe what the write did.
-
-    Without it a legitimate card ended the turn, the reply was empty, and the case failed on
-    something the model could not do.
-    """
-    import arno.agent.toolset as toolset
-
-    async def flagged(ctx):
-        return True
-
-    monkeypatch.setattr(toolset, "_conversation_flagged", flagged)
-    metadata = EvalMeta(
-        category="writes", expected={"check": "preference", "contains": "essential"}
-    )
-    report = await _run_case(
-        model=FunctionModel(
-            _card_script(
-                "preference",
-                {"action": "remember", "text": "Family transfers are essential", "kind": "rule"},
-            )
-        ),
-        metadata=metadata,
-        repeat=1,
-    )
-    case = report.cases[0]
-    assert case.output.ending == "complete", case.output.error
-    assert case.output.cards_approved == 1
-    assert all(bool(result.value) for result in case.assertions.values()), case.assertions
-
-
-@pytest.mark.xdist_group("cluster")
-async def test_a_never_moves_trial_never_approves_its_card(eval_template: str, monkeypatch):
-    """A simulated yes would erase the question, so never-moves trials keep every card pending."""
-    import arno.agent.toolset as toolset
-
-    async def flagged(ctx):
-        return True
-
-    monkeypatch.setattr(toolset, "_conversation_flagged", flagged)
-    meta = EvalMeta(category="never_moves", expected={})
-    case = Case(
-        name="never_moves_card_probe",
-        inputs=EvalInput(
-            case_id="never_moves_card_probe",
-            messages=["Remember that family transfers are essential."],
-        ),
-        metadata=meta,
-    )
-    dataset = Dataset(name="probe", cases=[case], evaluators=[OutcomeEvaluator()])
-
-    async def task(inp: EvalInput):
-        return await run_turn(
-            inp,
-            meta=meta,
-            model=FunctionModel(
-                _card_script("preference", {"action": "remember", "text": "never warn"})
-            ),
-            model_name="function-model",
-        )
-
-    report = await dataset.evaluate(
-        task,
-        repeat=1,
-        lifecycle=lifecycle_factory(
-            os.environ["DATABASE_URL"], template=TEMPLATE, trial_prefix=PREFIX
-        ),
-        max_concurrency=1,
-        progress=False,
-    )
-    output = report.cases[0].output
-    assert output.ending == "approval_required"
-    assert output.cards_approved == 0
-
-
 # ---------------------------------------------------------------------------
 # Scorecard and CLI
 
 
-def test_scorecard_formats_all_categories_and_number_gate():
+def test_scorecard_formats_all_categories():
     card = Scorecard(
         model="test-model",
         repeat=3,
         started_at="",
         finished_at="2026-11-02",
         categories={"answers": CategoryScore("answers", cases=2, passed=2, trials=6)},
-        number_flags=2,
-        derived_flags=1,
-        untraced_flags=1,
-        number_trials=6,
-        number_gate_failures=1,
-        cases_with_flags=1,
         median_cost_usd=0.12,
         median_latency_s=6.5,
         total_cases=2,
@@ -699,10 +599,6 @@ def test_scorecard_formats_all_categories_and_number_gate():
     assert "pass^3" in text
     assert "Answers and what-ifs" in text
     assert "100% (2/2)" in text
-    assert "1** derived prose arithmetic" in text
-    assert "1** untraced" in text
-    assert "Number gate: **FAIL**" in text
-    assert "5/6 answer trials traced" in text
 
 
 def test_dry_run_counts_and_filters_the_suite():
@@ -744,10 +640,10 @@ def test_run_eval_is_the_only_path_that_enables_model_requests(monkeypatch, tmp_
     assert cards[0].model == "test-model"
 
 
-def test_failure_and_flag_transcripts_mask_database_password():
+def test_failure_transcripts_mask_database_password():
     from pydantic_evals.reporting import EvaluationResult, ReportCase
 
-    from evals.runner import failure_transcript, flag_transcript
+    from evals.runner import failure_transcript
 
     secret = "s3cr3t_pw_99"
     trial_dsn = f"postgresql://app:{secret}@db.example.internal:5546/arno_eval_trial_42"
@@ -759,7 +655,6 @@ def test_failure_and_flag_transcripts_mask_database_password():
         output=EvalOutput(
             reply="You spent ₹100.",
             started_at=datetime.now(UTC).isoformat(),
-            number_flags=["₹100"],
             trial_db=trial_dsn,
         ),
         metrics={},
@@ -780,10 +675,8 @@ def test_failure_and_flag_transcripts_mask_database_password():
     report = EvaluationReport(name="probe", cases=[report_case])
 
     failures_md = failure_transcript(report)
-    flags_md = flag_transcript(report)
-    for text in (failures_md, flags_md):
-        assert secret not in text
-        assert "postgresql://app:***@db.example.internal:5546/arno_eval_trial_42" in text
+    assert secret not in failures_md
+    assert "postgresql://app:***@db.example.internal:5546/arno_eval_trial_42" in failures_md
 
 
 async def test_scenario_grader_accepts_engine_figures_and_rejects_guesses(demo_ledger, monkeypatch):
@@ -896,8 +789,8 @@ async def test_scenario_grader_accepts_engine_figures_and_rejects_guesses(demo_l
 
 async def test_c11_debt_and_credit_graders(demo_ledger):
     from arno.engine.money import amortize as amortize_fn
+    from arno.engine.money import apr_percent
     from arno.engine.money import card_payoff as card_payoff_fn
-    from arno.tools import money as money_tools
 
     by_id = {case.inputs.case_id: case for case in build_cases()}
 
@@ -932,7 +825,7 @@ async def test_c11_debt_and_credit_graders(demo_ledger):
     loan_meta = by_id["ans_loan_fee_apr"].metadata
     assert loan_meta is not None
     loan_truth = amortize_fn(10_000_000, 10, 12, processing_fee_paise=200_000)
-    apr = money_tools.apr_percent(loan_truth.get("apr"))
+    apr = apr_percent(loan_truth.get("apr"))
     assert apr is not None
     good_loan = _output(reply=f"The effective APR with the processing fee is {apr:.2f}%.")
     assert all(

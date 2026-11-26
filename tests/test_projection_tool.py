@@ -13,7 +13,7 @@ from pydantic_ai.toolsets import FunctionToolset
 
 from arno.agent import toolset as agent_tools
 from arno.agent.builder import build_agent
-from arno.agent.cards import cards_from_messages
+from arno.agent.cards import cards_for_transcript
 from arno.agent.deps import AgentDeps
 from arno.db.conn import quote_ident
 from arno.engine.inputs import CategoryRow, LedgerSnapshot, build_inputs
@@ -466,14 +466,10 @@ async def test_the_project_tool_direct_call_returns_a_projection_card(demo_ledge
     assert "curve" not in content
 
 
-async def test_a_project_call_inside_run_code_still_emits_its_card(demo_ledger):
-    code = (
-        "result = await project(horizon_days=90)\n"
-        'print(result["floor_probability"], result["source_ids"]["goals"])\n'
-    )
+async def test_a_project_call_emits_its_card(demo_ledger):
     model = FunctionModel(
         lambda messages, info: (
-            ModelResponse(parts=[ToolCallPart("run_code", {"code": code})])
+            ModelResponse(parts=[ToolCallPart("project", {"horizon_days": 90})])
             if len(messages) == 1
             else ModelResponse(parts=[TextPart("Here is the projection.")])
         )
@@ -481,7 +477,7 @@ async def test_a_project_call_inside_run_code_still_emits_its_card(demo_ledger):
     agent = build_agent()
     with agent.override(model=model):
         result = await agent.run("project", deps=AgentDeps(conversation_id="cnv_test"))
-    cards = cards_from_messages(result.all_messages())
+    cards = cards_for_transcript(result.all_messages())
     projection = next(card for card in cards if card.data["card"] == "projection")
     assert projection.data["source_ids"]["accounts"]
     assert projection.data["curve"]
@@ -595,7 +591,7 @@ def test_a_hypothetical_without_emi_terms_leaves_them_unset():
 
 
 def test_an_unknown_hypothetical_key_is_still_rejected():
-    with pytest.raises(ValueError, match="not emo_months"):
+    with pytest.raises(ValueError, match="emo_months"):
         projection_tools._hypothetical(
             {"amount_paise": 5_000_000, "date": "2026-11-20", "emo_months": 3}
         )
@@ -670,7 +666,6 @@ async def test_load_snapshot_projects_uncovered_series_and_excludes_matched_spen
     from arno.ledger.movements import record_expense
     from arno.ledger.payees import create_payee
     from arno.tools import patterns
-    from arno.tools.mark import mark
 
     bank = await create_account(
         ledger,
@@ -723,22 +718,20 @@ async def test_load_snapshot_projects_uncovered_series_and_excludes_matched_spen
     assert forecast.category_id == cat_id
     assert forecast.reducible is bool(cat_row["reducible"])
     assert date(2026, 11, 1) in forecast.expected
-    # The payee came from statement text, so the series carries its name marked, not bare.
-    assert forecast.name == mark("Netflix")
+    assert forecast.name == "Netflix"
     assert [(row.date, row.amount_paise) for row in snapshot.spend] == [(date(2026, 9, 18), 15_000)]
 
     early = await projection_tools.load_snapshot(ledger, as_of=date(2026, 9, 25), known_then=True)
     assert early.series == ()
 
 
-async def test_project_changes_resolves_names_and_marks_outside_text(ledger):
+async def test_project_changes_resolves_names(ledger):
     from arno.ledger.accounts import create_account
     from arno.ledger.goals import create_goal
     from arno.ledger.movements import record_expense
     from arno.ledger.payees import create_payee
     from arno.ledger.schedules import create_schedule
     from arno.tools import patterns
-    from arno.tools.mark import mark
 
     as_of = date(2026, 10, 1)
     bank = await create_account(
@@ -826,9 +819,9 @@ async def test_project_changes_resolves_names_and_marks_outside_text(ledger):
     scenario = result.get("scenario")
     assert scenario is not None
     labels = [item["label"] for item in scenario["changes"]]
-    assert any(str(mark("Netflix")) in label for label in labels)
+    assert any("Netflix" in label for label in labels)
 
-    # Unknown schedule lists active schedules (marking outside_text) and detected series.
+    # Unknown schedule lists active schedules and detected series.
     with pytest.raises(ValueError, match="unknown schedule") as missing_exc:
         await projection_tools.project(
             ledger,
@@ -837,8 +830,8 @@ async def test_project_changes_resolves_names_and_marks_outside_text(ledger):
             changes=[{"kind": "pause_schedule", "schedule": "Gym", "start": "2026-10-15"}],
         )
     msg = str(missing_exc.value)
-    assert str(mark("Outside Club")) in msg
-    assert str(mark("Netflix")) in msg
+    assert "Outside Club" in msg
+    assert "Netflix" in msg
     assert "Rent" in msg
 
     # Unknown goal lists active goals.
@@ -1109,23 +1102,16 @@ async def test_agent_project_turns_validation_errors_into_model_retry(demo_ledge
                     seen_retry.append(str(part.content))
         return ModelResponse(parts=[TextPart("Which schedule did you mean?")])
 
-    from arno.agent.capabilities import OutsideTextTaint
-
     agent = Agent(
         FunctionModel(script),
         deps_type=AgentDeps,
         retries=2,
         toolsets=[FunctionToolset(tools=[agent_tools.project])],
-        capabilities=[OutsideTextTaint()],
     )
     result = await agent.run("Pause my Gym schedule", deps=AgentDeps(conversation_id="cnv_retry"))
     assert result.output == "Which schedule did you mean?"
     assert any("unknown schedule" in msg.lower() for msg in seen_retry)
-    assert any("1 to 12 items" in msg.lower() for msg in seen_retry)
-    flagged = await demo_ledger.fetchval(
-        "SELECT outside_text_at FROM conversations WHERE id = 'cnv_retry'"
-    )
-    assert flagged is not None
+    assert any("at least 1 item" in msg.lower() for msg in seen_retry)
 
 
 async def test_the_project_tool_echoes_the_request_it_was_asked(demo_ledger):

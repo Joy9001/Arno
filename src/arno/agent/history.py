@@ -1,8 +1,9 @@
-"""Threads, the pinned snapshot, and the two records saved on every ending.
+"""Threads and the two records saved on every ending.
 
-`messages` is what you saw and never changes. `conversations.model_history` is what the model gets
-and may be edited by compaction. Both are written in one transaction on a finish, a stop, and a
-failure; `run_started_at` catches the one ending nobody can save (a crash).
+`conversations.model_history` is the model's whole memory: the `ModelMessage` list, the one record
+the agent reads back. `messages` holds what the transcript shows, one row per message, and never
+changes after it is saved. Both are written in one transaction on a finish, a stop, and a failure;
+`run_started_at` catches the one ending nobody can save (a crash).
 """
 
 from __future__ import annotations
@@ -12,67 +13,61 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any
 
-from arno.agent.cards import cards_from_messages, run_timing
+from pydantic_ai.messages import (
+    BinaryContent,
+    ModelMessagesTypeAdapter,
+    ModelRequest,
+    ModelResponse,
+    TextPart,
+    ToolCallPart,
+    ToolReturnPart,
+    UserPromptPart,
+)
+
+from arno.agent.cards import (
+    attach_to_last_assistant,
+    cards_for_transcript,
+    cards_from_messages,
+    run_timing,
+    ui_messages,
+    with_data,
+)
 from arno.agent.presentation import keep_last_answer
-from arno.agent.redaction import redact_text
 from arno.db.conn import Connection
 from arno.ledger.audit import new_id
-from arno.ledger.common import today as ledger_today
-from arno.tools import read as read_tools
-
-SNAPSHOT_REPLY = "Snapshot read."
 
 RUN_STATUS = {"complete": "complete", "cancelled": "cancelled", "failed": "error"}
+IMAGE_PLACEHOLDER = "[Image omitted from stored history]"
 
 
 def _dump(messages: list[Any]) -> list[dict[str, Any]]:
-    from pydantic_ai.messages import ModelMessagesTypeAdapter
-
     cleaned = _strip_binary_content(_latest_instructions_only(messages))
     dumped: list[dict[str, Any]] = json.loads(ModelMessagesTypeAdapter.dump_json(cleaned))
     return dumped
 
 
-def _without_binary(content: Any, placeholder: str) -> Any | None:
-    from pydantic_ai.messages import BinaryContent
-
-    if not isinstance(content, (list, tuple)):
-        return None
-    if not any(isinstance(item, BinaryContent) for item in content):
-        return None
-    replaced = [placeholder if isinstance(item, BinaryContent) else item for item in content]
-    return tuple(replaced) if isinstance(content, tuple) else replaced
-
-
 def _strip_binary_content(messages: list[Any]) -> list[Any]:
     """Never persist raw image bytes or base64 blobs inside `conversations.model_history`."""
-    from pydantic_ai.messages import ModelRequest, ToolReturnPart, UserPromptPart
 
-    placeholder = "[Image omitted from stored history]"
-    out: list[Any] = []
-    for message in messages:
-        if not isinstance(message, ModelRequest):
-            out.append(message)
-            continue
-        changed = False
-        parts: list[Any] = []
-        for part in message.parts:
-            if (
-                isinstance(part, UserPromptPart)
-                and (cleaned := _without_binary(part.content, placeholder)) is not None
-            ):
-                parts.append(replace(part, content=cleaned))
-                changed = True
-            elif (
-                isinstance(part, ToolReturnPart)
-                and (cleaned := _without_binary(part.content, placeholder)) is not None
-            ):
-                parts.append(replace(part, content=cleaned))
-                changed = True
-            else:
-                parts.append(part)
-        out.append(replace(message, parts=parts) if changed else message)
-    return out
+    def clean(part: Any) -> Any:
+        content = getattr(part, "content", None)
+        if (
+            isinstance(part, UserPromptPart | ToolReturnPart)
+            and isinstance(content, (list, tuple))
+            and any(isinstance(item, BinaryContent) for item in content)
+        ):
+            placeholders = (
+                IMAGE_PLACEHOLDER if isinstance(i, BinaryContent) else i for i in content
+            )
+            return replace(part, content=type(content)(placeholders))
+        return part
+
+    return [
+        replace(message, parts=[clean(part) for part in message.parts])
+        if isinstance(message, ModelRequest)
+        else message
+        for message in messages
+    ]
 
 
 def _latest_instructions_only(messages: list[Any]) -> list[Any]:
@@ -82,10 +77,6 @@ def _latest_instructions_only(messages: list[Any]) -> list[Any]:
     for the new request, so earlier copies only made each saved thread grow by that much per step:
     98 messages weighed 1 MB and the whole value is rewritten every turn.
     """
-    from dataclasses import replace
-
-    from pydantic_ai.messages import ModelRequest
-
     last = max(
         (index for index, message in enumerate(messages) if isinstance(message, ModelRequest)),
         default=-1,
@@ -99,8 +90,6 @@ def _latest_instructions_only(messages: list[Any]) -> list[Any]:
 
 
 def _load(data: Any) -> list[Any]:
-    from pydantic_ai.messages import ModelMessagesTypeAdapter
-
     if not data:
         return []
     # Rows saved before failed turns were cleaned can still hold an empty response.
@@ -114,7 +103,6 @@ def without_empty_responses(messages: list[Any]) -> list[Any]:
     only reasoning. Kept, it is sent back on every later turn as an empty assistant message, which
     some providers reject and every model misreads.
     """
-    from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 
     def answers(part: Any) -> bool:
         if isinstance(part, TextPart):
@@ -149,54 +137,13 @@ async def get_thread(conn: Connection, thread_id: str) -> dict[str, Any] | None:
 
 
 def title_for(text: str) -> str:
-    # A title is stored and listed, so a pasted card number must not reach it.
-    cleaned = " ".join(redact_text(text).split())
+    cleaned = " ".join(text.split())
     return cleaned[:80] or "New chat"
 
 
-async def snapshot_payload(conn: Connection) -> tuple[str, bool]:
-    payload = await read_tools.get_financial_context(conn)
-    outside = bool(payload.pop("outside_text", False))
-    return json.dumps(payload, ensure_ascii=False, default=str), outside
-
-
-def _pin(content: str) -> Any:
-    from pydantic_ai_harness.compaction import pin
-
-    return pin(content)
-
-
-async def build_snapshot_history(conn: Connection) -> tuple[list[Any], bool]:
-    from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart
-
-    content, outside = await snapshot_payload(conn)
-    history = [
-        ModelRequest(parts=[_pin(content)]),
-        ModelResponse(parts=[TextPart(SNAPSHOT_REPLY)]),
-    ]
-    return history, outside
-
-
-async def ensure_history(conn: Connection, thread: dict[str, Any]) -> tuple[list[Any], bool]:
-    """Load the thread's history, creating the pinned snapshot exchange when it has none."""
-    history = _load(thread.get("model_history"))
-    outside = False
-    if not history:
-        history, outside = await build_snapshot_history(conn)
-        row = await conn.fetchrow_required(
-            """
-            UPDATE conversations
-            SET model_history = $1, snapshot_at = now(), updated_at = now(),
-                outside_text_at = CASE WHEN $2 THEN coalesce(outside_text_at, now())
-                                       ELSE outside_text_at END
-            WHERE id = $3 RETURNING *
-            """,
-            _dump(history),
-            outside,
-            thread["id"],
-        )
-        thread.update(row)
-    return history, outside
+def load_history(thread: dict[str, Any]) -> list[Any]:
+    """The model's history for a thread; empty for a new one."""
+    return _load(thread.get("model_history"))
 
 
 async def record_user_message(
@@ -207,10 +154,9 @@ async def record_user_message(
     text: str,
     statements: list[dict[str, str]] | None = None,
     photos: list[dict[str, str]] | None = None,
-    quote: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Store the user's message at the start, so a reload mid-reply keeps it."""
-    safe = redact_text(text)
+    safe = text
     parts: list[dict[str, Any]] = []
     if safe:
         parts.append({"type": "text", "text": safe})
@@ -239,12 +185,6 @@ async def record_user_message(
         "role": "user",
         "parts": parts,
     }
-    if quote:
-        content["metadata"] = {
-            "custom": {
-                "quote": {"text": quote["text"], "messageId": quote["messageId"]},
-            }
-        }
     row = await conn.fetchrow(
         """
         INSERT INTO messages (conversation_id, client_id, role, content, body_text)
@@ -276,105 +216,107 @@ async def mark_run_started(conn: Connection, thread_id: str, run_id: str) -> Non
 
 
 def _body_text(message: dict[str, Any]) -> str:
-    parts = message.get("parts") or []
-    texts = [
-        str(part.get("text", ""))
-        for part in parts
-        if isinstance(part, dict) and part.get("type") == "text"
-    ]
-    # A blank line between two text parts: one newline renders them as one smashed sentence.
-    return join_text(texts)
+    """The message's words, a blank line between text parts so none run together."""
+    texts = (
+        str(part.get("text", "")).strip()
+        for part in message.get("parts") or []
+        if part.get("type") == "text"
+    )
+    return "\n\n".join(text for text in texts if text)
 
 
-def join_text(parts: list[str]) -> str:
-    """Two text parts in a row are two paragraphs, never one smashed sentence ("done.Next")."""
-    return "\n\n".join(part.strip() for part in parts if part.strip())
+def _transcript_view(messages: list[Any]) -> list[Any]:
+    """The turn's messages as the transcript should show them.
 
-
-def merge_text_parts(parts: list[Any]) -> list[Any]:
-    """Collapse adjacent text parts of one message into one, separated by a blank line."""
-    merged: list[Any] = []
-    for part in parts:
-        previous = merged[-1] if merged else None
-        if (
-            isinstance(part, dict)
-            and part.get("type") == "text"
-            and isinstance(previous, dict)
-            and previous.get("type") == "text"
-        ):
-            merged[-1] = {
-                **previous,
-                "text": join_text([str(previous.get("text", "")), str(part.get("text", ""))]),
-            }
-            continue
-        merged.append(part)
-    return merged
-
-
-def paragraphs(message: Any) -> Any:
-    """One text part per response, its paragraphs a blank line apart.
-
-    `dump_messages` joins consecutive text parts of a response with nothing between them, so
-    "…done." and "Next…" used to reach the transcript as "…done.Next…".
+    `dump_messages` runs a response's consecutive text parts together ("done.Next"), so they get a
+    blank line between them first. A response whose tool call came back as a retry was a draft
+    that talked about data it never got, so its words are dropped and only the answer survives.
     """
-    from pydantic_ai.messages import ModelResponse, TextPart
-
-    if not isinstance(message, ModelResponse):
-        return message
-    parts: list[Any] = []
-    for part in message.parts:
-        previous = parts[-1] if parts else None
-        if isinstance(part, TextPart) and isinstance(previous, TextPart):
-            parts[-1] = replace(previous, content=join_text([previous.content, part.content]))
-            continue
-        parts.append(part)
-    if len(parts) == len(message.parts):
-        return message
-    return replace(message, parts=parts)
-
-
-def _retried_calls(messages: list[Any]) -> set[str]:
-    """The tool calls the model had to redo, so the attempt that made them was abandoned."""
-    from pydantic_ai.messages import ModelRequest, ToolReturnPart
-
-    retried: set[str] = set()
-    for message in messages:
-        if not isinstance(message, ModelRequest):
-            continue
-        for part in message.parts:
-            # A retry that answers a tool call is that call's own return, marked retried. The
-            # deprecated `RetryPromptPart` a stored transcript still holds loads as one.
-            if isinstance(part, ToolReturnPart) and part.outcome == "retried":
-                retried.add(str(part.tool_call_id))
-    return retried
-
-
-def without_retried_text(messages: list[Any]) -> list[Any]:
-    """The transcript's words are the answer, not the attempt it abandoned.
-
-    A response whose tool call came back as a retry was a draft: its text said what the model was
-    about to do with data it never got. Only the response that answers survives, so a retried
-    answer cannot read as two versions of one reply.
-    """
-    from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
-
-    retried = _retried_calls(messages)
-    if not retried:
-        return messages
-    kept: list[Any] = []
+    retried = {
+        str(part.tool_call_id)
+        for message in messages
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, ToolReturnPart) and part.outcome == "retried"
+    }
+    view: list[Any] = []
     for message in messages:
         if not isinstance(message, ModelResponse):
-            kept.append(message)
+            view.append(message)
             continue
-        if not any(
-            isinstance(part, ToolCallPart) and str(part.tool_call_id) in retried
-            for part in message.parts
-        ):
-            kept.append(message)
-            continue
-        parts = [part for part in message.parts if not isinstance(part, TextPart)]
-        kept.append(replace(message, parts=parts) if parts else message)
-    return kept
+        draft = any(str(call.tool_call_id) in retried for call in message.tool_calls)
+        parts: list[Any] = []
+        for part in message.parts:
+            if isinstance(part, TextPart):
+                if draft:
+                    continue
+                if parts and isinstance(parts[-1], TextPart):
+                    joined = f"{parts[-1].content.strip()}\n\n{part.content.strip()}"
+                    parts[-1] = replace(parts[-1], content=joined)
+                    continue
+            parts.append(part)
+        view.append(replace(message, parts=parts) if parts else message)
+    return view
+
+
+def _answers_to_earlier_calls(turn_messages: list[Any]) -> list[ToolReturnPart]:
+    """The tool results this turn holds for calls an earlier reply made: a resumed confirm card."""
+    own = {
+        call.tool_call_id
+        for message in turn_messages
+        if isinstance(message, ModelResponse)
+        for call in message.tool_calls
+    }
+    return [
+        part
+        for message in turn_messages
+        if isinstance(message, ModelRequest)
+        for part in message.parts
+        if isinstance(part, ToolReturnPart) and part.tool_call_id not in own
+    ]
+
+
+async def _settle_answered_cards(
+    conn: Connection,
+    thread_id: str,
+    history: list[Any],
+    turn_messages: list[Any],
+    answers: list[ToolReturnPart],
+) -> None:
+    """Settle the confirm cards this turn answered, on the replies that offered them.
+
+    A resumed run carries only the tool result; its call lives in an earlier reply that is still
+    saved as waiting. The transcript of history plus this turn has both, so the waiting part is
+    replaced by the settled one.
+    """
+    answered = {part.tool_call_id for part in answers}
+    if not answered:
+        return
+    settled = {
+        part["toolCallId"]: part
+        for message in ui_messages(_transcript_view([*history, *turn_messages]))
+        for part in message.get("parts", [])
+        if part.get("toolCallId") in answered and part.get("state") != "approval-requested"
+    }
+    rows = await conn.fetch(
+        "SELECT id, content FROM messages WHERE conversation_id = $1 AND role = 'assistant'",
+        thread_id,
+    )
+    for row in rows:
+        content = row["content"]
+        parts = content.get("parts", [])
+        fresh = [
+            settled.get(part.get("toolCallId"), part)
+            if part.get("state") == "approval-requested"
+            else part
+            for part in parts
+        ]
+        if fresh != parts:
+            await conn.execute(
+                "UPDATE messages SET content = $1 WHERE id = $2",
+                {**content, "parts": fresh},
+                row["id"],
+            )
 
 
 async def save_records(
@@ -382,185 +324,92 @@ async def save_records(
     *,
     thread_id: str,
     run_id: str,
-    ui_message_id: str,
     history: list[Any],
     turn_messages: list[Any],
     ending: str,
     trace_id: str | None = None,
-    number_flags: list[str] | None = None,
     model_badge: str | None = None,
     reply_model: str | None = None,
     reply_fallback: bool = False,
     save_note: str | None = None,
     title: str | None = None,
     all_messages: list[Any] | None = None,
-    extra_cards: list[dict[str, Any]] | None = None,
     reply_id: str | None = None,
 ) -> dict[str, Any]:
     """Write both records in one transaction and clear the running marker.
 
-    `reply_id` is the id the stream already gave the browser; the reply is saved under it.
+    The user's own message is stored when the turn starts and is never rewritten. `reply_id` is
+    the id the stream already gave the browser; the reply is saved under it.
     """
-    from arno.agent.cards import attach_to_last_assistant, ui_messages, with_data
-
-    history_json_messages = all_messages if all_messages is not None else [*history, *turn_messages]
-    ui = ui_messages([paragraphs(message) for message in without_retried_text(turn_messages)])
-    for message in ui:
-        if message.get("role") == "assistant":
-            # The transcript renders each text part on its own; two in a row must be separated.
-            message["parts"] = merge_text_parts(list(message.get("parts") or []))
     run_started_at = await conn.fetchval(
         "SELECT run_started_at FROM conversations WHERE id = $1", thread_id
     )
-
-    stored = await conn.fetchrow(
-        "SELECT content, body_text FROM messages WHERE client_id = $1 AND conversation_id = $2",
-        ui_message_id,
-        thread_id,
-    )
-    stored_content = (stored["content"] if stored is not None else None) or {}
-    attachments = [
-        part
-        for part in stored_content.get("parts", [])
-        if isinstance(part, dict) and part.get("type") in {"data-statement", "data-photo"}
+    ui = [
+        message
+        for message in ui_messages(_transcript_view(turn_messages))
+        if message.get("role") == "assistant"
     ]
-    stored_metadata = stored_content.get("metadata")
-
-    def apply_user(message: dict[str, Any]) -> None:
-        # The model sees the quote block; the transcript keeps the question the user typed.
-        text = str(stored["body_text"] or "") if stored is not None else _body_text(message)
-        safe = redact_text(text)
-        message["parts"] = ([{"type": "text", "text": safe}] if safe else []) + attachments
-        if stored_metadata:
-            message["metadata"] = {**(message.get("metadata") or {}), **stored_metadata}
-
-    for message in ui:
-        if message.get("role") == "user" and message.get("id") == ui_message_id:
-            apply_user(message)
-            break
-    else:
-        for message in ui:
-            if message.get("role") == "user":
-                message["id"] = ui_message_id
-                apply_user(message)
-                break
-
-    extra = keep_last_answer(cards_from_messages(turn_messages))
-    ui = attach_to_last_assistant(ui, extra)
-    last_assistant = next(
-        (message for message in reversed(ui) if message.get("role") == "assistant"), None
-    )
-    if last_assistant is None and (save_note or extra_cards or ending in {"failed", "cancelled"}):
-        parts: list[Any] = []
-        blank: dict[str, Any] = {
-            "id": await new_id(conn, "msg"),
-            "role": "assistant",
-            "parts": parts,
-        }
-        last_assistant = blank
-        ui.append(blank)
-    if last_assistant is not None:
+    # The dump carries a tool's own card with its call. A resumed turn holds the result alone, so
+    # its card, and the cards a script nested in its return, come from the stored returns.
+    answers = _answers_to_earlier_calls(turn_messages)
+    cards = [
+        *cards_from_messages(turn_messages),
+        *cards_for_transcript([ModelRequest(parts=[part]) for part in answers]),
+    ]
+    ui = attach_to_last_assistant(ui, keep_last_answer(cards))
+    reply: dict[str, Any] | None = ui[-1] if ui else None
+    if reply is None and (save_note or ending in {"failed", "cancelled"}):
+        reply = {"id": await new_id(conn, "msg"), "role": "assistant", "parts": []}
+        ui.append(reply)
+    if reply is not None:
         if reply_id:
-            last_assistant["id"] = reply_id
-        if extra_cards:
-            existing = {
-                json.dumps(part.get("data"), sort_keys=True, default=str)
-                for part in last_assistant.get("parts", [])
-                if isinstance(part, dict) and part.get("type") == "data-card"
-            }
-            existing_imports = {
-                str(part.get("data", {}).get("import_id"))
-                for part in last_assistant.get("parts", [])
-                if isinstance(part, dict)
-                and part.get("type") == "data-card"
-                and isinstance(part.get("data"), dict)
-                and part.get("data", {}).get("card") == "import"
-            }
-            for card in extra_cards:
-                key = json.dumps(card, sort_keys=True, default=str)
-                import_id = str(card.get("import_id")) if card.get("card") == "import" else ""
-                if key in existing or (import_id and import_id in existing_imports):
-                    continue
-                with_data(last_assistant, "data-card", card)
-                existing.add(key)
-                if import_id:
-                    existing_imports.add(import_id)
-
-        if number_flags:
-            with_data(last_assistant, "data-number-flags", {"amounts": number_flags})
+            reply["id"] = reply_id
         if model_badge:
-            with_data(last_assistant, "data-model-badge", {"model": model_badge})
+            with_data(reply, "data-model-badge", {"model": model_badge})
         if reply_model:
-            with_data(
-                last_assistant,
-                "data-reply-model",
-                {"model": reply_model, "fallback": reply_fallback},
-            )
+            with_data(reply, "data-reply-model", {"model": reply_model, "fallback": reply_fallback})
         if save_note:
-            with_data(last_assistant, "data-ending", {"note": save_note})
+            with_data(reply, "data-ending", {"note": save_note})
         if ending == "cancelled":
-            with_data(last_assistant, "data-ending", {"note": "Stopped."})
+            with_data(reply, "data-ending", {"note": "Stopped."})
         if trace_id:
-            last_assistant["trace_id"] = trace_id
-
-    if last_assistant is not None:
+            reply["trace_id"] = trace_id
         timing = run_timing(
             turn_messages,
             started_at=run_started_at,
             # A finished run ends at its last response; a stopped or failed one ends now.
             finished_at=None if ending == "complete" else datetime.now(UTC),
         )
-        stored_metadata = last_assistant.get("metadata")
-        metadata: dict[str, Any] = stored_metadata if isinstance(stored_metadata, dict) else {}
-        last_assistant["metadata"] = metadata
+        metadata: dict[str, Any] = reply.get("metadata") or {}
+        reply["metadata"] = metadata
         if timing is not None:
-            timing["toolCallCount"] = sum(
-                1
-                for part in last_assistant.get("parts", [])
-                if isinstance(part, dict) and str(part.get("type", "")).startswith("tool-")
-            )
-            metadata["timing"] = {**timing, "totalChunks": 0}
+            tools = sum(str(part.get("type", "")).startswith("tool-") for part in reply["parts"])
+            metadata["timing"] = {**timing, "toolCallCount": tools, "totalChunks": 0}
         metadata.setdefault("custom", {})["runStatus"] = RUN_STATUS.get(ending, "incomplete")
 
     inserted: list[str] = []
     for message in ui:
-        client_id = str(message.get("id") or "")
-        if not client_id:
-            client_id = await new_id(conn, "msg")
-            message["id"] = client_id
-        role = str(message.get("role") or "assistant")
-        body = _body_text(message)
-        if role == "user":
-            await conn.execute(
-                """
-                UPDATE messages SET content = $1, body_text = $2
-                WHERE client_id = $3 AND conversation_id = $4
-                """,
-                message,
-                body,
-                client_id,
-                thread_id,
-            )
-            continue
+        client_id = str(message.get("id") or "") or await new_id(conn, "msg")
+        message["id"] = client_id
         row = await conn.fetchrow(
             """
             INSERT INTO messages
                 (conversation_id, client_id, role, content, body_text, run_id, trace_id)
-            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            VALUES ($1, $2, 'assistant', $3, $4, $5, $6)
             ON CONFLICT (client_id) DO NOTHING
             RETURNING id
             """,
             thread_id,
             client_id,
-            role,
             message,
-            body,
+            _body_text(message),
             run_id,
-            trace_id if message is last_assistant else None,
+            trace_id if message is reply else None,
         )
         if row:
             inserted.append(str(row["id"]))
 
+    await _settle_answered_cards(conn, thread_id, history, turn_messages, answers)
     await conn.execute(
         """
         UPDATE conversations
@@ -571,7 +420,7 @@ async def save_records(
             title = coalesce(title, $2)
         WHERE id = $3
         """,
-        _dump(history_json_messages),
+        _dump(all_messages if all_messages is not None else [*history, *turn_messages]),
         title,
         thread_id,
     )
@@ -632,15 +481,12 @@ async def recover_crashed_runs(conn: Connection) -> list[dict[str, Any]]:
 
 
 __all__ = [
-    "build_snapshot_history",
     "create_thread",
-    "ensure_history",
+    "load_history",
     "get_thread",
     "mark_run_started",
     "recover_crashed_runs",
     "record_user_message",
     "save_records",
-    "snapshot_payload",
     "title_for",
-    "ledger_today",
 ]

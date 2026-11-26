@@ -7,19 +7,9 @@ card stated "in credit" is one write with the right sign.
 
 from __future__ import annotations
 
-import calendar
-from datetime import date, timedelta
-
 import pytest
 
-from arno.engine.money import money
-from arno.ledger import payees as payees_mod
 from arno.ledger.accounts import create_account, get_account
-from arno.ledger.common import has_known_balance
-from arno.ledger.common import today as ledger_today
-from arno.ledger.movements import record_split
-from arno.ledger.schedules import create_schedule, expand_schedule
-from arno.tools import read as read_tools
 from arno.tools import write as write_tools
 
 
@@ -32,59 +22,6 @@ async def _bank(conn, name: str = "Audit bank", opening: int = 10_000_000) -> di
 
 
 # 1. A person's balance is the ledger's own receivable -------------------------------------------
-
-
-async def test_a_person_accounts_balance_is_known_by_construction(ledger):
-    person = await payees_mod.create_payee(ledger, display_name="Asha", kind="person")
-    row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", person["person_account_id"])
-    assert has_known_balance(row) is True
-
-    context = await read_tools.get_financial_context(ledger)
-    shown = _context_account(context, person["person_account_id"])
-    assert shown["known"] is True
-    assert shown["balance"] == money(0)
-    assert shown["outstanding"] is None
-    assert "an account has no stated balance" not in context["setup_gaps"]
-    assert not any("no stated balance" in warning for warning in context["warnings"])
-
-    # What she owes you is the ledger's number, and it is exact as of the day it moved.
-    bank = await _bank(ledger)
-    await record_split(
-        ledger,
-        account_id=bank["id"],
-        my_share_paise=20_000,
-        people=[{"payee_id": person["id"], "amount_paise": 40_000}],
-        total_paise=60_000,
-        description="Dinner at Barbeque Nation",
-        date=ledger_today() - timedelta(days=3),
-    )
-    context = await read_tools.get_financial_context(ledger)
-    shown = _context_account(context, person["person_account_id"])
-    assert shown["known"] is True
-    assert shown["balance"] == money(40_000)
-    assert shown["as_of"] == (ledger_today() - timedelta(days=3)).isoformat()
-    assert shown["age_days"] == 3
-
-
-async def test_the_seeded_persona_has_no_false_missing_balance_gap(demo_ledger):
-    """r2 F1: the demo persona's people made "no stated balance" stand for five accounts that are
-    anchored at zero. Only the card, whose debt really is unknown, may still be."""
-    unknown_people = await demo_ledger.fetchval(
-        "SELECT count(*) FROM accounts "
-        "WHERE kind = 'person' AND active AND statement_balance_paise IS NULL"
-    )
-    assert unknown_people > 0
-
-    context = await read_tools.get_financial_context(demo_ledger)
-
-    people = [item for item in context["accounts"] if item["kind"] == "person"]
-    assert people
-    for person in people:
-        assert person["known"] is True
-        assert person["balance"] is not None
-        assert f"{person['name']} has no stated balance" not in context["warnings"]
-    unknown = [item["name"] for item in context["accounts"] if not item["known"]]
-    assert unknown == ["Slice card"]
 
 
 # 2. A payee that names nobody is never created --------------------------------------------------
@@ -201,91 +138,7 @@ async def test_a_correction_refuses_a_placeholder_payee(ledger):
 # 3. The weekday a date falls on comes from the tool, never from the model -----------------------
 
 
-async def test_schedule_and_upcoming_dates_carry_their_weekday(ledger):
-    bank = await _bank(ledger)
-    schedule = await create_schedule(
-        ledger,
-        kind="obligation",
-        subtype="rent",
-        name="Flat rent",
-        amount_paise=2_800_000,
-        account_id=bank["id"],
-        rule="FREQ=MONTHLY;BYMONTHDAY=5",
-        starts=date(2025, 1, 5),
-        holiday_adjust="none",
-    )
-
-    # A date this project has already had to explain: 5 Nov 2026 is a Thursday.
-    row = await ledger.fetchrow("SELECT * FROM schedules WHERE id = $1", schedule["id"])
-    events = await expand_schedule(ledger, row, date(2026, 11, 1), date(2026, 11, 30))
-    assert [(event["date"], event["weekday"]) for event in events] == [("2026-11-05", "Thursday")]
-
-    context = await read_tools.get_financial_context(ledger)
-    shown = next(item for item in context["schedules"] if item["id"] == schedule["id"])
-    dates = shown["next_dates"]
-    assert len(dates) == 4
-    for entry in dates:
-        assert set(entry) == {"date", "weekday"}
-        assert entry["weekday"] == calendar.day_name[date.fromisoformat(entry["date"]).weekday()]
-    assert all(entry["date"].endswith("-05") for entry in dates)
-
-    upcoming = [event for event in context["upcoming"] if event["schedule_id"] == schedule["id"]]
-    assert upcoming
-    for event in upcoming:
-        assert event["weekday"] == calendar.day_name[date.fromisoformat(event["date"]).weekday()]
-
-
 # 4. The context names every open import, so the agent can read before it says -------------------
-
-
-async def test_the_context_lists_open_imports_and_nothing_else(ledger):
-    bank = await _bank(ledger)
-    await ledger.execute(
-        """
-        INSERT INTO imports (id, file_hash, status, account_id, period_start, period_end,
-                             check_result, check_status, counts)
-        VALUES ('imp_review', 'h1', 'review', $1, '2026-10-01', '2026-10-31',
-                '{}'::jsonb, 'VERIFIED', '{"new": 2, "certain": 1}'::jsonb)
-        """,
-        bank["id"],
-    )
-    await ledger.execute(
-        "INSERT INTO imports (id, file_hash, status, reason) "
-        "VALUES ('imp_failed', 'h2', 'failed', 'could not open the file: corrupt')"
-    )
-    for status in ("committed", "rejected"):
-        await ledger.execute(
-            "INSERT INTO imports (id, file_hash, status) VALUES ($1, $2, $3)",
-            f"imp_{status}",
-            f"h-{status}",
-            status,
-        )
-    for line_id in ("stl_a", "stl_b", "stl_c"):
-        await ledger.execute(
-            """
-            INSERT INTO statement_lines (id, import_id, date, description_raw, amount_paise,
-                                         content_hash)
-            VALUES ($1, 'imp_review', '2026-10-02', 'UPI/DR/SHOP', -1000, $1)
-            """,
-            line_id,
-        )
-
-    context = await read_tools.get_financial_context(ledger)
-    items = {item["id"]: item for item in context["imports"]}
-
-    assert set(items) == {"imp_review", "imp_failed"}
-    review = items["imp_review"]
-    assert review["status"] == "review"
-    assert review["account"] == bank["name"]
-    assert review["period"] == {"start": "2026-10-01", "end": "2026-10-31"}
-    assert review["lines"] == 3
-    assert review["counts"] == {"new": 2, "certain": 1}
-    assert review["check"] == "VERIFIED"
-    failed = items["imp_failed"]
-    assert failed["status"] == "failed"
-    assert failed["account"] is None
-    assert failed["period"] is None
-    assert failed["lines"] == 0
 
 
 # 5. A card stated "in credit" is one write with the sign the ledger means -----------------------

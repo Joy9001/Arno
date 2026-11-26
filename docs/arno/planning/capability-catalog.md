@@ -119,8 +119,9 @@ external findings distinct from personal ledger records.
   and number provenance over native spend budgets. Candidate backends—Pydantic AI
   `WebSearch(local=True)` / `WebFetch(local=True)` versus MCP research servers such as Tavily or
   Exa ([T02–T03](#external-tool-registry))—must be scored on the same 20 Indian official-source
-  questions for source quality, dates, cost, and failure handling. Search must execute inside Arno
-  so `number_check` traces returned figures; provider-executed search is invisible to it.
+  questions for source quality, dates, cost, and failure handling. Search that executes inside Arno
+  returns traceable results; provider-executed search is invisible to Arno's own tools. The agent
+  already searches through the model's native tool or Brave ([`specs/tools.md`](../specs/tools.md#web_search)).
 - **Acceptance criteria:** Answers cite passages and effective periods (marking unknown dates
   explicitly); source records survive restore; private data never enters queries or URLs and
   private-IP fetches or unsafe redirects are blocked; retrieval failures or injection never cause
@@ -190,7 +191,7 @@ before commit.
   control intact.
 - **Enabling shape:** Scheduled job using Python's `imaplib` or provider API
   ([T13](#external-tool-registry)) with host-held credentials, keeping only matching attachments.
-  Email metadata and bodies are marked as outside text; outbound network access invokes external
+  Email metadata and bodies are untrusted data; outbound network access invokes external
   capability rules.
 - **Acceptance criteria:** Reads only the configured folder or senders and never sends mail;
   deduplicates attachments by content hash; keeps credentials out of model context, logs, and
@@ -341,10 +342,10 @@ these rules, with any scope change recorded in [`plan.md`](../plan.md) first:
   [egress proxy](parked.md#egress-proxy) review.
 - **No bank APIs:** Direct bank or broker aggregation (including broker MCPs) remains excluded
   until a specific route is approved in `plan.md` §2.
-- **Outside text:** Web pages, MCP tool returns, and emails are untrusted data. Marking them as
-  outside text engages `plan.md` §4 rule 2, requiring confirm cards for lasting or wide writes.
-- **Number provenance:** External figures must arrive through Arno-executed tool returns so
-  `number_check` traces them; provider-side search is not traced.
+- **Outside text:** Web pages, MCP tool returns, and emails are untrusted data. `plan.md` §4 rule 2
+  still requires confirm cards for wide writes.
+- **Number provenance:** External figures must arrive through Arno-executed tool returns so the agent
+  can cite them; provider-side search is not traced.
 - **Credentials:** No password, OTP, or API token ever enters chat (`AGENTS.md` architecture rule
   6). Host secrets stay in environment variables or host-only storage.
 - **Advice boundary and shared gates:** Every changed boundary adds eval cases. New dependencies
@@ -364,10 +365,10 @@ The following table maps external tool areas to researched candidates and constr
 
 | ID | Area | Candidates and interfaces | Role and key constraint |
 |---|---|---|---|
-| T02 | External research | Pydantic AI `WebSearch(local=True)` / `WebFetch(local=True)`, `ddgs`, Exa/You.com harness capabilities, Brave/Parallel APIs | C17. Benchmark local built-ins against MCP servers on 20 Indian official-source questions; execute inside Arno so returns are traced and marked. |
+| T02 | External research | Pydantic AI `WebSearch(local=True)` / `WebFetch(local=True)`, `ddgs`, Exa/You.com harness capabilities, Brave/Parallel APIs | C17. Benchmark local built-ins against MCP servers on 20 Indian official-source questions; execute inside Arno so returns are traced. |
 | T03 | External MCP servers | Research: Tavily, Exa, Parallel, Brave Search. Brokers (after CAS): Kite (`get_holdings`, `get_mf_holdings`, `get_quotes`), Upstox, Groww | C05, C12, C13, C15, C17, C19. Connect read-only tools via `MCPToolset` with host-held auth and client-side write blocks; see [MCP assessment](../../research/personal-finance-agent-2026/external-mcp-servers.md) and [India evidence](../../research/personal-finance-agent-2026/external-mcp-india.md). |
 | T04 | Document reading | Existing PDFium/Calamine/vision readers; optional Docling (`DocumentConverter`, MIT code with separate model licenses) | C05, C34. Benchmark synthetic corrupted and adversarial layouts before adding OCR or layout dependencies; no identity-based password guessing. |
-| T05 | Financial calculations | Bracketed-bisection XIRR (no dependency) or `pyxirr` (Unlicense, host wrapper) | C13. Handle non-convergence and multiple roots explicitly; never import third-party packages inside Monty. |
+| T05 | Financial calculations | Bracketed-bisection XIRR (no dependency) or `pyxirr` (Unlicense, host wrapper) | C13. Handle non-convergence and multiple roots explicitly; never import third-party packages into the sandbox without adding them to its image. |
 | T06 | Holdings and valuations | `casparser` (`read_cas_pdf`, MIT) and AMFI daily NAV history | C12. Verify transitive licenses and AMFI terms of use; preserve decimal unit quantities; NAV dates never refresh stale ownership evidence. |
 | T07 | Account access | RBI Account Aggregator (FIU-regulated only; Sahamati) and broker OAuth (for example, Kite Connect v3) | C12, C19. Unregulated self-hosters do not qualify as direct AA FIUs; broker tokens stay host-held and read-scoped. |
 | T08 | Spreadsheets and cloud handoff | Shipped XlsxWriter workbook; optional Google Sheets API or Microsoft Graph Excel (business storage only) | Optional cloud export beyond shipped `.xlsx`. Require explicit destination and user consent; always write verified cached formula values. |

@@ -6,7 +6,7 @@ import calendar
 from datetime import date
 
 from arno.ledger.accounts import create_account
-from arno.tools.read import coverage
+from arno.tools.recaps import coverage
 from tests.fixtures.synthetic_statements import seed_committed_statement
 
 

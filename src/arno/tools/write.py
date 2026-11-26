@@ -10,7 +10,9 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import date
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
-from typing import Any
+from typing import Annotated, Any, Literal
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from arno import scheduled_questions as questions_mod
 from arno.db.conn import Connection, quote_ident
@@ -27,17 +29,392 @@ from arno.ledger import schedules as schedules_mod
 from arno.ledger import settings as settings_mod
 from arno.ledger.audit import undo_group, undo_latest, write_group
 from arno.ledger.common import today as ledger_today
-from arno.ledger.errors import InvalidLedgerError, LedgerError
-from arno.tools.mark import mark
-from arno.tools.money import (
-    ToolInputError,
-)
-from arno.tools.money import (
-    monthly_percent_to_annual_bps as _monthly_percent_to_annual_bps,
-)
-from arno.tools.money import (
-    percent_to_bps as _percent_to_bps,
-)
+from arno.ledger.errors import InvalidLedgerError, LedgerError, NotFoundLedgerError
+
+
+class ToolInputError(ValueError):
+    """A message the model can act on, delivered as ModelRetry by the wrapper."""
+
+
+def _finite_decimal(value: Any, field: str) -> Decimal:
+    if isinstance(value, bool):
+        raise ToolInputError(f"{field} must be a number")
+    try:
+        dec = Decimal(str(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise ToolInputError(f"{field} must be a number") from exc
+    if not dec.is_finite():
+        raise ToolInputError(f"{field} must be a finite number")
+    return dec
+
+
+def _percent_to_bps(value: Any) -> int:
+    """An annual percent as integer basis points, rounded half up like every other amount."""
+    dec = _finite_decimal(value, "rate")
+    return int((dec * 100).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+
+
+def _monthly_percent_to_annual_bps(value: Any) -> int:
+    """An issuer's monthly percent as annual basis points: 3.5% a month is 4,200 a year."""
+    return _percent_to_bps(_finite_decimal(value, "monthly_rate_percent") * 12)
+
+
+Date = date
+
+
+class WriteModel(BaseModel):
+    """Typed write arguments the model sees; a misspelled field fails instead of doing nothing."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class _MovementBase(WriteModel):
+    date: Date | None = None
+    note: str | None = None
+    description: str | None = None
+    upi_id: str | None = None
+    upi_ref: str | None = Field(
+        default=None,
+        max_length=40,
+        description="UPI reference number or UTR if visible on a receipt or screenshot.",
+    )
+    attachment_id: str | None = Field(
+        default=None,
+        max_length=100,
+        description="Photo attachment ID (att_...) this movement came from, if any.",
+    )
+
+
+class Expense(_MovementBase):
+    kind: Literal["expense"]
+    amount_rupees: Decimal
+    payee: str | None = Field(
+        default=None,
+        description=(
+            "The shop or person they named. Leave it out when they named none; never invent a "
+            "placeholder."
+        ),
+    )
+    account: str | None = None
+    category: str | None = Field(default=None, description="Only if the user named one.")
+    category_guess: str | None = Field(default=None, description="Best guess otherwise.")
+
+
+class Income(_MovementBase):
+    kind: Literal["income"]
+    amount_rupees: Decimal
+    payee: str | None = None
+    account: str | None = None
+
+
+class Transfer(_MovementBase):
+    kind: Literal["transfer"]
+    amount_rupees: Decimal
+    from_account: str
+    to_account: str
+
+
+class SplitPerson(WriteModel):
+    name: str
+    amount_rupees: Decimal
+    expected_date: Date | None = Field(default=None, description="When they will pay, if known.")
+
+
+class Split(_MovementBase):
+    kind: Literal["split"]
+    total_rupees: Decimal
+    my_share_rupees: Decimal
+    people: list[SplitPerson] = Field(min_length=1)
+    payee: str | None = None
+    account: str | None = None
+    category: str | None = Field(default=None, description="Only if the user named one.")
+    category_guess: str | None = Field(default=None, description="Best guess otherwise.")
+
+
+class LoanPayment(_MovementBase):
+    kind: Literal["loan"]
+    amount_rupees: Decimal
+    loan: str
+    account: str | None = None
+
+
+class Refund(_MovementBase):
+    kind: Literal["refund"]
+    amount_rupees: Decimal
+    payee: str
+    account: str | None = None
+    category: str | None = None
+
+
+class Settlement(_MovementBase):
+    kind: Literal["settlement"]
+    amount_rupees: Decimal
+    person: str = Field(
+        description=(
+            "The person on the other side of a debt already in the ledger: a split share or a "
+            "loan. Money spent on goods or a service is an expense, not a settlement."
+        )
+    )
+    direction: Literal["they_paid", "i_paid"] = Field(
+        default="they_paid", description="Who paid whom."
+    )
+    account: str | None = None
+    expected_date: Date | None = None
+
+
+Movement = Annotated[
+    Expense | Income | Transfer | Split | LoanPayment | Refund | Settlement,
+    Field(discriminator="kind"),
+]
+
+
+class ShareChange(WriteModel):
+    name: str = Field(description="A person already on the split, by name.")
+    amount_rupees: Decimal
+
+
+class SchedulePaymentChange(WriteModel):
+    """Match this movement to one schedule occurrence, or remove that match. Never records money."""
+
+    schedule: str = Field(description="Schedule name or ID.")
+    due_date: Date = Field(description="The occurrence's holiday-adjusted ISO due date.")
+    action: Literal["link", "unlink"] = "link"
+    amount_rupees: Decimal | None = Field(
+        default=None, description="A partial payment; omit to use the movement's remaining amount."
+    )
+
+
+class MovementChanges(WriteModel):
+    """Changes for `correct_movement`. Omit a field to leave it alone."""
+
+    category: str | None = Field(default=None, description="New category name.")
+    payee: str | None = Field(default=None, description="New payee name.")
+    note: str | None = Field(default=None, description="New note.")
+    expected_date: Date | None = Field(default=None, description="New expected date.")
+    one_off: bool | None = Field(
+        default=None,
+        description=(
+            "true for a payment that won't recur, such as a medical bill or an appliance, so "
+            "the projection stops expecting it again"
+        ),
+    )
+    date: Date | None = Field(default=None, description="New movement date.")
+    amount_rupees: Decimal | None = Field(default=None, description="New amount in rupees.")
+    my_share_rupees: Decimal | None = Field(
+        default=None,
+        description="A split's new share of mine. Name each person's share too.",
+    )
+    shares: list[ShareChange] | None = Field(
+        default=None,
+        description=(
+            "A split's new share for each person on it. Leave out only when the split was equal "
+            "and the new total is split equally."
+        ),
+    )
+    account: str | None = Field(default=None, description="New account name.")
+    delete: bool = Field(default=False, description="Delete by appending a reversal.")
+    schedule_payment: SchedulePaymentChange | None = Field(
+        default=None,
+        description=(
+            "Match this movement to a schedule occurrence (or unmatch it) instead of changing "
+            "it. A match must be due within 31 days after the movement's date. Pass it alone."
+        ),
+    )
+
+
+class AccountSetup(WriteModel):
+    """An account add or a partial update.
+
+    On add, `name` is required. A card also needs `credit_limit_rupees`, `statement_day`, and
+    `due_day`. On update, pass only the fields that change.
+    """
+
+    name: str | None = Field(
+        default=None, description="Required to add; on update, the existing account's name."
+    )
+    new_name: str | None = None
+    kind: Literal["bank", "card", "cash", "wallet", "loan", "asset"] | None = Field(
+        default=None, description="Required to add; defaults to bank."
+    )
+    institution: str | None = None
+    last4: str | None = Field(default=None, description="Optional; last four digits only.")
+    opening_balance_rupees: Decimal | None = Field(
+        default=None,
+        description=(
+            "Only a balance the user states, on add; omit it if unknown. For a card, what they "
+            "owe (negative when the card is in credit); for a loan, the amount still owed."
+        ),
+    )
+    as_of: Date | None = None
+    liquid: bool | None = None
+    credit_limit_rupees: Decimal | None = Field(
+        default=None,
+        description="Card only, required on add: the positive limit in rupees. Never guess it.",
+    )
+    statement_day: int | None = Field(
+        default=None, description="Card only, required on add: statement day, 1-31."
+    )
+    due_day: int | None = Field(
+        default=None, description="Card only, required on add: due day, 1-31."
+    )
+    emi_rate_percent: Decimal | None = Field(
+        default=None,
+        ge=Decimal("0"),
+        le=Decimal("100"),
+        description=(
+            "Card only, when the offer states it: the EMI's annual interest rate in percent. "
+            "Leave it out rather than guessing."
+        ),
+    )
+    emi_fee_paise: int | None = Field(
+        default=None,
+        ge=0,
+        description="Card only, when stated: the EMI's processing fee in paise.",
+    )
+    finance_rate_percent: Decimal | None = Field(
+        default=None,
+        ge=Decimal("0"),
+        le=Decimal("8.33"),
+        description=(
+            "Card only, when the issuer states it: the card's finance charge in percent a month, "
+            "as the issuer states it (3.5 means 3.5% a month, at most 8.33% a month). Leave it "
+            "out rather than guessing."
+        ),
+    )
+    min_due_percent: Decimal | None = Field(
+        default=None,
+        ge=Decimal("0"),
+        le=Decimal("100"),
+        description=(
+            "Card only, when the issuer states it: the minimum due in percent of the statement "
+            "balance (5 means 5%)."
+        ),
+    )
+    min_due_floor_paise: int | None = Field(
+        default=None,
+        ge=0,
+        description="Card only, when stated: the minimum-due floor in paise.",
+    )
+    rate_percent: Decimal | None = None
+    tenure_months: int | None = None
+    active: bool | None = None
+
+
+class BalanceSetup(WriteModel):
+    account: str
+    balance_rupees: Decimal = Field(
+        description=(
+            "The stated balance in rupees. For a card, what they owe: positive when they owe, "
+            "negative when the card is in credit. For a loan, the amount still owed (positive)."
+        )
+    )
+    as_of: Date | None = None
+
+
+class ScheduleSetup(WriteModel):
+    name: str | None = None
+    new_name: str | None = None
+    kind: (
+        Literal[
+            "income_fixed",
+            "income_variable",
+            "income_oneoff",
+            "obligation",
+            "instalment",
+            "goal_contribution",
+        ]
+        | None
+    ) = None
+    subtype: (
+        Literal["rent", "emi", "subscription", "insurance", "family_transfer", "other"] | None
+    ) = None
+    amount_rupees: Decimal | None = None
+    account: str | None = None
+    category: str | None = None
+    rule: str | None = Field(
+        default=None, description="iCalendar RRULE, e.g. FREQ=MONTHLY;BYMONTHDAY=5."
+    )
+    starts: Date | None = None
+    ends: Date | None = None
+    confirmed: bool | None = None
+    holiday_adjust: Literal["none", "next", "previous"] | None = None
+    active: bool | None = None
+
+
+class GoalSetup(WriteModel):
+    name: str | None = None
+    new_name: str | None = None
+    target_rupees: Decimal | None = None
+    deadline: Date | None = None
+    priority: int | None = Field(default=None, ge=1, le=5)
+    status: Literal["active", "achieved", "paused", "abandoned"] | None = None
+
+
+class CategorySetup(WriteModel):
+    name: str | None = None
+    new_name: str | None = None
+    reducible: bool | None = None
+
+
+class PayeeSetup(WriteModel):
+    name: str | None = None
+    new_name: str | None = None
+    kind: Literal["person", "merchant", "organization"] | None = None
+    upi_id: str | None = None
+    default_category: str | None = None
+    create_person_account: bool | None = None
+    active: bool | None = None
+
+
+class SettingsSetup(WriteModel):
+    floor_rupees: Decimal | None = Field(default=None, description="Minimum balance to keep.")
+    base_currency: str | None = None
+    time_zone: str | None = None
+    default_horizon_days: int | None = None
+    notification_time: str | None = None
+    weekly_briefing_dow: int | None = Field(default=None, ge=0, le=6)
+    reminder_lead_days: int | None = Field(default=None, ge=0, le=30)
+    display_name: str | None = None
+
+
+class ScheduledQuestionSetup(WriteModel):
+    prompt: str | None = None
+    rule: str | None = None
+    id: str | None = None
+
+
+class PreferenceSetup(WriteModel):
+    """A lasting preference, fact, or rule about the user.
+
+    add: `text` is required; pass `kind` and a stable `subject`. update: `id` plus the new `text`
+    or `kind`. archive: `id`, or `text` to match the memory exactly.
+    """
+
+    id: str | None = None
+    text: str | None = None
+    kind: Literal["preference", "fact", "rule"] | None = None
+    subject: str | None = None
+
+
+class BaselineSetup(WriteModel):
+    category: str
+    amount_per_day_rupees: Decimal
+
+
+SetupData = Annotated[
+    PreferenceSetup
+    | AccountSetup
+    | BalanceSetup
+    | ScheduleSetup
+    | GoalSetup
+    | CategorySetup
+    | PayeeSetup
+    | SettingsSetup
+    | ScheduledQuestionSetup
+    | BaselineSetup,
+    Field(union_mode="left_to_right"),
+]
+
 
 # `amount_paise` columns are BIGINT. Reject earlier, with words the model can retry on.
 MAX_PAISE = 9_223_372_036_854_775_807
@@ -382,25 +759,11 @@ def _movement_summary(result: dict[str, Any], amount_paise: int) -> str:
 
 
 def _clean_upi_ref(value: str | None) -> str | None:
-    """Normalize a printed UTR/UPI reference and drop it if it looks like a redacted secret."""
+    """Normalize a printed UTR/UPI reference: drop spaces and punctuation, cap the length."""
     if not value:
         return None
-    from arno.agent.redaction import redact_text
-
-    raw = str(value).strip()
-    if not raw:
-        return None
-    # 12-digit UPI UTRs printed in 4-4-4 space groups ("4145 1234 5678") match the Aadhaar
-    # detector; accept spaced-digit UTRs here while still rejecting cards, PANs, and secrets.
-    redacted = redact_text(raw)
-    if redacted != raw and not (
-        redacted == "[redacted:aadhaar]" and raw.replace(" ", "").isdigit()
-    ):
-        return None
-    cleaned = "".join(ch for ch in raw if ch.isalnum() or ch in "._/-")[:40]
-    if not cleaned or redact_text(cleaned) != cleaned:
-        return None
-    return cleaned
+    cleaned = "".join(ch for ch in str(value) if ch.isalnum() or ch in "._/-")[:40]
+    return cleaned or None
 
 
 async def _resolve_evidence(
@@ -470,8 +833,6 @@ async def _record_one_in_group(
     group_id: str,
     idempotency_key: str | None,
     message_id: str | None,
-    flagged: bool,
-    user_texts: tuple[str, ...],
     not_duplicate: bool,
     capture_kind: str,
     capture_ref: str | None,
@@ -492,11 +853,6 @@ async def _record_one_in_group(
         message_id=message_id,
     )
 
-    def named_outside(name: str | None) -> bool:
-        if not name:
-            return False
-        return flagged and not any(name.lower() in text.lower() for text in user_texts)
-
     async def create_payee_once() -> dict[str, Any] | None:
         # A generic name names no merchant and no person: no payee is created from it, so unnamed
         # spending never piles up under one invented shop. A settlement then names nobody, and the
@@ -509,7 +865,6 @@ async def _record_one_in_group(
             # A settlement names the person on the other side; a split's payee is the vendor.
             kind="person" if kind == "settlement" else "merchant",
             upi_id=movement.get("upi_id"),
-            outside_text=named_outside(str(payee_name)),
             group_id=group_id,
         )
 
@@ -698,7 +1053,6 @@ async def _record_one_in_group(
                 conn,
                 str(name),
                 kind="person",
-                outside_text=named_outside(str(name)),
                 group_id=group_id,
             )
             people.append(
@@ -907,11 +1261,10 @@ async def record_movement(
     *,
     message_id: str | None,
     conversation_id: str | None,
-    flagged: bool = False,
-    user_texts: tuple[str, ...] = (),
     not_duplicate: bool = False,
     capture_kind: str = "chat",
     capture_ref: str | None = None,
+    attachment_id: str | None = None,
 ) -> dict[str, Any]:
     del conversation_id
     tool_call_id = movement.get("tool_call_id")
@@ -928,11 +1281,10 @@ async def record_movement(
             group_id=group.group_id,
             idempotency_key=idempotency_key,
             message_id=message_id,
-            flagged=flagged,
-            user_texts=user_texts,
             not_duplicate=not_duplicate,
             capture_kind=capture_kind,
             capture_ref=capture_ref,
+            default_attachment_id=attachment_id,
         )
         return payload
 
@@ -943,8 +1295,6 @@ async def record_movements(
     *,
     message_id: str | None,
     conversation_id: str | None,
-    flagged: bool = False,
-    user_texts: tuple[str, ...] = (),
     not_duplicate: bool = False,
     capture_kind: str = "chat",
     capture_ref: str | None = None,
@@ -952,11 +1302,22 @@ async def record_movements(
     tool_call_id: str | None = None,
 ) -> dict[str, Any]:
     """Atomically record a batch of 1-50 movements in a single write group with one Undo."""
-    del conversation_id
     if not movements:
         raise ToolInputError("Pass at least one movement to record_movements.")
     if len(movements) > 50:
         raise ToolInputError("At most 50 movements can be recorded in one batch.")
+    if len(movements) == 1:
+        # One movement keeps its own card, duplicate check, and undo.
+        return await record_movement(
+            conn,
+            movement={**movements[0], "tool_call_id": tool_call_id},
+            message_id=message_id,
+            conversation_id=conversation_id,
+            not_duplicate=not_duplicate,
+            capture_kind=capture_kind,
+            capture_ref=capture_ref,
+            attachment_id=attachment_id,
+        )
 
     base_key = (
         f"{message_id}:{tool_call_id}"
@@ -1018,8 +1379,6 @@ async def record_movements(
                 group_id=group.group_id,
                 idempotency_key=item_key,
                 message_id=message_id,
-                flagged=flagged,
-                user_texts=user_texts,
                 not_duplicate=True,
                 capture_kind=capture_kind,
                 capture_ref=capture_ref,
@@ -1085,6 +1444,17 @@ async def correct_movement(
     scope: str = "this",
     message_id: str | None = None,
 ) -> dict[str, Any]:
+    link = changes.get("schedule_payment")
+    if link is not None:
+        if any(
+            value not in (None, False)
+            for key, value in changes.items()
+            if key != "schedule_payment"
+        ):
+            raise ToolInputError(
+                "Link or unlink a schedule payment in its own call, with no other changes."
+            )
+        return await schedule_payment(conn, movement_id=movement_id, message_id=message_id, **link)
     # A payee named in the changes is created inside this group. If the correction itself
     # refuses, the payee and its audit row roll back with it.
     async with write_group(conn, actor="agent", message_id=message_id):
@@ -1197,9 +1567,20 @@ async def update_setup_item(
     data: dict[str, Any],
     message_id: str | None,
 ) -> dict[str, Any]:
-    """One discriminated setup write. The caller has already gated a lasting change."""
+    """One discriminated setup write. The caller has already approved a lasting change."""
     if action not in {"add", "update", "archive"}:
         raise ToolInputError("action is add, update, or archive")
+
+    if entity == "preference":
+        return await change_preference(
+            conn,
+            action=action,
+            preference_id=data.get("id"),
+            text=data.get("text"),
+            kind=data.get("kind"),
+            subject=data.get("subject"),
+            message_id=message_id,
+        )
 
     if entity == "account":
         if action == "add":
@@ -1720,18 +2101,11 @@ async def schedule_payment(
     else:
         raise ToolInputError("action must be link or unlink")
     occurrence = await schedules_mod.get_occurrence(conn, row["id"], due_date)
-    outside = occurrence.pop("outside_text", False)
-    if outside:
-        occurrence["name"] = mark(occurrence["name"])
-    for payment in occurrence["payments"]:
-        if payment["description"]:
-            payment["description"] = mark(payment["description"])
-            outside = True
+    occurrence.pop("outside_text", None)
     summary = (
         f"{result['status'].replace('_', ' ').capitalize()}: {occurrence['name']} · {due_date}"
     )
     return result | {
-        "outside_text": outside,
         "occurrence": occurrence,
         "card": _card(
             "setup", title="Schedule payment", summary=summary, undo_id=result.get("undo_id")
@@ -1739,125 +2113,62 @@ async def schedule_payment(
     }
 
 
-async def preference(
+MAX_PREFERENCE_BODY = 2000
+PREFERENCE_KINDS = frozenset({"preference", "fact", "rule"})
+
+
+async def _remember(
     conn: Connection,
     *,
-    action: str,
     text: str | None,
-    preference_id: str | None,
     message_id: str | None,
-    kind: str | None = None,
-    subject: str | None = None,
+    kind: str | None,
+    subject: str | None,
 ) -> dict[str, Any]:
-    # None means "not given": remember defaults to preference and keeps an existing memory's kind;
-    # classify must name the kind it sets.
-    if kind is not None and kind not in {"preference", "fact", "rule"}:
-        raise ToolInputError("kind must be preference, fact or rule")
-    if action == "remember":
-        if not text or not text.strip():
-            raise ToolInputError("what should I remember?")
-        text = text.strip()
-        subject = " ".join(subject.lower().split()) if subject else None
-        if subject:
-            async with write_group(conn, actor="agent", message_id=message_id) as group:
-                await conn.execute(
-                    "SELECT pg_advisory_xact_lock(hashtext($1))",
-                    (kind or "preference") + ":" + subject,
+    """Save a memory, or reuse the active one that already says it."""
+    if not text or not text.strip():
+        raise ToolInputError("what should I remember?")
+    text = text.strip()
+    subject = " ".join(subject.lower().split()) if subject else None
+    if subject:
+        async with write_group(conn, actor="agent", message_id=message_id) as group:
+            await conn.execute(
+                "SELECT pg_advisory_xact_lock(hashtext($1))",
+                (kind or "preference") + ":" + subject,
+            )
+            existing_subject = await conn.fetchrow(
+                "SELECT * FROM preferences WHERE active AND kind = $1 AND subject = $2 FOR UPDATE",
+                kind or "preference",
+                subject,
+            )
+            if existing_subject:
+                if existing_subject["body"] == text:
+                    return {
+                        "status": "remembered",
+                        "id": existing_subject["id"],
+                        "undo_id": None,
+                        "text": text,
+                        "kind": existing_subject["kind"],
+                        "card": _card("preference", title="Remembered", text=text),
+                    }
+                row = await conn.fetchrow_required(
+                    "UPDATE preferences SET body = $1, updated_at = now() "
+                    "WHERE id = $2 RETURNING *",
+                    text,
+                    existing_subject["id"],
                 )
-                existing_subject = await conn.fetchrow(
-                    "SELECT * FROM preferences WHERE active AND kind = $1 "
-                    "AND subject = $2 FOR UPDATE",
+                group.record_updated("preferences", row["id"], existing_subject, row)
+            else:
+                row = await conn.fetchrow_required(
+                    "INSERT INTO preferences "
+                    "(body, created_by, source_message_id, kind, subject) "
+                    "VALUES ($1, 'agent', $2, $3, $4) RETURNING *",
+                    text,
+                    message_id,
                     kind or "preference",
                     subject,
                 )
-                if existing_subject:
-                    if existing_subject["body"] == text:
-                        return {
-                            "status": "remembered",
-                            "id": existing_subject["id"],
-                            "undo_id": None,
-                            "text": text,
-                            "kind": existing_subject["kind"],
-                            "card": _card("preference", title="Remembered", text=text),
-                        }
-                    row = await conn.fetchrow_required(
-                        "UPDATE preferences SET body = $1, updated_at = now() "
-                        "WHERE id = $2 RETURNING *",
-                        text,
-                        existing_subject["id"],
-                    )
-                    group.record_updated("preferences", row["id"], existing_subject, row)
-                else:
-                    row = await conn.fetchrow_required(
-                        "INSERT INTO preferences "
-                        "(body, created_by, source_message_id, kind, subject) "
-                        "VALUES ($1, 'agent', $2, $3, $4) RETURNING *",
-                        text,
-                        message_id,
-                        kind or "preference",
-                        subject,
-                    )
-                    group.record_created("preferences", row)
-            return {
-                "status": "remembered",
-                "id": row["id"],
-                "undo_id": group.group_id,
-                "text": row["body"],
-                "kind": row["kind"],
-                "card": _card(
-                    "preference", title="Remembered", text=row["body"], undo_id=group.group_id
-                ),
-            }
-        existing = await conn.fetchrow(
-            """
-            SELECT * FROM preferences
-            WHERE active AND lower(body) = lower($1)
-            ORDER BY created_at LIMIT 1
-            """,
-            text,
-        )
-        if existing:
-            if kind is not None and existing["kind"] != kind:
-                async with write_group(conn, actor="agent", message_id=message_id) as group:
-                    after = await conn.fetchrow_required(
-                        "UPDATE preferences SET kind = $1, updated_at = now() "
-                        "WHERE id = $2 RETURNING *",
-                        kind,
-                        existing["id"],
-                    )
-                    group.record_updated("preferences", existing["id"], existing, after)
-                return {
-                    "status": "remembered",
-                    "id": existing["id"],
-                    "undo_id": group.group_id,
-                    "text": existing["body"],
-                    "kind": after["kind"],
-                    "card": _card(
-                        "preference",
-                        title="Reclassified",
-                        text=existing["body"],
-                        undo_id=group.group_id,
-                    ),
-                }
-            return {
-                "status": "remembered",
-                "id": existing["id"],
-                "undo_id": None,
-                "text": existing["body"],
-                "kind": existing["kind"],
-                "card": _card("preference", title="Remembered", text=existing["body"]),
-            }
-        async with write_group(conn, actor="agent", message_id=message_id) as group:
-            row = await conn.fetchrow_required(
-                """
-                INSERT INTO preferences (body, created_by, source_message_id, kind)
-                VALUES ($1, 'agent', $2, $3) RETURNING *
-                """,
-                text,
-                message_id,
-                kind or "preference",
-            )
-            group.record_created("preferences", row)
+                group.record_created("preferences", row)
         return {
             "status": "remembered",
             "id": row["id"],
@@ -1865,20 +2176,147 @@ async def preference(
             "text": row["body"],
             "kind": row["kind"],
             "card": _card(
-                "preference",
-                title="Remembered",
-                text=row["body"],
-                undo_id=group.group_id,
+                "preference", title="Remembered", text=row["body"], undo_id=group.group_id
             ),
         }
+    existing = await conn.fetchrow(
+        """
+        SELECT * FROM preferences
+        WHERE active AND lower(body) = lower($1)
+        ORDER BY created_at LIMIT 1
+        """,
+        text,
+    )
+    if existing:
+        if kind is not None and existing["kind"] != kind:
+            async with write_group(conn, actor="agent", message_id=message_id) as group:
+                after = await conn.fetchrow_required(
+                    "UPDATE preferences SET kind = $1, updated_at = now() "
+                    "WHERE id = $2 RETURNING *",
+                    kind,
+                    existing["id"],
+                )
+                group.record_updated("preferences", existing["id"], existing, after)
+            return {
+                "status": "remembered",
+                "id": existing["id"],
+                "undo_id": group.group_id,
+                "text": existing["body"],
+                "kind": after["kind"],
+                "card": _card(
+                    "preference",
+                    title="Reclassified",
+                    text=existing["body"],
+                    undo_id=group.group_id,
+                ),
+            }
+        return {
+            "status": "remembered",
+            "id": existing["id"],
+            "undo_id": None,
+            "text": existing["body"],
+            "kind": existing["kind"],
+            "card": _card("preference", title="Remembered", text=existing["body"]),
+        }
+    async with write_group(conn, actor="agent", message_id=message_id) as group:
+        row = await conn.fetchrow_required(
+            """
+            INSERT INTO preferences (body, created_by, source_message_id, kind)
+            VALUES ($1, 'agent', $2, $3) RETURNING *
+            """,
+            text,
+            message_id,
+            kind or "preference",
+        )
+        group.record_created("preferences", row)
+    return {
+        "status": "remembered",
+        "id": row["id"],
+        "undo_id": group.group_id,
+        "text": row["body"],
+        "kind": row["kind"],
+        "card": _card(
+            "preference",
+            title="Remembered",
+            text=row["body"],
+            undo_id=group.group_id,
+        ),
+    }
 
-    if action == "forget":
+
+async def edit_preference(
+    conn: Connection,
+    preference_id: str,
+    *,
+    actor: Literal["user", "agent"],
+    message_id: str | None = None,
+    body: str | None = None,
+    kind: str | None = None,
+    active: bool | None = None,
+) -> tuple[dict[str, Any], str]:
+    """The one place a saved preference changes: its text, kind, or active flag.
+
+    Fields left None stay as they were; created_by and the source message never change. Returns
+    the new row and the audit group's undo ID.
+    """
+    text = body.strip() if body is not None else None
+    if body is not None and not text:
+        raise InvalidLedgerError("A saved preference cannot be empty.")
+    if text is not None and len(text) > MAX_PREFERENCE_BODY:
+        raise InvalidLedgerError(
+            f"A saved preference must be at most {MAX_PREFERENCE_BODY} characters."
+        )
+    if kind is not None and kind not in PREFERENCE_KINDS:
+        raise InvalidLedgerError("kind must be preference, fact or rule")
+    row = await conn.fetchrow("SELECT * FROM preferences WHERE id = $1", preference_id)
+    if row is None:
+        raise NotFoundLedgerError("That preference does not exist.")
+    async with write_group(conn, actor=actor, message_id=message_id) as group:
+        after = await conn.fetchrow(
+            """
+            UPDATE preferences
+            SET body = coalesce($1, body), kind = coalesce($2, kind),
+                active = coalesce($3, active), updated_at = now()
+            WHERE id = $4 RETURNING *
+            """,
+            text,
+            kind,
+            active,
+            preference_id,
+        )
+        if after is None:
+            # Settings can delete a preference for good while this edit runs.
+            raise NotFoundLedgerError("That preference does not exist.")
+        group.record_updated("preferences", preference_id, row, after)
+    return dict(after), group.group_id
+
+
+async def change_preference(
+    conn: Connection,
+    *,
+    action: str,
+    preference_id: str | None = None,
+    text: str | None = None,
+    kind: str | None = None,
+    subject: str | None = None,
+    message_id: str | None = None,
+) -> dict[str, Any]:
+    """The agent's memory write: add a memory, edit one, or archive one."""
+    if action == "add":
+        if kind is not None and kind not in PREFERENCE_KINDS:
+            raise ToolInputError("kind must be preference, fact or rule")
+        return await _remember(conn, text=text, message_id=message_id, kind=kind, subject=subject)
+    if action == "update":
+        if not preference_id or (text is None and kind is None):
+            raise ToolInputError("update needs the memory id and its new text or kind")
+        after, undo_id = await edit_preference(
+            conn, preference_id, actor="agent", message_id=message_id, body=text, kind=kind
+        )
+        title, status = ("Updated" if text is not None else "Reclassified"), "updated"
+    elif action == "archive":
         row = None
         if preference_id:
-            row = await conn.fetchrow(
-                "SELECT * FROM preferences WHERE id = $1",
-                preference_id,
-            )
+            row = await conn.fetchrow("SELECT * FROM preferences WHERE id = $1", preference_id)
         if row is None and text:
             row = await conn.fetchrow(
                 """
@@ -1892,55 +2330,20 @@ async def preference(
             active = await conn.fetch("SELECT id, body FROM preferences WHERE active")
             listed = "; ".join(f"{r['id']}: {r['body']}" for r in active) or "none"
             raise ToolInputError(f"No preference matched. Active preferences: {listed}")
-        async with write_group(conn, actor="agent", message_id=message_id) as group:
-            after = await conn.fetchrow_required(
-                "UPDATE preferences SET active = false, updated_at = now() "
-                "WHERE id = $1 RETURNING *",
-                row["id"],
-            )
-            group.record_updated("preferences", row["id"], row, after)
-        return {
-            "status": "forgotten",
-            "id": row["id"],
-            "undo_id": group.group_id,
-            "text": row["body"],
-            "kind": row["kind"],
-            "card": _card(
-                "preference",
-                title="Forgotten",
-                text=row["body"],
-                undo_id=group.group_id,
-            ),
-        }
-
-    if action == "classify":
-        if not preference_id or kind is None:
-            raise ToolInputError("classify needs the memory id and its new kind")
-        row = await conn.fetchrow("SELECT * FROM preferences WHERE id = $1", preference_id)
-        if row is None:
-            raise ToolInputError("No memory matched that ID")
-        async with write_group(conn, actor="agent", message_id=message_id) as group:
-            after = await conn.fetchrow_required(
-                "UPDATE preferences SET kind = $1, updated_at = now() WHERE id = $2 RETURNING *",
-                kind,
-                preference_id,
-            )
-            group.record_updated("preferences", preference_id, row, after)
-        return {
-            "status": "classified",
-            "id": preference_id,
-            "kind": after["kind"],
-            "text": row["body"],
-            "undo_id": group.group_id,
-            "card": _card(
-                "preference",
-                title="Reclassified",
-                text=row["body"],
-                undo_id=group.group_id,
-            ),
-        }
-
-    raise ToolInputError("action is remember, forget or classify")
+        after, undo_id = await edit_preference(
+            conn, str(row["id"]), actor="agent", message_id=message_id, active=False
+        )
+        title, status = "Forgotten", "forgotten"
+    else:
+        raise ToolInputError("action is add, update or archive")
+    return {
+        "status": status,
+        "id": after["id"],
+        "undo_id": undo_id,
+        "text": after["body"],
+        "kind": after["kind"],
+        "card": _card("preference", title=title, text=after["body"], undo_id=undo_id),
+    }
 
 
 async def undo(
@@ -2019,14 +2422,17 @@ async def delete_preference_for_good(conn: Connection, preference_id: str) -> di
 
 
 __all__ = [
+    "MAX_PREFERENCE_BODY",
     "ToolInputError",
+    "change_preference",
     "correct_movement",
     "delete_preference_for_good",
-    "preference",
+    "edit_preference",
     "record_movement",
     "record_movements",
     "resolve_account_id",
     "resolve_payee",
+    "schedule_payment",
     "undo",
     "update_setup_item",
 ]

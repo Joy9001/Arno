@@ -317,34 +317,6 @@ class Driver:
     def undo(self, undo_id: str) -> dict[str, Any]:
         return self.post(f"/api/undo/{undo_id}")
 
-    # -- parser tasks --
-
-    def task(self, task_id: str) -> dict[str, Any]:
-        return self.get(f"/api/tasks/{task_id}")
-
-    def answer_task(self, task_id: str, account: str) -> dict[str, Any]:
-        """Answer the parser's "which account is this statement for?" question."""
-        question = self.task(task_id).get("question") or {}
-        if not question.get("question_id"):
-            raise SystemExit(f"task {task_id} is not waiting on a question")
-        return self.post(
-            f"/api/tasks/{task_id}/answer",
-            json={
-                "question_id": question["question_id"],
-                "account_id": resolve_account(self, account),
-            },
-        )
-
-    def wait_task(self, task_id: str, timeout: float = DEFAULT_TIMEOUT) -> dict[str, Any]:
-        deadline = time.monotonic() + timeout
-        while True:
-            payload = self.task(task_id)
-            if payload.get("state") != "running":
-                return payload
-            if time.monotonic() > deadline:
-                raise SystemExit(f"task {task_id} was still running after {timeout:.0f}s")
-            time.sleep(1.0)
-
 
 def chat_body(thread_id: str, messages: list[dict[str, Any]]) -> dict[str, Any]:
     """The body the web app's transport sends: the chat id, this turn's messages, a message id."""
@@ -372,22 +344,6 @@ def approval_message(cards: list[dict[str, Any]], *, approved: bool) -> dict[str
             for card in cards
         ],
     }
-
-
-def resolve_account(driver: Driver, wanted: str) -> str:
-    """An account id from an id or an exact name, as `driver answer` takes it."""
-    accounts = driver.get("/api/accounts")["accounts"]
-    if any(account["id"] == wanted for account in accounts):
-        return wanted
-    matches = [
-        account
-        for account in accounts
-        if account["active"] and str(account["name"]).lower() == wanted.lower()
-    ]
-    if len(matches) == 1:
-        return str(matches[0]["id"])
-    choices = ", ".join(f"{account['name']} ({account['id']})" for account in accounts)
-    raise SystemExit(f"no single active account matches {wanted!r}; choose from: {choices}")
 
 
 # --- the stream -------------------------------------------------------------------------------
@@ -491,8 +447,6 @@ def render_turn(turn: dict[str, Any]) -> str:
     steps = [f"undo: driver undo {undo_id}" for undo_id in turn["undo_ids"]]
     steps += [f"approve: driver approve {a['tool_call_id']} yes" for a in turn["approvals"]]
     steps += [f"import: driver import {import_id}" for import_id in turn["import_ids"]]
-    if any(call.get("tool_name") == "delegate_task" for call in turn["tool_calls"]):
-        steps.append("a subagent started: driver tasks")
     if steps:
         lines += ["", "next:", *(f"  {step}" for step in steps)]
     return "\n".join(lines)
@@ -703,7 +657,7 @@ def ledger_summary() -> dict[str, Any]:
             )
             open_imports = await conn.fetch(
                 """
-                SELECT i.id, i.task_id, i.status, i.reason, i.counts, i.created_at,
+                SELECT i.id, i.status, i.reason, i.counts, i.created_at,
                        (SELECT a.filename
                         FROM attachments a WHERE a.id = i.attachment_id) AS filename
                 FROM imports i WHERE i.status NOT IN ('committed', 'rejected')
@@ -719,26 +673,6 @@ def ledger_summary() -> dict[str, Any]:
                 "schedules": [dict(row) for row in schedules],
                 "open_imports": [dict(row) for row in open_imports],
             }
-
-    return asyncio.run(run())
-
-
-def import_rows(limit: int = 20) -> list[dict[str, Any]]:
-    """Recent imports with the parser task each one runs under."""
-    from arno.db.conn import connect
-
-    async def run() -> list[dict[str, Any]]:
-        async with connect(_dsn()) as conn:
-            rows = await conn.fetch(
-                """
-                SELECT i.id, i.task_id, i.status, i.reason, i.counts, i.created_at,
-                       (SELECT a.filename
-                        FROM attachments a WHERE a.id = i.attachment_id) AS filename
-                FROM imports i ORDER BY i.created_at DESC, i.id LIMIT $1
-                """,
-                limit,
-            )
-            return [dict(row) for row in rows]
 
     return asyncio.run(run())
 
@@ -1045,86 +979,6 @@ def cmd_import(args: argparse.Namespace) -> int:
     return 0
 
 
-def _import_lines(rows: Iterable[dict[str, Any]]) -> str:
-    return "\n".join(
-        f"  import {row.get('import_id') or row['id']}  {row['status']:<14}"
-        f" {row.get('filename') or '(no file)'}"
-        + (f"  — {row['reason']}" if row.get("reason") else "")
-        for row in rows
-    )
-
-
-def cmd_tasks(args: argparse.Namespace) -> int:
-    rows = import_rows(limit=args.limit)
-    if args.json:
-        print(json.dumps(rows, indent=2, ensure_ascii=False, default=str))
-        return 0
-    if not rows:
-        print("tasks: no imports, so no parser task")
-        return 0
-    for row in rows:
-        print(
-            f"{row['task_id'] or '(no task)':<34} import {row['id']}  {row['status']:<14}"
-            f" {row.get('filename') or '(no file)'}"
-            + (f"  — {row['reason']}" if row.get("reason") else "")
-        )
-    return 0
-
-
-def cmd_task(args: argparse.Namespace) -> int:
-    driver = _driver(args)
-    try:
-        payload = driver.task(args.task_id)
-    finally:
-        driver.close()
-    if args.json:
-        print(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
-        return 0
-    print(f"task: {payload['task_id']}  state={payload['state']}  outcome={payload['outcome']}")
-    if payload.get("question"):
-        print(f"question: {payload['question'].get('text')}")
-        print(f"  answer with: driver answer {payload['task_id']} <account>")
-    if payload.get("report"):
-        print(f"report: {_short(payload['report'])}")
-    if payload.get("imports"):
-        print(_import_lines(payload["imports"]))
-    for message in payload.get("messages") or []:
-        for part in message.get("content") or []:
-            if part.get("type") == "tool-call":
-                print(f"  {part['toolName']}({_short(part.get('args'))})")
-                if part.get("result") is not None:
-                    print(f"      -> {_short(part['result'])}")
-            elif part.get("type") == "text":
-                print(f"  {part['text']}")
-    return 0
-
-
-def cmd_wait_task(args: argparse.Namespace) -> int:
-    driver = _driver(args)
-    try:
-        payload = driver.wait_task(args.task_id, timeout=args.timeout)
-    finally:
-        driver.close()
-    print(f"task {payload['task_id']}: {payload['state']} {payload['outcome'] or ''}".rstrip())
-    if payload.get("imports"):
-        print(_import_lines(payload["imports"]))
-    if payload.get("report"):
-        print(f"report: {_short(payload['report'])}")
-    return 0
-
-
-def cmd_answer(args: argparse.Namespace) -> int:
-    driver = _driver(args)
-    try:
-        payload = driver.answer_task(args.task_id, args.account)
-    finally:
-        driver.close()
-    print(f"answered {args.task_id}: {json.dumps(payload.get('question'), default=str)}")
-    if payload.get("imports"):
-        print(_import_lines(payload["imports"]))
-    return 0
-
-
 def cmd_state(args: argparse.Namespace) -> int:
     summary = ledger_summary()
     _emit(args, summary, _render_state(summary))
@@ -1247,20 +1101,6 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         command(name, help_text).add_argument("import_id")
 
-    tasks = command("tasks", "list imports with their parser task ids")
-    tasks.add_argument("--limit", type=int, default=20)
-
-    task = command("task", "show one parser task: state, report, transcript, imports")
-    task.add_argument("task_id")
-
-    wait = command("wait-task", "poll a parser task until it finishes")
-    wait.add_argument("task_id")
-    wait.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
-
-    answer = command("answer", "answer the parser's question with an account")
-    answer.add_argument("task_id")
-    answer.add_argument("account", help="an account id or its exact name")
-
     command("state", "print the ledger summary straight from SQL")
     command("invariants", "run tests.invariants against this database")
     return parser
@@ -1298,10 +1138,6 @@ def main(argv: list[str] | None = None) -> int:
         ),
         "reject": lambda a: _simple(a, "reject", a.import_id),
         "undo-import": lambda a: _simple(a, "undo_import", a.import_id),
-        "tasks": cmd_tasks,
-        "task": cmd_task,
-        "wait-task": cmd_wait_task,
-        "answer": cmd_answer,
         "state": cmd_state,
         "invariants": cmd_invariants,
     }

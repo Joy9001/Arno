@@ -54,7 +54,7 @@ closed in CI.
       `plan.md` targets of about 5 s for a single lookup and 15 s for a multistep what-if. Either
       meet the targets or update `plan.md` with measured expectations.
 - [ ] **Answer open L2 trace questions from real usage.** Inspect live Phoenix traces to decide
-      whether the post-reply number check stays visible or becomes tappable citations, measure real
+      whether rule 1 holds without a post-reply number check, measure real
       token counts and prompt-cache hit rates, check confirm-card tap rates, and confirm model
       timeouts ([`plan.md`](plan.md#6-open-questions)).
 

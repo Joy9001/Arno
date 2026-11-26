@@ -8,42 +8,12 @@ from datetime import UTC, datetime
 from pydantic_ai.messages import (
     ModelRequest,
     ModelResponse,
-    TextPart,
     ToolCallPart,
     ToolReturnPart,
 )
-from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.ui.vercel_ai.response_types import DataChunk
 
-from arno.agent.builder import build_agent
-from arno.agent.cards import cards_for_transcript, cards_from_messages
-from arno.agent.deps import AgentDeps
-
-
-async def test_a_run_code_chart_carries_its_script_and_calculation_time(demo_ledger):
-    code = (
-        'result = await show_chart(type="bar", title="Spend", as_of="2026-10-31", '
-        'series=[{"name": "Food", "points": [{"x": "Oct", "y": 45000}]}])\n'
-        "print(result)\n"
-    )
-
-    def script(messages, info: AgentInfo) -> ModelResponse:
-        if len(messages) == 1:
-            return ModelResponse(parts=[ToolCallPart("run_code", {"code": code})])
-        return ModelResponse(parts=[TextPart("Here is the chart.")])
-
-    agent = build_agent()
-    with agent.override(model=FunctionModel(script)):
-        result = await agent.run("show me", deps=AgentDeps(conversation_id="cnv_test"))
-
-    for cards in (
-        cards_from_messages(result.all_messages()),
-        cards_for_transcript(result.all_messages()),
-    ):
-        chart = next(card for card in cards if card.data["card"] == "chart")
-        assert chart.data["script"] == code
-        assert chart.data["computed_at"]
-        assert chart.data["as_of"] == "2026-10-31"
+from arno.agent.cards import cards_for_transcript
 
 
 def test_a_direct_chart_without_a_script_says_it_is_unavailable():

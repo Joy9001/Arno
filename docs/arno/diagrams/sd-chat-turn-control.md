@@ -3,8 +3,8 @@
 **What it shows:** One chat turn ("paid 450 on swiggy") across three lanes. You send it; the model
 picks the tool and fills it in, assuming your usual account; code checks the rules (category,
 duplicate, whether a card is needed) and writes the row with its audit entry; the model replies
-with the undo card; you can undo with a REST call. A lasting write in a flagged conversation
-detours through the one place you're asked first: the confirm card.
+with the undo card; you can undo with a REST call. A wide write (a wide correction scope,
+archiving, or settings) detours through the one place you're asked first: the confirm card.
 
 **Diagram type:** Swimlane, with lanes for you, the model, and code.
 

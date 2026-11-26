@@ -29,7 +29,6 @@ from arno.ledger.accounts import account_summary, create_account, set_statement_
 from arno.ledger.audit import new_id
 from arno.ledger.common import ledger_balance, system_account
 from arno.ledger.errors import ConflictLedgerError, InvalidLedgerError
-from tests.agent_helpers import run_context
 from tests.fixtures import import_helpers as helpers
 from tests.import_fixtures import (
     CARD_PARSER,
@@ -1571,8 +1570,6 @@ async def _wallet(
 
 
 async def test_a_cash_statement_is_filed_against_the_cash_account(ledger):
-    from arno.agent.parser import ledger_opening
-
     cash = await _wallet(ledger, name="Cash", institution="Cash", kind="cash")
     attachment_id = await helpers.attachment(
         ledger,
@@ -1590,15 +1587,6 @@ async def test_a_cash_statement_is_filed_against_the_cash_account(ledger):
     detail = await import_payload(ledger, import_id)
     assert detail["account"]["id"] == cash["id"]
     assert detail["status"] == "review"
-
-    # The parser's own opening question resolves the same way, by name.
-    from arno.agent.deps import AgentDeps
-
-    opening = await ledger_opening(
-        run_context(AgentDeps(conversation_id="conv_cash")), import_id, account="Cash"
-    )
-    assert opening is not None
-    assert opening["paise"] == 350000
 
     await commit_import(ledger, import_id)
     assert await ledger.fetchval("SELECT count(*) FROM movement_legs")

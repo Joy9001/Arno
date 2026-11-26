@@ -1,6 +1,6 @@
 """The user's scheduled questions: the agent, read-only, with one run's request ceiling.
 
-No write tools are built. The pinned financial snapshot is the first message, exactly as in chat.
+No write tools are built. The agent reads the ledger with its tools.
 The answer is written into the inbox, keyed by the question and its scheduled period.
 """
 
@@ -13,8 +13,6 @@ from typing import Any
 from arno.agent.builder import build_agent
 from arno.agent.capabilities import MODEL_SETTINGS, drain_events
 from arno.agent.deps import AgentDeps
-from arno.agent.history import build_snapshot_history
-from arno.agent.number_check import UNTRACED_NOTE, check_messages
 from arno.db.conn import Connection, connect
 from arno.jobs.schedules import INDIA, period_for
 from arno.notifications import create_notification, send_push_for_kind
@@ -41,19 +39,13 @@ async def _answer(
 ) -> tuple[str, bool]:
     """The agent's answer, or the plain ceiling note; and whether a ceiling stopped it."""
     prompt = str(question["prompt"])
-    history, outside = await build_snapshot_history(conn)
-    deps = AgentDeps(
-        conversation_id="",
-        flagged=outside,
-        user_texts=(prompt,),
-    )
+    deps = AgentDeps(conversation_id="")
     from pydantic_ai import UsageLimits
     from pydantic_ai.exceptions import UsageLimitExceeded
 
     try:
         result = await agent.run(
             prompt,
-            message_history=history,
             deps=deps,
             model_settings=MODEL_SETTINGS,
             event_stream_handler=drain_events,
@@ -67,11 +59,6 @@ async def _answer(
         return ceiling_answer(), True
     answer = str(result.output or "").strip()
     answer = answer or "The question ran, but the model returned no answer."
-    # A scheduled answer is plain text in the inbox, so it carries the same note a chat turn
-    # shows beside a figure no tool or script printed (architecture rule 1).
-    flags = check_messages(answer, result.all_messages(), kinds=("money", "percent"))
-    if flags:
-        answer = f"{answer}\n\n{UNTRACED_NOTE.format(amounts=', '.join(flags))}"
     return answer, False
 
 
@@ -81,7 +68,7 @@ async def answer_question(
     *,
     agent: Any,
 ) -> str:
-    """Run the read-only agent over the pinned snapshot and return its answer."""
+    """Run the read-only agent and return its answer."""
     answer, _ceiling = await _answer(conn, question, agent=agent)
     return answer
 

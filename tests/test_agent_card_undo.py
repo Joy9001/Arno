@@ -53,9 +53,9 @@ async def test_a_setup_card_carries_the_result_undo_id_and_a_no_op_has_none(demo
 
 
 async def test_a_preference_card_carries_its_undo_id_and_a_repeat_has_none(demo_ledger):
-    created = await write_tools.preference(
+    created = await write_tools.change_preference(
         demo_ledger,
-        action="remember",
+        action="add",
         text="Use UPI first",
         preference_id=None,
         message_id=None,
@@ -63,9 +63,9 @@ async def test_a_preference_card_carries_its_undo_id_and_a_repeat_has_none(demo_
     assert created["card"]["undo_id"] == created["undo_id"]
     assert created["card"]["undo_id"]
 
-    repeated = await write_tools.preference(
+    repeated = await write_tools.change_preference(
         demo_ledger,
-        action="remember",
+        action="add",
         text="Use UPI first",
         preference_id=None,
         message_id=None,

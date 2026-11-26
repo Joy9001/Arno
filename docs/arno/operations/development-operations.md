@@ -29,7 +29,7 @@ The default stack binds `db` (`5433`) and `api` (`8000`) to loopback only, and t
 binds `phoenix` (`6006`) the same way. `sandbox` publishes no port: it runs model-written Python on
 an internal network with no internet or database route, and only `api` reaches it. `api` runs the
 daily backup and mounts `backup-data`. Named volumes (`db-data`, `backup-data`,
-`pre-migration-data`, `tasks-data`, `ollama-data`, and `phoenix-data`) hold persistent state; never
+`pre-migration-data`, `ollama-data`, and `phoenix-data`) hold persistent state; never
 run `docker compose down -v` against an instance whose data matters. See
 [install](self-hosting.md#install) for host setup and ports.
 

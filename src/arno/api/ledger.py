@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 from datetime import date as Date
 from datetime import datetime
 from typing import Annotated, Any, Literal
+from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from arno.api import import_history, provenance, runtime_info
 from arno.api.deps import Database, FreshSession, current_session
 from arno.engine.money import MAX_PAISE
 from arno.engine.projection import Projection, ProjectionInput
@@ -22,7 +24,6 @@ from arno.ledger import (
     goals,
     movements,
     payees,
-    preference_edits,
     schedule_payments,
     schedules,
     settings,
@@ -31,6 +32,22 @@ from arno.ledger import (
 )
 from arno.ledger.common import today as ledger_today
 from arno.tools import projection as projection_tools
+from arno.tools import write as write_tools
+
+RUNTIME_ROLES = ("CHAT", "CHAT_FALLBACK", "VISION", "STT")
+_SAFE_MODEL = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/@+-]{0,119}")
+
+
+def _url_parts(url: str) -> tuple[str | None, SplitResult | None]:
+    """The hostname and parts of an http(s) URL, or nothing for anything else."""
+    try:
+        parts = urlsplit(url)
+        parts.port  # noqa: B018 - reading it raises on a bad port
+    except ValueError:
+        return None, None
+    ok = parts.scheme in {"http", "https"} and parts.hostname
+    return (parts.hostname, parts) if ok else (None, None)
+
 
 router = APIRouter(
     prefix="/api",
@@ -323,7 +340,7 @@ class SettingsUpdate(ApiModel):
 class PreferenceContentUpdate(ApiModel):
     body: str = Field(
         min_length=1,
-        max_length=preference_edits.MAX_PREFERENCE_BODY,
+        max_length=write_tools.MAX_PREFERENCE_BODY,
         pattern=r"\S",
     )
 
@@ -425,7 +442,19 @@ async def post_movement(body: MovementIn, conn: Database) -> dict[str, Any]:
 @router.get("/movements/{movement_id}")
 async def get_movement(movement_id: str, conn: Database) -> dict[str, Any]:
     movement = await movements.get_movement(conn, movement_id)
-    return await provenance.attach_sources(conn, movement_id, movement)
+    # Only real capture rows: a source field stays null when the captured message is gone.
+    rows = await conn.fetch(
+        """
+        SELECT c.kind, c.ref, m.id AS message_id, m.conversation_id
+        FROM captures c
+        LEFT JOIN messages m ON c.kind = 'chat' AND m.id = c.ref
+        WHERE c.movement_id = $1
+        ORDER BY c.id
+        """,
+        movement_id,
+    )
+    movement["sources"] = [dict(row) for row in rows]
+    return movement
 
 
 @router.post("/movements/{movement_id}/correct")
@@ -705,7 +734,10 @@ async def patch_settings(body: SettingsUpdate, conn: Database) -> dict[str, Any]
 async def patch_preference_content(
     preference_id: str, body: PreferenceContentUpdate, conn: Database
 ) -> dict[str, Any]:
-    return await preference_edits.update_preference_body(conn, preference_id, body.body)
+    after, _undo_id = await write_tools.edit_preference(
+        conn, preference_id, actor="user", body=body.body
+    )
+    return after
 
 
 @router.get("/backup/status")
@@ -715,8 +747,35 @@ async def get_backup_status(conn: Database) -> dict[str, Any]:
 
 @router.get("/runtime-info")
 def get_runtime_info() -> dict[str, Any]:
-    """Configured model hosts and an explicitly configured Phoenix browser URL, nothing more."""
-    return runtime_info.payload()
+    """Configured model hosts and an explicitly configured Phoenix browser URL, nothing more.
+
+    Endpoints are reduced to hostnames, never the configured URL: a base URL can carry a password
+    in its userinfo, a path, or a query string with a key.
+    """
+    roles = []
+    for prefix in RUNTIME_ROLES:
+        base_url = os.environ.get(f"{prefix}_BASE_URL", "").strip()
+        model = os.environ.get(f"{prefix}_MODEL", "").strip()
+        # Both are needed for a usable role; a bare base URL is not "configured" to the reader.
+        configured = bool(base_url and model)
+        roles.append(
+            {
+                "role": prefix,
+                "configured": configured,
+                "host": _url_parts(base_url)[0] if configured else None,
+                # Anything that does not look like a model ID is omitted, not echoed.
+                "model": model if configured and _SAFE_MODEL.fullmatch(model) else None,
+            }
+        )
+    phoenix = None
+    host, parts = _url_parts(os.environ.get("ARNO_PHOENIX_UI_URL", "").strip())
+    if host and parts is not None:
+        netloc = f"[{host}]" if ":" in host else host
+        if parts.port:
+            netloc = f"{netloc}:{parts.port}"
+        # Keep the operator's path, but never userinfo, a query, or a fragment.
+        phoenix = urlunsplit((parts.scheme.lower(), netloc, parts.path, "", ""))
+    return {"roles": roles, "phoenix_ui_url": phoenix}
 
 
 @router.get("/export/scope")
@@ -757,17 +816,3 @@ def get_export_pg_dump(conn: Database, fresh: FreshSession) -> Response:
         media_type="application/octet-stream",
         headers={"Content-Disposition": f'attachment; filename="arno-{stamp}.sql"'},
     )
-
-
-@router.get("/import-history")
-async def get_import_history(
-    conn: Database,
-    limit: int = Query(default=import_history.DEFAULT_LIMIT, ge=1, le=import_history.MAX_LIMIT),
-    cursor: str | None = None,
-) -> dict[str, Any]:
-    """Paginated import history.
-
-    This is deliberately additive: `GET /api/imports` keeps its existing shape and 200-row cap
-    for every current client. The Imports screen uses this keyset route to reach older data.
-    """
-    return await import_history.list_import_history(conn, limit=limit, cursor=cursor)

@@ -5,14 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from pydantic import ValidationError
-from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
-from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from arno.agent.builder import build_agent
-from arno.agent.cards import cards_from_messages
-from arno.agent.deps import AgentDeps
-from arno.agent.history import create_thread, ensure_history, record_user_message, save_records
 from arno.agent.presentation import (
     PresentationError,
     Registration,
@@ -21,7 +14,6 @@ from arno.agent.presentation import (
     TableInput,
     build_answer,
 )
-from arno.agent.turns import encode_saved_turn
 
 
 def _id(registration: Registration) -> str:
@@ -263,25 +255,6 @@ def test_context_accounts_expose_an_unknown_balance_and_separate_results():
     assert accounts["notes"] == ["Empty bank has no stated balance"]
 
 
-def test_show_table_is_bounded_and_rejects_non_integer_money():
-    with pytest.raises(ValidationError):
-        TableInput(
-            title="Too many",
-            columns=[TableColumn(label="Amount", type="money")],
-            rows=[[1] for _ in range(51)],
-        )
-
-    registry = ResultRegistry()
-    with pytest.raises(PresentationError, match="integer paise"):
-        registry.register_table(
-            TableInput(
-                title="Bad money",
-                columns=[TableColumn(label="Amount", type="money")],
-                rows=[["450"]],
-            )
-        )
-
-
 def test_computed_table_columns_have_stable_unique_keys_and_keep_source_evidence():
     registry = ResultRegistry()
     source = _spending(registry, gaps=["2026-09"])
@@ -418,95 +391,10 @@ def test_computed_tables_reject_non_finite_numbers(value):
         )
 
 
-@pytest.mark.parametrize("computed", [False, True])
-async def test_a_run_code_present_card_is_saved_and_replayed(demo_ledger, computed):
-    code = (
-        "spending = await summarize_spending(group_by='category', period='2026-10')\n"
-        "result_id = spending['ui_results'][0]['id']\n"
-    )
-    if computed:
-        code += (
-            "table = await show_table(title='Computed spending', "
-            "columns=[{'label': 'Amount', 'type': 'money'}], "
-            "rows=[[spending['total']['paise']]], source_result_ids=[result_id])\n"
-            "result_id = table['ui_results'][0]['id']\n"
-        )
-    code += (
-        "await present(display={'_type': 'Stack', 'children': ["
-        "{'_type': 'Summary', 'result_id': result_id},"
-        "{'_type': 'Table', 'result_id': result_id}]})\n"
-    )
-
-    def script(messages, info: AgentInfo) -> ModelResponse:
-        del info
-        if not any(
-            getattr(part, "tool_name", None) == "run_code"
-            for message in messages
-            for part in getattr(message, "parts", [])
-        ):
-            return ModelResponse(parts=[ToolCallPart("run_code", {"code": code})])
-        return ModelResponse(parts=[TextPart("Done.")])
-
-    agent = build_agent()
-    deps = AgentDeps(conversation_id="cnv_test")
-    with agent.override(model=FunctionModel(script)):
-        result = await agent.run("show me", deps=deps)
-
-    cards = cards_from_messages(result.all_messages())
-    answer = next((card for card in cards if card.data.get("card") == "answer"), None)
-    assert answer is not None, [
-        str(getattr(part, "content", ""))[-4000:]
-        for message in result.all_messages()
-        for part in getattr(message, "parts", [])
-        if getattr(part, "tool_name", None) == "run_code"
-    ]
-    assert answer.data["results"][0]["kind"] == ("table" if computed else "spending")
-    assert answer.data["results"][0]["table"]["rows"]
-
-    thread = await create_thread(demo_ledger, title="composed")
-    history, _ = await ensure_history(demo_ledger, thread)
-    await record_user_message(
-        demo_ledger, thread_id=thread["id"], client_id="client-composed", text="show me"
-    )
-    saved = await save_records(
-        demo_ledger,
-        thread_id=thread["id"],
-        run_id="run_composed",
-        ui_message_id="client-composed",
-        history=history,
-        turn_messages=result.all_messages(),
-        ending="complete",
-    )
-    row = await demo_ledger.fetchrow(
-        "SELECT content FROM messages WHERE id = $1",
-        saved["messages"][-1],
-    )
-    stored = row["content"]
-    stored_answer = next(
-        part
-        for part in stored["parts"]
-        if part.get("type") == "data-card" and part.get("data", {}).get("card") == "answer"
-    )
-    assert (
-        stored_answer["data"]["results"][0]["result_id"] == answer.data["results"][0]["result_id"]
-    )
-
-    replay = [
-        json.loads(line[6:]) for line in encode_saved_turn(stored) if line.startswith("data: ")
-    ]
-    replayed = next(
-        chunk
-        for chunk in replay
-        if chunk.get("type") == "data-card" and chunk["data"].get("card") == "answer"
-    )
-    assert replayed["data"]["results"] == stored_answer["data"]["results"]
-
-
 def test_amortize_fee_and_card_payoff_presentation_snapshots():
     from arno.engine.money import amortize as amortize_fn
+    from arno.engine.money import apr_percent, money
     from arno.engine.money import card_payoff as card_payoff_fn
-    from arno.engine.money import money
-    from arno.tools.money import apr_percent
 
     registry = ResultRegistry()
     raw_loan = amortize_fn(10_000_000, 10, 12, processing_fee_paise=200_000)

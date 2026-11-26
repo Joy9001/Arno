@@ -117,7 +117,8 @@ its `.dist-info` directory. The direct dependencies below are the ones Arno choo
 | `olefile` | BSD |
 | `opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http`, `opentelemetry-instrumentation-fastapi`, `opentelemetry-instrumentation-asyncpg` | Apache-2.0 |
 | `pydantic` | MIT |
-| `pydantic-ai`, `pydantic-ai-harness`, `pydantic-evals` | MIT |
+| `pydantic-ai`, `pydantic-evals` | MIT |
+| `pydantic-monty` | MIT |
 | `pypdfium2` | BSD-3-Clause or Apache-2.0 |
 | `python-calamine` | MIT |
 | `python-dateutil` | BSD-3-Clause or Apache-2.0 |

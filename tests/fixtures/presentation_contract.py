@@ -15,11 +15,10 @@ from arno.agent.presentation import (
     TableInput,
     build_answer,
 )
-from arno.engine.money import amortize, card_payoff, compound, money
+from arno.engine.money import amortize, apr_percent, card_payoff, compound, money
 from arno.engine.projection import SourceIds
 from arno.ledger.deletion import retention_facts
 from arno.ledger.export import SECRET_TABLES
-from arno.tools.money import apr_percent
 from arno.tools.projection import card as projection_card
 
 

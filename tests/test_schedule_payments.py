@@ -282,7 +282,7 @@ async def test_api_payment_match_round_trip_and_undo(session_client):
     assert client.get(path).json()["paid_paise"] == 0
 
 
-async def test_agent_match_is_undoable_and_marks_outside_descriptions(ledger):
+async def test_agent_match_is_undoable(ledger):
     from arno.tools import write
 
     bank, schedule, due = await _plan(ledger)
@@ -301,9 +301,7 @@ async def test_agent_match_is_undoable_and_marks_outside_descriptions(ledger):
     )
     assert result["occurrence"]["remaining_paise"] == 40_000
     assert result["card"]["undo_id"] == result["undo_id"]
-    assert result["outside_text"] is True
-    description = result["occurrence"]["payments"][0]["description"]
-    assert description.startswith("<outside>") and description.count("</outside>") == 1
+    assert result["occurrence"]["payments"][0]["description"] == movement["description"]
     await undo_group(ledger, result["undo_id"])
     assert (await get_occurrence(ledger, schedule["id"], due))["paid_paise"] == 0
 

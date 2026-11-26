@@ -2,7 +2,7 @@
 
 **What it shows:** When each layer runs, what runs, and where its results go. Every commit runs tests
 with model requests blocked. A change to the model, instructions, or tools runs agent evals with a real
-model, which fill the scorecard. Every turn runs a number check after the reply and exports spans to
+model, which fill the scorecard. Every turn exports spans to
 Phoenix. Failed eval trials go to Phoenix too, and a reply you flag gets rewritten as a synthetic case.
 
 **Diagram type:** Architecture. No semantic pattern matched.

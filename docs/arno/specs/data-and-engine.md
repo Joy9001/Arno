@@ -239,8 +239,8 @@ tables:
 | Table | Contents |
 |---|---|
 | `settings` | Single row (`id = 1`): `base_currency`, `time_zone`, `floor_paise`, `default_horizon_days` (default 90), `notification_time`, `weekly_briefing_dow`, `reminder_lead_days`, `last_model_error_type`, and `last_model_error_at` |
-| `preferences` | Typed memories: `body`, `kind` (`preference`, `fact`, or `rule`), optional normalized `subject`, `created_by` (`agent` or `user`), `source_message_id`, `active`, and `updated_at`. Never stores numbers owned by the ledger. Forgetting sets `active = false`; permanent deletion is Settings-only ([tools.md](tools.md#preference)) |
-| `conversations`, `messages` | One `conversations` row per thread with `model_history` (`jsonb`), `snapshot_at`, `outside_text_at`, and `run_started_at` (set during active turns so crash recovery detects interrupted runs). `messages` is append-only with unique `client_id`, `trace_id`, `flagged_at`, and a generated `search` `tsvector` GIN index using PostgreSQL's `simple` config so Hinglish terms are not mangled |
+| `preferences` | Typed memories: `body`, `kind` (`preference`, `fact`, or `rule`), optional normalized `subject`, `created_by` (`agent` or `user`), `source_message_id`, `active`, and `updated_at`. Never stores numbers owned by the ledger. Forgetting sets `active = false`; permanent deletion is Settings-only ([tools.md](tools.md#update_setup)) |
+| `conversations`, `messages` | One `conversations` row per thread with `model_history` (`jsonb`, the `ModelMessage` list the agent reads), `snapshot_at` and `outside_text_at` (unused), and `run_started_at` (set during active turns so crash recovery detects interrupted runs). `messages` is append-only with unique `client_id`, `trace_id`, `flagged_at`, and a generated `search` `tsvector` GIN index using PostgreSQL's `simple` config so Hinglish terms are not mangled |
 | `audit_log` | Every write: `actor`, `message_id`, `group_id`, `table_name`, `row_id`, `before` and `after` JSON, and `undone_at`. One undo reverts an entire `group_id` atomically |
 | `imports` | Statement import lifecycle: `attachment_id`, `file_hash`, `institution`, `fingerprint`, `account_id`, `period_start`, `period_end`, opening and closing balances, `check_status` (`VERIFIED`, `DISCREPANCY`, `FAILED`), `counts`, `review`, `reason`, `task_id`, `undone_at`, and `status` (`parsing`, `needs_password`, `needs_input`, `review`, `committed`, `rejected`, `failed`, or `not_a_statement`) |
 | `statement_layouts`, `parser_versions` | Known bank header variants per layout and append-only parser scripts (`layout_id`, `version`, `is_active` with partial unique index, `parser`, `helper_version`, `source_import_id`, `created_at`) saved only after commit ([import.md](import.md)) |
@@ -267,88 +267,50 @@ The following table lists each operational table:
 
 ## Trust boundaries and write tiers
 
-Arno separates read-only computation from state-mutating actions across a narrow tool surface: **14
-read and presentation tools** sit behind Code Mode's single `run_code` tool, **6 write tools** are
-direct model calls, and **5 delegation tools** (`delegate_task`, `list_tasks`, `message_task`,
-`answer_task`, `cancel_task`) manage background parser tasks. For every tool's exact signature and
-return schema, see [tools.md](tools.md).
+Arno separates read-only computation from state-mutating actions across a narrow tool surface:
+three read tools (`run_query`, `project`, and `run_python`), four write tools, and web search. For
+every tool's exact signature and return schema, see [tools.md](tools.md).
 
-### Code Mode boundary
+### Read boundaries
 
-The 14 read and presentation tools live in a toolset tagged `.with_metadata(code_mode=True)` and are
-exposed through `CodeMode(tools={"code_mode": True})`, using the harness's built-in resource limits.
-Write tools never enter `run_code`. Inside the Monty sandbox:
+- `run_query` runs as `agent_ro`: `SELECT` only on the allowed views and tables, a 2-second
+  timeout, one statement per call, and no auth, secret, or raw `pgledger_*` grants.
+- `run_python` runs in the isolated `sandbox` service: no database, no network, no clock, and no
+  secrets. Scripts read data first with `run_query` and paste what they need, so the sandbox holds
+  only what the model chose to send.
+- Affordability verdicts come only from `project`. The model decides what to compute and never
+  states a figure that a tool or script did not return (architecture rule 1).
 
-- Scripts compute money in integer paise and cross the tool boundary using JSON-native types only
-  (`Decimal`, dates, tuples, and sets are converted to JSON-native forms so replay stays identical).
-- The sandbox has no clock, no filesystem `mount`, and no `os_access`; scripts obtain today's date
-  from `get_financial_context` and read data exclusively through the read tools.
-- Nested calls use `await` with keyword arguments; nested `ModelRetry` errors arrive as catchable
-  `Exception` instances.
-- Nested `ToolReturn` metadata travels back on the `run_code` return, and Arno emits the resulting
-  cards and citations directly into the chat stream.
-- Model-written scripts can sweep dates or compare scenarios, but affordability verdicts come only
-  from `project()` and standard debt math comes from `amortize`, `card_payoff`, `compare_offers`,
-  and `compound`.
+Voice notes and photos are input preprocessing rather than agent tools. Speech-to-text output
+enters as a normal user turn, and photos reach the main agent natively.
 
-Voice notes and photos are input preprocessing rather than agent tools. Speech-to-text output enters
-as a normal user turn; photo extraction runs in an isolated, tool-less vision call whose text fields
-enter the thread marked as outside text and flag the conversation.
-
-### Outside text and taint tracking
+### Outside text
 
 Bank narrations, payer names, and UPI notes are attacker-controlled text. Because Arno has no
 outbound tools, cannot move money, and makes every write audited and undoable, the risk worth
-blocking is a silent lasting or wide change—such as a poisoned memory rule that mutes alerts.
-
-The following sources count as outside text:
-
-- `statement_lines.description_raw` and text fields extracted from receipt or payment photos.
-- Any name copied from outside text into another table (`payees.display_name`, `schedules.name`),
-  tracked with an `outside_text` boolean column.
-- Every `run_query` result, because model-written SQL can select or alias any column.
-- Every delivered parser subagent report or question, because it was written by a model that read a
-  statement file.
-- Any new name supplied to a write in a flagged conversation unless that name appears in your own
-  message text.
-
-**Tracking mechanism:** `mark()` (`src/arno/tools/mark.py`) wraps outside text in `<outside>` and
-`</outside>` markers, strips embedded closing markers and invisible characters, caps the string at
-200 characters, and owns `conversations.outside_text_at` persistence and confirmed-mark clearing.
-One stateless capability enforces taint across the agent boundary:
-
-- `OutsideTextTaint` (`src/arno/agent/capabilities.py`) inspects tool returns (including nested
-  Code Mode returns), tool retry errors, and delivered `parser` subagent reports or questions,
-  flagging the conversation whenever outside text is present. Handing off an upload does not flag
-  the thread; receiving any report or question from the parser does.
-
-Server code owns `outside_text_at`; the model cannot set or clear it. A clean thread starts unflagged
-unless its pinned financial snapshot contains a name that still carries `outside_text = true`. Once
-flagged, the conversation remains flagged for its lifetime. Confirming a marked name on a confirm
-card clears `outside_text` on the matching `payees` and `schedules` rows so future clean threads do
-not inherit that flag.
+blocking is a silent lasting or wide change, such as a poisoned category rule. The prompt tells the
+agent to treat such text as data, and the confirm cards below put a tap between the agent and the
+wide writes. No code marks or tracks outside text: `conversations.outside_text_at` and the
+`outside_text` columns are provenance columns that nothing sets or reads for a decision.
 
 ### Write tiers and confirmation cards
 
 Write behavior depends on whether a write is immediately visible and reversible on one item or makes
-a lasting or wide change. The following table lists every write tier:
+a wide or account-wide change. The following table lists every write tier:
 
 | Tier | Tools and scopes | Behavior |
 |---|---|---|
-| Visible and undoable | `record_movement`, `correct_movement` with `scope="this"`, `schedule_payment`, and `undo` | Always instant with an inline undo card, whether or not the thread is flagged. If `schedule_payment` returns outside text in an occurrence or movement description, it flags the conversation for later lasting writes |
-| Lasting or wide | `correct_movement` with `scope="future"` or `scope="all"`, `update_setup` (all entities), and `preference` (`remember`, `forget`, `classify`) | Instant in a clean conversation. In a flagged conversation, `_gate()` raises PydanticAI's `ApprovalRequired`, pausing the run and showing a confirm card with the exact change. Nothing writes until you tap **Confirm** |
-| Non-ledger delegation | `delegate_task`, `list_tasks`, `message_task`, `answer_task`, `cancel_task` | Write no ledger rows. Statement imports stop in `review`, and committing requires an explicit REST action on the review screen |
+| Visible and undoable | `record_movements`, `correct_movement` with `scope="this"`, `update_setup` for everything except the two cases below (including `preference`), and `undo` | Always instant with an inline undo card |
+| Wide or account-wide | `correct_movement` with `scope="future"` or `scope="all"`, and `update_setup` with `action="archive"` or `entity="settings"` | `_ask_first()` raises PydanticAI's `ApprovalRequired`, pausing the run and showing a confirm card with the exact change. Nothing writes until you tap **Confirm** |
+
+Statement imports write no ledger rows from chat. An import stops in `review`, and committing
+requires an explicit REST action on the review screen.
 
 **All-or-nothing approval submission:** When a turn produces multiple confirm cards, every pending
 card must be answered together in one request (`src/arno/api/chat.py`). Answering only a subset or
 referencing an unknown `tool_call_id` returns HTTP `409`, writes nothing, and keeps every pending
 card open. Stored model history binds each approval to its exact `tool_call_id` and stored arguments
 so an approval applies at most once and re-validates on resume.
-
-**Host-generated approval text:** If a turn pauses on `DeferredToolRequests` without model prose,
-the host generates a plain sentence describing each pending call (`approval_text` in
-`src/arno/agent/turns.py`) and persists it into the message transcript so confirm cards never render
-without an explanation.
 
 **Exfiltration defenses:** The web app's strict CSP allows images only from Arno's own origin and
 renders links in agent replies as plain text ([platform.md](platform.md)).
@@ -627,7 +589,8 @@ scope ([parked.md](../planning/parked.md)).
 
 ## Money calculators
 
-`src/arno/engine/money.py` provides pure, deterministic debt and compounding formulas pinned to a
+`src/arno/engine/money.py` provides pure, deterministic debt and compounding formulas. No agent tool
+calls them; the agent models the same arithmetic in `run_python`. The formulas are pinned to a
 local 28-digit, `ROUND_HALF_UP` `Decimal` context so caller settings never shift a paisa. Amounts
 are capped at `MAX_PAISE` and tenures at 600 months.
 
@@ -668,7 +631,7 @@ are capped at `MAX_PAISE` and tenures at 600 months.
 ## Recaps
 
 A recap presents the story of one day, week, or month as templated cards computed on demand from
-ledger rows. The Recaps page, the agent's `recap` read tool, and the daily `recaps` notification job
+ledger rows. The Recaps page and the daily `recaps` notification job
 all read `src/arno/tools/recaps.py` so every surface reports identical figures. Only opened status
 is persisted in `recap_views`; every amount recalculates fresh after imports or corrections and
 opens the underlying movements summing to that figure.
@@ -695,7 +658,7 @@ report:
 
 | Key | Label | Figure | Line and extra fields | Drill-down rows |
 |---|---|---|---|---|
-| `total` | You spent | Net spend (refunds offset purchases) from `summarize_spending` | Percent change against the compared period, or a coverage/no-data message | Every spending row in the period |
+| `total` | You spent | Net spend (refunds offset purchases) from `spending_rows` | Percent change against the compared period, or a coverage/no-data message | Every spending row in the period |
 | `in_out` | Money in and out | Net left (`income − total`) | Income and spending totals (`in`, `out` money objects); included only when income is positive | Income rows in the period |
 | `where` | Where it went | Top positive category | Share of total and row count; `bars` for the top 4 categories plus "Everything else" | That category's rows (each bar opens its own category) |
 | `change` | The change worth a look | Category with the largest absolute move (up or down) | Current and prior amounts; included only when both periods have complete coverage and prior spend is positive | That category's rows in this period |
@@ -728,9 +691,7 @@ The following table lists the recap REST endpoints (`src/arno/api/recaps.py`):
 
 A daily `recaps` job runs at `notification_time` and ensures the latest complete week and month with
 positive spend each have one deduplicated inbox item (`kind = recap`); monthly recaps also send a
-web push, while weekly recaps stay inbox-only. In chat, the `recap(period)` read tool returns the
-same payload with outside merchant names marked (flagging the conversation) and does not emit
-`ui_results`.
+web push, while weekly recaps stay inbox-only. In chat, the agent reads the same figures with `run_query`.
 
 ---
 
@@ -756,7 +717,7 @@ following table summarizes every invariant group checked by `tests/invariants.py
 | Transfer and leg totality | Every transfer links to valid `accounts` rows and has exactly one `movement_legs` row pointing to an existing movement; every movement owns at least one transfer |
 | Movement posting shapes | `expense`: single transfer from a real account to `spending` (`consumption == total`). `income`: single transfer from `income` to a real account (no `spending`). `transfer`: never touches `spending` or `income`. `split`: single payer account, `my_share` to `spending`, and person shares to owned `person` accounts. `loan`: single payer to `loan` (principal) and `spending` (interest only). `refund`: single transfer from `spending` to a real account (`consumption == −total`). `settlement`: single transfer between a `person` account and a real account (no `spending`). `adjustment`: single transfer between `equity` and a real account (`consumption == 0`). `reversal`: names `reverses_id` |
 | Reversal symmetry | Every reversal's postings are the exact opposite of its target; `v_movement_state` matches `movement_reversal_state()`; every reversed movement and its reversal chain net to zero in both `v_spending` and per-account `pgledger_entries` |
-| Cross-path spending agreement | For every month and category, raw `v_spending`, `summarize_spending`, recap `spending_rows`, and `query_movements` agree to the paisa, and `query_movements` excludes reversals and effectively reversed movements by default |
+| Cross-path spending agreement | For every month and category, raw `v_spending`, `summarize_spending` (`tools/recaps.py`), and recap `spending_rows` agree to the paisa |
 | Account identity and views | `pgledger_accounts.name` equals `accounts.id`; `accounts.name` is `NULL` if and only if `kind` is `person` or `goal`; `goals.account_id` targets `goal` accounts; `payees.person_account_id` targets `person` accounts and every `person` account has a payee; `v_legs` matches `pgledger_transfers` count and `v_spending` monthly totals; `v_accounts.balance_paise`, `v_balances` latest and today IST balances, and `pgledger_accounts.balance` all match; `v_owed` agrees with person-account sums and reflects only `split`, `settlement`, `transfer`, or `reversal` movements |
 | Schedule payment evidence | No `schedule_payments` row points to a reversal; every allocation fits within the movement's eligible capacity per occurrence and across occurrences; `payment_evidence` and `payment_status` match effective non-reversed allocations as of today |
 | Import integrity | Uncommitted imports never create ledger movements (`stmt:<line>` idempotency key or `statement_line` capture); every `committed` import has `check_status = 'VERIFIED'` |

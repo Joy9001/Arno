@@ -53,15 +53,13 @@ The FastAPI lifespan calls `shutdown_observability()` on shutdown to flush queue
 - **Message content:** Follows Pydantic AI's default instrumentation: prompts, replies, tool
   arguments, and tool results appear in spans. Because traces contain financial data, Phoenix stays
   local and loopback-only.
-- **Vision isolation:** Receipt and UPI photo extraction (`src/arno/capture/photo.py`) and
-  textless statement transcription (`src/arno/importers/vision.py`) set `agent.instrument = False`
-  so raw images never enter traces. `Agent.instrument_all` also sets `include_binary_content=False`.
+- **Vision isolation:** Textless statement transcription (`src/arno/importers/vision.py`) sets
+  `agent.instrument = False` so raw images never enter traces. `Agent.instrument_all` also sets `include_binary_content=False`.
 - **Root span view attributes:** `RootSpanIO` in `src/arno/agent/capabilities.py` writes
   `input.value` and `output.value` (both `text/plain`) onto the native `invoke_agent` span so
-  Phoenix's trace list displays the user prompt and final reply without the pinned snapshot or full
-  history. Failed, cancelled, or approval-pending runs omit `output.value`. Because `RootSpanIO`
-  runs before the input guardrail, `input.value` passes through
-  `arno.agent.redaction.redact_text` first so pasted credentials appear as `[redacted:...]`.
+  Phoenix's trace list displays the user prompt and final reply without the full history. Failed,
+  cancelled, or approval-pending runs omit `output.value`. Nothing redacts `input.value`, so a
+  credential typed into chat appears in the trace; Phoenix stays loopback-only.
 - **Attribution and approval counts:** Outside the content switch, `RootSpanIO` sets `user.id` (the
   signed-in passkey principal's opaque `users.id` in web chat, or `local-user` in scheduled runs) plus numeric `arno.approvals.offered` and `arno.approvals.approved` tap counts.
   `InferenceContext` in `src/arno/agent/capabilities.py` sets `session.id`,
@@ -140,7 +138,7 @@ to local stdout only; read it from a trusted host terminal.
    running and healthy with `docker compose ps` and
    `curl -fsS http://127.0.0.1:${PHOENIX_UI_PORT:-6006}/healthz`.
 2. Open `http://127.0.0.1:6006`, sign in, and select the `arno` project.
-3. Send one chat message and open the newest trace. The root `invoke_agent` span shows the redacted
+3. Send one chat message and open the newest trace. The root `invoke_agent` span shows the
    prompt and reply in Phoenix's trace list, with model-request and `execute_tool` child spans. The
    Phoenix also shows the `GET`/`POST` request spans and `SELECT`/`INSERT` query spans.
 4. If no trace arrives, inspect `docker compose logs api` for exporter errors, confirm

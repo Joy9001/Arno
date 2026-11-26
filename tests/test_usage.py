@@ -13,8 +13,6 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.usage import RequestUsage
 
 from arno.agent.builder import build_agent
-from arno.agent.deps import AgentDeps
-from arno.agent.parser import build_parser_agent
 from arno.agent.usage import (
     INDIA,
     DailyBudgetExceeded,
@@ -116,14 +114,6 @@ async def test_a_chat_turn_at_the_limit_does_not_call_the_model(session_client, 
     assert response.status_code == 200
 
 
-async def test_a_parser_run_refuses_at_the_limit(db):
-    await _spend(db, "20")
-    agent = build_parser_agent(model=FunctionModel(_never_called))
-
-    with pytest.raises(DailyBudgetExceeded):
-        await agent.run("parse", deps=AgentDeps(conversation_id="limit"))
-
-
 async def test_a_scheduled_question_stops_at_the_limit(db):
     from arno.jobs.questions import answer_question
 
@@ -145,34 +135,3 @@ async def test_vision_propagates_a_cost_stop(monkeypatch):
     monkeypatch.setattr("arno.importers.vision.vision_model", lambda: FunctionModel(fail))
     with pytest.raises(DailyBudgetExceeded):
         await transcribe_page(Doc(minimal_pdf(["synthetic page"])))
-
-
-@pytest.mark.parametrize("catch_error", [False, True])
-async def test_code_mode_cannot_retry_a_paid_tool_after_a_cost_stop(db, monkeypatch, catch_error):
-    from arno.importers.readers import Doc
-
-    code = "await transcribe_page(import_id='synthetic', page=0)"
-    if catch_error:
-        code = "try:\n    " + code + "\nexcept Exception:\n    " + code
-    model_calls: list[int] = []
-    vision_calls: list[int] = []
-
-    def script(messages, info):
-        model_calls.append(1)
-        assert len(model_calls) == 1, "a cost stop must prevent another paid model request"
-        return ModelResponse(parts=[ToolCallPart("run_code", {"code": code})])
-
-    async def load_doc(ctx, import_id):
-        return Doc(b"synthetic page")
-
-    async def fail_vision(doc, page):
-        vision_calls.append(1)
-        raise DailyBudgetExceeded("synthetic")
-
-    monkeypatch.setattr("arno.agent.parser._load_doc", load_doc)
-    monkeypatch.setattr("arno.agent.parser.vision_transcribe", fail_vision)
-    agent = build_parser_agent(model=FunctionModel(script))
-    with pytest.raises(DailyBudgetExceeded):
-        await agent.run("synthetic", deps=AgentDeps(conversation_id="synthetic"))
-    assert model_calls == [1]
-    assert vision_calls == [1]

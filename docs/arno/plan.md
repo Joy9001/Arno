@@ -71,9 +71,9 @@ daily capture missed.
    attach directly to chat turns for the main agent to read natively. On Android, the installed PWA
    acts as a share target.
 4. **Statement imports:** PDF, spreadsheet, or text statements (including password-protected files)
-   parsed by a background parser subagent that saves and replays one parser for each bank layout.
-   Imports reconcile against logged rows and commit only after user review
-   ([`specs/import.md`](specs/import.md)).
+   uploaded to the import card, which reconciles rows against the ledger and commits only after user
+   review. Statement extraction is being rebuilt
+   ([`specs/import.md`](specs/import.md#extraction-status)).
 5. **Web interface:** File uploads, import review, and settings are editable screens; financial
    panels are read-only so edits flow through chat with undo.
 
@@ -88,10 +88,12 @@ enough for answers and affordability verdicts on day one.
 
 ### What Arno answers and does
 
-- **Ledger queries:** Orthogonal read tools plus a read-only `run_query(sql)` escape hatch running
-  as `agent_ro`.
-- **Multistep modeling:** For what-ifs beyond a single read tool, the agent writes a short Python
-  script over the read tools in a sandbox (Code Mode) and shows the script with the answer.
+- **Ledger queries:** A read-only `run_query(sql)` running as `agent_ro` over the ledger views.
+- **Multistep modeling:** For arithmetic beyond SQL and the projection, the agent writes a short
+  Python script (`run_python`) that runs in the isolated `sandbox` service and states only what
+  the script prints.
+- **Web search:** The model's own search, or Brave Search when `BRAVE_API_KEY` is set, for current
+  rates and rules. Replies cite sources as `[n]`.
 - **Affordability:** Computed in code as `yes`, `yes-but`, or `no` from 16,384 seeded daily
   scenarios. Scheduled events are exact and variable spend is resampled from history. A `yes`
   requires at least a 90% probability of staying above the floor and at least a 99% probability of
@@ -103,8 +105,8 @@ enough for answers and affordability verdicts on day one.
   schedules, added recurring or one-time flows) evaluated by the same projection engine without
   saving changes, returning plan health and runway in days.
 - **Debt cost analysis:** Loan amortization with prepayment, processing fees, and nominal _annual
-  percentage rate_ (_APR_), side-by-side offer comparison (`compare_offers`), and credit-card payoff
-  walks at the card's stored or stated finance charge (never an assumed card rate).
+  percentage rate_ (_APR_), offer comparison, and credit-card payoff walks at the card's stored or
+  stated finance charge (never an assumed card rate), all computed by the agent in `run_python`.
 - **Recaps:** Server-computed daily, weekly, and monthly template stories where every figure links
   to the ledger rows that sum to it ([`specs/data-and-engine.md`](specs/data-and-engine.md#recaps)).
 - **Citations:** Every answer figure links to the ledger rows, schedules, or tool outputs behind it.
@@ -114,9 +116,8 @@ enough for answers and affordability verdicts on day one.
 - **User-scheduled questions:** Read-only prompts run on your schedule with a per-run request limit
   and deliver answers to the inbox.
 - **Write discipline:** Everyday chat writes, photos, and memory saves land immediately with an
-  inline undo card. Statement imports wait for the review screen. Lasting or wide writes (memory,
-  setup, bulk category rules) require a tap on a confirm card in any conversation that has read
-  outside text (rule 2 in §4).
+  inline undo card. Statement imports wait for the review screen. Wide or account-wide writes
+  (bulk category rules, archiving, settings) require a tap on a confirm card (rule 2 in §4).
 - **Spending definition:** Spending measures consumption only. Own-account transfers (including card
   bill payments), lending, settlements, reimbursements, and savings or investment outflows do not
   count as spending; refunds offset the purchases they reverse.
@@ -135,7 +136,7 @@ worth, broker APIs, tax engine, category budgets, multicurrency, multiuser house
 projections, extra briefings (daily, monthly, payday), anomaly detection, dedicated AI gateway,
 public-internet hosting, Tailscale-identity setup, encryption inside Postgres, locale-pack
 interface, arm64 images, egress proxy, external job library, MCP server, direct Claude Agent SDK
-subscription runtime, hidden semantic memory extraction, and a separate code sandbox.
+subscription runtime, hidden semantic memory extraction.
 
 Promote a parked item only when its absence causes Arno to answer incorrectly or miss a warning.
 Unbuilt proposals beyond the core product live in
@@ -181,9 +182,9 @@ The following table records the build-versus-buy decision for each component:
 
 | Component | Decision | Rationale |
 |---|---|---|
-| Agent loop, tool calling, streaming | Buy: PydanticAI + `pydantic-ai-harness` | Harness capabilities, Vercel AI protocol adapter, and provider switching ([`specs/harness.md`](specs/harness.md)) |
+| Agent loop, tool calling, streaming | Buy: PydanticAI | Plain `Agent` with a few capabilities, native tool approval, Vercel AI protocol adapter, and provider switching ([`specs/harness.md`](specs/harness.md)) |
 | Statement file readers | Buy: `pypdfium2`, `python-calamine`, `python-docx`, `striprtf`, `msoffcrypto-tool` | One reader library for each format ([`specs/import.md`](specs/import.md)) |
-| Statement layout parsing | Build: agent-written Monty parsers saved per layout | Avoids maintaining bank-specific scrapers ([`specs/import.md`](specs/import.md)) |
+| Statement layout parsing | Under rebuild | Extraction is replaced in the simplification plan's Phase 3; the checks, reconciliation, and review stay ([`specs/import.md`](specs/import.md#extraction-status)) |
 | Speech-to-text | Buy: OpenAI-compatible STT endpoint | Cloud API, or any self-hosted OpenAI-compatible server you run yourself (`STT_BASE_URL`); no bundled server |
 | Textless-page PDF vision | Buy: OpenAI-compatible vision model | Isolated `VISION_*` role for scanned PDF pages during statement imports |
 | Passkeys and web push | Buy: `py_webauthn`, `pywebpush` | Standard cryptographic and WebAuthn protocols |
@@ -192,7 +193,8 @@ The following table records the build-versus-buy decision for each component:
 | Agent evaluations | Buy: `pydantic_evals` | Runs the production agent directly against cloned test databases |
 | Observability | Buy: Arize Phoenix + stock OpenTelemetry SDK | FastAPI, asyncpg, and PydanticAI spans export over OTLP/HTTP to stock Phoenix on SQLite (`--profile obs`, off by default); no custom span, exporter, or replay code ([`operations/observability.md`](operations/observability.md)) |
 | Model cost | Build: `llm_usage` table + one shared daily cap | One row per model response, priced by `genai-prices` through PydanticAI; $20 a day shared by every role, reset at midnight IST; unpriced models count as $0. Replaces the spend ledger, cost journal, pricing and metering modules, and per-run budgets ([`specs/cost-tracking.md`](specs/cost-tracking.md)) |
-| Model-written Python | Build: isolated `sandbox` service | Stateless container on an internal network with no internet or database route, read-only, resource-capped, and given no secrets; `api` reaches it at `ARNO_SANDBOX_URL` |
+| Model-written Python | Build: isolated `sandbox` service | Stateless container on an internal network with no internet or database route, read-only, resource-capped, and given no secrets; `api` reaches it at `ARNO_SANDBOX_URL` through `run_python` |
+| Web search | Buy: model-native search, else Brave Search | The agent searches only when the model supports it or `BRAVE_API_KEY` is set ([`specs/tools.md`](specs/tools.md#web_search)) |
 | Double-entry ledger core | Buy: vendored `pgledger` | MIT-licensed pure Postgres SQL with idempotency keys |
 | Ledger mapping, projection engine, patterns | Build | Core product differentiator ([`specs/data-and-engine.md`](specs/data-and-engine.md)) |
 
@@ -203,7 +205,7 @@ The following table records the stack for each layer:
 | Layer | Choice | Rationale |
 |---|---|---|
 | Backend language | Python 3.14 (`uv`) | Primary ecosystem for PydanticAI and numerical tooling |
-| Agent framework | PydanticAI + `pydantic-ai-harness` (pinned) | Native Code Mode, compaction, and delegation |
+| Agent framework | PydanticAI | Native approvals, caching, history processors, fallback, and web search |
 | API server | FastAPI + Uvicorn | Pydantic-native OpenAPI contracts; also serves the static web build |
 | Database | PostgreSQL 18 (pinned) | Enforces the `agent_ro` read-only role and 2-second timeout natively; supports real date/numeric types and `pgvector` if needed |
 | Data access | Plain SQL over `asyncpg` + per-loop idle connection cache (up to 8 connections) | Schema stays transparent for `run_query`; never-wait cache avoids pool deadlocks on long chat streams ([`specs/platform.md`](specs/platform.md#database-connections-and-integrity)) |
@@ -252,14 +254,15 @@ CLI (on host) ──┴── HTTPS over tailnet ──>   FastAPI: static web, 
 Code must never violate these four rules:
 
 1. **The model decides what to compute; code computes it.** Every figure the agent states must come
-   from a tool return or a `run_code` script output. Claims about current balances, dues, or goal
-   progress require a live tool result from that turn. A post-reply check (`agent/number_check.py`)
-   flags untraced amounts. Affordability verdicts come only from the tested engine.
-2. **Untrusted text never makes a lasting change unseen.** Statements run in a parser subagent with
-   no write or ledger tools. Statement-derived text, parser reports, and attached user images mark
-   the conversation as tainted (`conversations.outside_text_at`). Everyday undoable writes stay
-   instant; lasting or wide writes (memories, setup changes, bulk category rules) require an
-   explicit confirm card tap in any tainted conversation.
+   from a tool return (`run_query`, `project`) or a `run_python` script output. Claims about
+   current balances, dues, or goal progress require a live tool result from that turn. No code
+   checks the reply afterward; the prompt and the evals carry this rule. Affordability verdicts
+   come only from the tested engine.
+2. **Lasting or wide writes ask first.** Statement text and payee notes are data, never
+   instructions. Everyday undoable writes stay instant. A write that reaches wide or changes the
+   account setup requires an explicit confirm card tap through PydanticAI's `ApprovalRequired`:
+   `correct_movement` with `scope` other than `this`, and `update_setup` with `action="archive"`
+   or `entity="settings"`.
 3. **Tools are plain Python over the database, free of PydanticAI types.** The agent, REST API, and
    any future MCP server wrap the same functions in `src/arno/tools/` and `src/arno/ledger/`.
    Framework adapters belong strictly in `src/arno/agent/`.
@@ -303,14 +306,13 @@ owner-setup, and human ship gates are tracked in
 
 ### L2: Agent
 
-14. Streaming web chat with persistent searchable threads, pinned financial snapshot, per-turn
-    reminders, compaction, prompt caching, and detached turns that survive disconnects.
+14. Streaming web chat with persistent searchable threads, history trimming near the context
+    limit, prompt caching, and detached turns that survive disconnects.
 15. Environment-driven provider switching (cloud and local), a Postgres model-usage log with a
     shared daily spend cap, fallback model, and stock OpenTelemetry tracing to Phoenix.
-16. Orthogonal read tools (including `run_query`, `amortize`, `compound`, `show_chart`) behind Code
-    Mode, structured result cards, post-reply number check, and reply flagging.
-17. Direct write tools with inline undo cards, outside-text taint tracking, and confirm cards for
-    lasting or wide writes in tainted conversations.
+16. Read tools (`run_query`, `project`, and `run_python` in an isolated sandbox), web search with
+    source citations, and structured result cards.
+17. Direct write tools with inline undo cards and confirm cards for wide or account-wide writes.
 18. Agent-managed typed memories (`preference`, `fact`, `rule`) with inline undo cards and Settings
     management.
 19. Agent-led setup conversation for accounts, income, obligations, goals, floor, and baselines.
@@ -318,20 +320,19 @@ owner-setup, and human ship gates are tracked in
 
 ### L3: Import and recaps
 
-21. Real-statement parser spike confirming Monty parsers on real bank statements without OCR or
-    third-party scrapers (Union Bank remains open pending statements).
-22. Background parser subagent pipeline under `DelegationTasks`: upload, replay/repair/write,
-    verification checks, regression gate against stored statements, reconciliation, review screen,
-    and atomic commit/undo.
-23. Step-by-step parser run visibility, pause/continue on the 120-step budget, 150-page PDF limit,
-    host-driven wake turns when background tasks settle, and server-computed daily, weekly, and
-    monthly recaps (`tools/recaps.py`) shared across the web app, `recap` tool, and inbox.
+21. Real-statement parser spike confirming model-written parsers on real bank statements without
+    OCR or third-party scrapers (Union Bank remains open pending statements).
+22. Statement import pipeline: upload, verification checks, regression gate against stored
+    statements, reconciliation, review screen, and atomic commit/undo. Extraction is being rebuilt
+    ([`specs/import.md`](specs/import.md#extraction-status)).
+23. 150-page PDF limit and server-computed daily, weekly, and monthly recaps (`tools/recaps.py`)
+    shared across the web app and inbox.
 24. Twelve-month real-statement backfill committed through the review screen with recomputed
     baselines (open in [`completion-checklist.md`](completion-checklist.md)).
 
 ### L4: Evals
 
-25. `pydantic_evals` suite (84 cases on the demo persona, cloned database per trial, `pass^3`
+25. `pydantic_evals` suite (85 cases on the demo persona, cloned database per trial, `pass^3`
     grading, Hindi/Hinglish/voice tags), run from Python through `evals.runner.run_eval`.
 
 ### L5: Projection and pattern engine
@@ -371,12 +372,11 @@ owner-setup, and human ship gates are tracked in
     projection cards.
 43. Multi-event what-if scenarios (`engine/scenario.py`, up to 12 dated changes) with runway in days.
 44. Recurring-charge price-change alerts at the first payment exceeding a 2% step.
-45. Debt cost tools: loan `amortize` with fees and APR, `card_payoff` with stored or stated card
-    rates, `compare_offers` side-by-side comparison, and explicit `complete_cost`/`not_included`
-    disclosures.
+45. Debt cost analysis: loan amortization with fees and APR, card payoff at stored or stated card
+    rates, and offer comparison, computed by the agent in `run_python`.
 46. Tier-0 acceptance additions: payment-evidence alert resolution, Settings **History** and
     **Delete everything**, XlsxWriter projection workbook export, `(kind, subject)` memory
-    replacement, unified outside-text redaction and vision trace suppression, parse retry, and
+    replacement, vision trace suppression, parse retry, and
     priority-ordered goal deferral.
 
 ### L10: Engine hardening
@@ -401,14 +401,13 @@ specifications under [`specs/`](specs/) and [`operations/`](operations/).
 
 - **Linux container shutdown (L0):** Do Compose restarts and the 30-second `stop_grace_period`
   behave cleanly on a Linux host (not only Windows Docker Desktop)?
-- **Real-use agent traces (L2):** Across four weeks of real owner usage, is the post-reply number
-  check quiet enough to keep visible (or turn into tappable citations), what are real token counts
-  and prompt-cache hit rates, how often do confirm cards appear, and should the 5 s / 15 s latency
-  targets be revised against measured cloud-model latency?
+- **Real-use agent traces (L2):** Across four weeks of real owner usage, does rule 1 hold without a post-reply
+  check, what are real token counts and prompt-cache hit rates, how often do confirm cards appear,
+  and should the 5 s / 15 s latency targets be revised against measured cloud-model latency?
 - **Local chat models (L2/L4):** Which local Ollama models pass the eval suite on practical
   hardware?
-- **Union Bank statements (L3):** What file format and layout does Union Bank export, and does a
-  saved Monty parser handle it cleanly?
+- **Union Bank statements (L3):** What file format and layout does Union Bank export, and can the
+  rebuilt extraction handle it cleanly?
 - **Hinglish speech recognition (L7):** How does a self-hosted Whisper-class server compare against cloud STT (or
   Qwen3-ASR) on real owner Hinglish audio, and does `STT_PAYEE_CONTEXT=1` measurably improve
   merchant recognition?

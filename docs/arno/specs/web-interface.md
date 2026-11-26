@@ -1,6 +1,6 @@
 # Web interface
 
-This specification owns Arno's web navigation, hash routes, page layouts, subagent run views,
+This specification owns Arno's web navigation, hash routes, page layouts,
 responsive and state rules, and frontend stack; [`DESIGN.md`](../../../DESIGN.md) owns all visual
 design tokens, typography, color roles, and orb rules, and [`platform.md`](platform.md) owns the
 underlying API and authentication contracts.
@@ -33,9 +33,8 @@ The following table lists every live route and alias handled by `web/src/Shell.t
 | `#money/goals` | Goal progress rings and 365-day forecast completion dates |
 | `#money/people` | Split and lending balances grouped into owed-to-you, you-owe, and settled |
 | `#activity/ledger` | Paginated movement ledger, provenance drawer, and **Uncategorized** queue |
-| `#activity/imports`, `#activity/imports/<import_id>` | Statement upload, active import review, paginated import history, and saved parser layouts |
+| `#activity/imports`, `#activity/imports/<import_id>` | Statement upload, active import review, and paginated import history |
 | `#activity/inbox` | Notification inbox and scheduled-question management |
-| `#activity/run/<task_id>` | Full-page step-by-step view of a parser subagent run |
 | `#recaps`, `#recaps/<period_id>` | Daily, weekly, and monthly ledger-computed recap stories |
 | `#settings/<section>` | One of 11 settings sections (`profile`, `categories`, `notifications`, `passkeys`, `questions`, `memory`, `history`, `jobs`, `backups`, `export`, `deletion`) |
 | `#home`, `#home/<thread>[/<message>]` | Legacy aliases redirected to `#ask` or `#chats/<thread>[/<message>]` |
@@ -53,7 +52,7 @@ The following table specifies the interactive agent views and canvas panels:
 | View | Layout and content | Primary actions |
 |---|---|---|
 | **Ask** | Orb hero, greeting, composer (text, photo upload, voice recording, statement attachment), starting questions, and cards for cash on hand, forecast readiness, and unread notifications; replaced by a guided first-run checklist and statement drop zone until the ledger has data | Ask a question, attach a receipt or statement, record voice, or open a noticed item |
-| **Chats** | Thread list beside the open conversation; **Chat** view or **Flow** view (graph of tool calls for an answer); rich tool cards (logged movement with undo, **Remembered** card, projection receipt, spending breakdown, import run card, charts, tables); inline untraced-number notes and reply flagging; plain-text links only | Send messages, answer confirm cards, stop streaming, flag replies, and open evidence or the planner on the canvas |
+| **Chats** | Thread list beside the open conversation; **Chat** view or **Flow** view (graph of tool calls for an answer); rich tool cards (logged movement with undo, **Remembered** card, projection receipt, spending breakdown, import card, charts, tables); source citations and reply flagging; plain-text links only | Send messages, answer confirm cards, stop streaming, flag replies, and open evidence or the planner on the canvas |
 | **Evidence canvas (`EvidencePanel`)** | Sources and computed breakdown backing a projection or answer card, with sources first and raw figures second | Inspect contributing rows, jump to **Money → Timeline**, or ask a follow-up |
 | **Purchase planner (`PlannerPanel`)** | Interactive canvas what-if panel backed by `/api/projection`: price slider (`₹1,000`–`₹5,00,000`), purchase-date slider (today through +60 days), payment method selector (**From an account**, **Card in full**, **Card EMI** with 3–24 month tenures), debounced floor-probability gauge, verdict, lowest median, tightest day, and chart | Explore purchase timing and financing scenarios directly against the projection engine without invoking the LLM |
 
@@ -69,7 +68,7 @@ The following table specifies the financial workspace panels:
 | **Money → Goals** | Progress rings, saved versus target amounts, deadlines, and projected completion dates from the 365-day forecast | Ask about a goal; missing balances suppress forecasts and missing targets stay explicit |
 | **Money → People** | Tiles grouped into owed-to-you, you-owe, and settled, clearly stating direction | Ask about a person or record a settlement in chat |
 | **Activity → Ledger** | Date, kind, account, and search filters above a cursor-paginated movement list (25 per page) plus the **Uncategorized** queue (`GET /api/uncategorized`) grouping unlabeled payees by frequency and total | Open movement provenance and balanced transfers, undo eligible rows, ask about a movement, create custom categories, or assign categories directly to uncategorized payee groups |
-| **Activity → Imports** | Statement upload/start controls, active import review (status badge, counts, **Needs a decision** filter for ambiguous matches, suggested own-account transfers, and credit-card credit classifications, manual opening balance input, and closing adjustment confirmation), keyset-paginated import history, and **Saved layouts** listing parser versions per bank | Resolve line decisions, enter statement passwords, commit, reject, retry failed imports, undo committed imports, purge stored statement files, or roll back a saved parser layout to an earlier version (`POST /api/layouts/{id}/rollback`) |
+| **Activity → Imports** | Statement upload/start controls, active import review (status badge, counts, **Needs a decision** filter for ambiguous matches, suggested own-account transfers, and credit-card credit classifications, manual opening balance input, and closing adjustment confirmation), keyset-paginated import history | Resolve line decisions, enter statement passwords, commit, reject, undo committed imports, or purge stored statement files |
 | **Activity → Inbox** | Filterable notifications by kind (proposal, reminder, risk, pattern, scheduled answer, job failure) beside scheduled-question shortcuts | Mark read, open in a seeded chat, or resolve items |
 | **Recaps** | Sidebar period list grouped into **Daily**, **Weekly**, and **Monthly** recaps with **New** badges, paired with a keyboard-navigable story viewer (`ArrowLeft` / `ArrowRight`) where every figure links to its underlying ledger rows; empty ledgers display an onboarding state instead of ₹0 stories | Step through stories, open contributing ledger rows, track detected recurring charges in chat, or ask about a period |
 
@@ -92,7 +91,7 @@ The following table lists all 11 Settings sections:
 | Advanced | **Background work** (`jobs`) | Live and recent job statuses with retry controls for failed jobs, plus **Models and diagnostics** (`RuntimeInfo`) displaying each role's configured model and host and an **Open Phoenix** link when `ARNO_PHOENIX_UI_URL` is configured |
 | Advanced | **Backups** (`backups`) | Last successful backup status, age, and recovery instructions; distinguishes unavailable status from no backup yet |
 | Advanced | **Export** (`export`) | Format guidance, `ExportScope` listing the eight excluded credential tables, and fresh-passkey-gated downloads for JSON, CSV ZIP, and `pg_dump` |
-| Advanced | **Delete everything** (`deletion`) | `DeletionScope` preview of every table and parser task file affected, requiring fresh passkey re-verification and the typed `"delete everything"` confirmation phrase |
+| Advanced | **Delete everything** (`deletion`) | `DeletionScope` preview of every table affected, requiring fresh passkey re-verification and the typed `"delete everything"` confirmation phrase |
 
 ### Background work indicators and toasts
 
@@ -100,48 +99,23 @@ The shell runs a single polling loop over `GET /api/jobs/activity` (every 3 seco
 running or due within 30 seconds, and every 30 seconds while idle), backed by a `zustand` store
 (`web/src/jobs.ts`):
 
-- **Rail and tab-bar indicator (`BackgroundWork`):** Shows a spinner and active task summary on the
+- **Rail and tab-bar indicator (`BackgroundWork`):** Shows a spinner and active job summary on the
   desktop rail and mobile tab bar, navigating to `#settings/jobs` on select.
 - **Job toasts (`JobToasts`):** Uses Radix `Toast` to announce finished categorizations (with a
   **Review** shortcut to **Uncategorized**), batch submissions, scheduled answers, weekly
   briefings, and job failures (persisting until dismissed, with inline **Retry** and **Details**
   actions).
 
-## Subagent run views
+## Threads and import cards
 
-A parser subagent's execution stays folded out of the main transcript. The chat thread displays one
-import run card with a host-generated status line, progress indicator, inline password or
-account-selection controls when waiting, **Watch** or **Open run**, and **Continue** when paused on
-the step budget. When a task settles while you are away, the wake-turn reply streams into the open
-thread automatically ([`harness.md#wake-turn`](harness.md#wake-turn)). Its status line is a plain
-sentence built from the task's outcome; the raw error stays on the run page. Every mounted card for
-one task shares a single poller (`useRun` in `web/src/run/runData.ts`), and a settled task is read
-once.
+Each stored reply renders as its own message (`joinStrategy: "none"`). A thread that is still
+running when it opens (Arno answering an inbox item, or a turn that outlived its connection) follows
+its stream. A new conversation gets its server id from `POST /api/threads` before its first message,
+photo, or voice note.
 
-Each stored reply renders as its own message (`joinStrategy: "none"`), so a reply a wake turn
-wrote after an earlier answer never folds that answer into the activity panel. A thread that is
-still running when it opens (a wake turn, or Arno answering an inbox item) follows its stream. A
-new conversation gets its server id from `POST /api/threads` before its first message, photo, or
-voice note.
-
-Detailed run progress opens in two places:
-
-- **Live canvas (`RunPanel`):** Docks beside the conversation (or as a dialog sheet at `<= 1180px`)
-  for watching an active parse.
-- **Full page (`RunPage` at `#activity/run/<task_id>`):** Shows every stage and step in full,
-  including step meaning, the agent's comment note, executed script, result, and folded reasoning.
-
-Both views read `GET /api/tasks/{id}`, whose `run` payload is built on the server from
-`PostgresStepStore` (`src/arno/api/run_view.py`):
-
-| Field | Source | Rule |
-|---|---|---|
-| Stages | Fixed parser workflow order | Steps attach to the stage matching their host calls, keeping the spine accurate even if the model skips plan updates |
-| Step title | Counted host calls inside each script | Always host-generated (for example, `"Read 74 pages"` or `"Submitted the parser · attempt 2"`), never free-form model text |
-| Agent note | First `#` comment line in the script | Explicitly labeled as the agent's own note |
-| Status | Step events and return payload | Scripts returning errors mark as failed; steps interrupted at turn end mark as cut off |
-| Step budget | Tool calls started per run | One meter per run; resuming a paused task inserts a divider and resets the budget meter |
-| Ending | Task outcome and import status | Paused runs (`budget`) offer **Continue**; failed runs state the reason; both confirm nothing reached the ledger |
+An attached statement shows as an import card in the thread. The card carries the statement's status
+line and the password field for an encrypted file. No step-by-step run view exists: statement
+extraction is being rebuilt ([`import.md`](import.md#extraction-status)).
 
 ## Responsive and state rules
 

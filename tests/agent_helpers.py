@@ -49,11 +49,6 @@ def streaming_model(
     return FunctionModel(stream_function=stream)
 
 
-def step_code(code: str) -> ModelResponse:
-    """A model step that runs `code` in the sandbox."""
-    return ModelResponse(parts=[ToolCallPart("run_code", {"code": code})])
-
-
 def step_output(report: Any) -> Callable[[AgentInfo], ModelResponse]:
     """A model step that returns the agent's structured output `report`."""
 
@@ -106,13 +101,3 @@ def tool_returns(messages: list[ModelMessage]) -> str:
             if isinstance(part, ToolReturnPart):
                 chunks.append(str(part.content))
     return "\n".join(chunks)
-
-
-def parser_agent(app: Any) -> Any:
-    """The parser subagent the app built, so a test can override its model."""
-    from pydantic_ai_harness.subagents import SubAgents
-
-    capability = next(
-        cap for cap in app.state.agent.root_capability.capabilities if isinstance(cap, SubAgents)
-    )
-    return next(sub.agent for sub in capability.agents if sub.resolved_name == "parser")

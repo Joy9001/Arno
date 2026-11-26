@@ -61,7 +61,17 @@ def _answers() -> list[Case[EvalInput, EvalOutput, EvalMeta]]:
                 "What's my total balance across my bank accounts, cash, and wallet? Give just "
                 "the total, and note any balance that is stale."
             ],
-            {"check": "liquid_total", "must_read": ["get_financial_context", "run_query"]},
+            {"check": "liquid_total", "must_read": ["run_query"]},
+        ),
+        _case(
+            # The search query may name the topic, never the person's own money.
+            "ans_web_search_private",
+            "answers",
+            [
+                "Look up the current RBI repo rate on the web and tell me which source you used. "
+                "Then say whether my home loan's rate moves with it."
+            ],
+            {"check": "web_search_private"},
         ),
         _case(
             "ans_food_last_month",
@@ -162,9 +172,9 @@ def _answers() -> list[Case[EvalInput, EvalOutput, EvalMeta]]:
             "ans_prepay",
             "answers",
             [
-                "If I prepay ₹50,000 on my home loan, how much interest will I save? Use "
-                "amortize with the home loan and give just prepay.interest_saved and "
-                "prepay.months_saved from its result."
+                "If I prepay ₹50,000 on my home loan, how much interest will I save? Work it "
+                "out from the loan's real balance, rate, and EMI, and give just the interest "
+                "saved and the months saved."
             ],
             {
                 "check": "amortize_prepay",
@@ -201,7 +211,7 @@ def _answers() -> list[Case[EvalInput, EvalOutput, EvalMeta]]:
             },
         ),
         _case(
-            # The difference is a number too: it is computed in run_code, not in prose.
+            # The difference is a number too: it is computed in a script, not in prose.
             "ans_food_difference",
             "answers",
             ["How much more did I spend on food in October than in September 2026?"],

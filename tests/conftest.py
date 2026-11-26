@@ -67,7 +67,7 @@ def _tag_database(tag: str) -> None:
 
 
 def _per_worker_env() -> None:
-    """Point each xdist worker at its own database, and give every process its own task folders.
+    """Point each xdist worker at its own database, and give every process its own folders.
 
     Runs before `arno` is imported, so `Settings.from_env()` sees these values. The controller is
     left alone: rewriting its DATABASE_URL would make every worker inherit that tag and rewrite
@@ -77,7 +77,6 @@ def _per_worker_env() -> None:
     if worker:
         _tag_database("_".join(part for part in (worker, os.environ.get("ARNO_TEST_RUN")) if part))
     temp = Path(_LOCAL_TEMP.name)
-    os.environ["ARNO_TASKS_DIR"] = str(temp / "tasks")
     os.environ["ARNO_PRE_MIGRATION_DIR"] = str(temp / "pre-migration")
 
 

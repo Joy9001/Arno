@@ -1,10 +1,10 @@
 # The agent loop and its guards
 
 **What it shows:** The one agent's loop. Your message (or a question you scheduled) goes to the
-model, which calls tools and Code Mode scripts and reads their results until it gives an answer.
-Guards sit on the loop: compaction keeps the history inside the context window, tool output limits
-trim big `run_code` returns, a backup model takes over on errors, and circuit breakers stop a
-runaway turn and hand back a partial answer with the reason.
+model, which calls tools and reads their results until it gives an answer. Guards sit on the loop:
+history trimming blanks old read results near the context limit, an approval gate holds wide writes
+for your tap, a backup model takes over on errors, and circuit breakers (the daily spend cap and a
+25-request limit) stop a runaway turn and hand back a partial answer with the reason.
 
 **Diagram type:** Architecture, with guards attached to loop steps by dashed lines. No semantic
 pattern matched.

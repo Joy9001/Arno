@@ -1,10 +1,10 @@
-# The agent loop runs for you and for your statements
+# The agent loop runs for your chat and your schedules
 
 **What it shows:** Arno's paths by trigger. Your chat, and the questions you schedule
 yourself, go to the agent loop, where the model picks the steps; scheduled runs are read-only. A
-statement upload goes from chat to a parser subagent with no write tools, which replays, repairs,
-or writes the bank's parser. After you commit, a categorizer agent labels the rows: rules first,
-then the model, now or as a batch, and rows it's unsure of stay uncategorized. Built-in jobs run as
+statement upload is stored for the review screen; extraction is being rebuilt and no agent reads
+the file today. After you commit, a categorizer agent labels the rows: rules first, then the
+model, and rows it's unsure of stay uncategorized. Built-in jobs run as
 code with at most one LLM call each, and they still work when the LLM is down; imports and labels
 wait for it, as chat does. A statement's rows reach the ledger only after you approve the review
 screen.
@@ -16,10 +16,9 @@ semantic pattern matched.
 chat agent as a user turn ([`../specs/data-and-engine.md`](../specs/data-and-engine.md)), which would add another trigger path.
 Your chat and your own schedules share one trigger node. Reads and writes share one arrow to the
 ledger. The briefing, reminders, and warnings share one node. 8 nodes, 8 arrows; the accent marks
-the three agent runs, one more than the usual two, because the accent is the legend's "agent"
-key here.
+the two agent runs, because the accent is the legend's "agent" key here.
 
-![The agent loop runs for you and for your statements](./sd-agent-vs-workflow.png)
+![The agent loop runs for your chat and your schedules](./sd-agent-vs-workflow.png)
 
 **Source:** `sd-agent-vs-workflow.html` (diagram-design skill, default skin, minimal light,
 doc-inline preset).
