@@ -14,6 +14,7 @@ from pydantic_ai.capabilities import (
     WebSearch,
 )
 from pydantic_ai.messages import DeferredToolRequests, ModelMessage
+from pydantic_ai.models import Model
 from pydantic_ai.models.test import TestModel
 from pydantic_ai.native_tools import WebSearchTool
 from pydantic_ai.ui.vercel_ai.response_types import SourceUrlChunk
@@ -69,11 +70,16 @@ async def today_and_categories(ctx: Any) -> str:
 
 
 def _native_search(ctx: RunContext[AgentDeps]) -> WebSearchTool | None:
-    """The model's own search, optional so a model without it runs without search.
+    """The model's own search, only when the run's model supports it.
 
+    A model without it (an OpenAI-compatible chat endpoint) gets none, so it never errors.
     `TestModel` claims support for every native tool but cannot run one, so it gets none.
     """
-    return None if isinstance(ctx.model, TestModel) else WebSearchTool(optional=True)
+    model = ctx.model
+    if isinstance(model, TestModel) or not isinstance(model, Model):
+        return None
+    supported = model.profile.get("supported_native_tools", frozenset())
+    return WebSearchTool(optional=True) if WebSearchTool in supported else None
 
 
 def web_search(api_key: str | None) -> WebSearch[AgentDeps]:

@@ -80,7 +80,7 @@ assistant:
   Ravi's and Amit's, still owed to you. Coverage for the month is complete, no gaps.
 
 tool calls:
-  - run_code({"code": "food = await summarize_spending(group_by=\"none\", period=\"last_month\", ...)"})
+  - run_query({"sql": "SELECT sum(amount) FROM ... WHERE category = 'Food & Dining' AND ..."})
       -> {"period": {"from": "2026-10-01", "to": "2026-10-31"}, "total": {"paise": 185000, ...}}
 ```
 
@@ -95,7 +95,7 @@ tool calls:
 ```
 $ uv run python -m tests.e2e.driver chat "I spent 450 rupees on a Swiggy lunch today from HDFC Savings. Log it."
 tool calls:
-  - record_movement({"movement": {"kind": "expense", "amount_rupees": 450, "payee": "Swiggy", ...}})
+  - record_movements({"movements": [{"kind": "expense", "amount_rupees": 450, "payee": "Swiggy", ...}]})
       -> {"status": "recorded", "undo_id": "und_01M714N02YF7E9VPVYW4WZH0R3", ...}
 data parts:
   - data-card: {"card": "movement", "title": "Logged", "amount": {"paise": 45000, ...},

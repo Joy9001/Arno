@@ -2,14 +2,24 @@
 
 from __future__ import annotations
 
+import json
+
 import httpx
+import httpx2
+import pytest
+from openai import AsyncOpenAI
 from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ToolCallPart, ToolReturnPart
+from pydantic_ai.models import override_allow_model_requests
 from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.models.openai import OpenAIChatModel
+from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.ui.vercel_ai.response_types import SourceUrlChunk
 
 from arno.agent import builder
 from arno.agent.deps import AgentDeps
 from arno.tools.search import brave_search
+
+pytestmark = pytest.mark.usefixtures("clean_database")
 
 BRAVE = {
     "web": {
@@ -98,3 +108,43 @@ async def test_without_a_key_or_native_search_the_agent_simply_has_no_web_search
     result = await agent.run("hi", deps=AgentDeps(conversation_id="cnv_nosearch"))
     assert result.output == "ok"
     assert "web_search" not in names and "run_query" in names
+
+
+@pytest.mark.parametrize("key", [None, "k"])
+async def test_a_chat_completions_model_never_gets_the_native_search_tool(monkeypatch, key):
+    monkeypatch.setattr(builder, "get_settings", lambda: type("S", (), {"brave_api_key": key})())
+    bodies: list[dict] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        bodies.append(json.loads(request.content))
+        return httpx2.Response(
+            200,
+            json={
+                "id": "c1",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "m",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "hi"},
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    client = AsyncOpenAI(
+        base_url="http://127.0.0.1:9/v1",
+        api_key="x",
+        http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
+    )
+    model = OpenAIChatModel("m", provider=OpenAIProvider(openai_client=client))
+    agent = builder.build_agent(model=model)
+    with override_allow_model_requests(True):  # the mock transport never leaves the process
+        result = await agent.run("hello", deps=AgentDeps(conversation_id="cnv_chat_completions"))
+    assert result.output == "hi"
+    assert len(bodies) == 1 and "web_search_options" not in bodies[0]
+    names = {tool["function"]["name"] for tool in bodies[0]["tools"]}
+    assert ("web_search" in names) is bool(key)
