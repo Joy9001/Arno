@@ -7,8 +7,8 @@ states comes through `project`.
 
 Money is whole paise. A day's balance is the sum of liquid accounts. Card spend is a liability:
 it is charged up to the card's limit (the rest leaves cash that day) and leaves cash when its
-bill falls due. `Model` says how everyday spend is drawn from history; each of its switches is
-admitted only if it measurably improves the forecast. `arno.engine.kernel` does the
+bill falls due. Everyday spend is drawn as whole historical days, weekday and weekend matched,
+with unusually large days resampled as their own rare stream. `arno.engine.kernel` does the
 arithmetic for all scenarios at once.
 """
 
@@ -30,8 +30,8 @@ from arno.engine import kernel
 from arno.engine.money import check_paise
 
 # Increment when the projection or affordability calculation changes materially.
-CALCULATION_VERSION = "2"
-DEFAULT_RUNS = 16_384
+CALCULATION_VERSION = "3"
+DEFAULT_RUNS = 2_048
 DEFAULT_SEED = 20261103
 FLOOR_THRESHOLD = 0.90
 HISTORY_DAYS = 90
@@ -257,14 +257,6 @@ class Baseline(TypedDict):
     first_floor_crossing: str | None
 
 
-class PaymentDate(TypedDict):
-    """The earliest day a one-off payment clears the floor threshold."""
-
-    date: str
-    days: int
-    amount_paise: int
-
-
 class SafeToSpend(TypedDict):
     """The largest one-off cash payment today that still passes the engine's yes test."""
 
@@ -428,33 +420,6 @@ class SpendCategory:
 
 
 @dataclass(frozen=True, slots=True)
-class SeriesForecast:
-    """A recurring payment the pattern engine found and the user has not confirmed.
-
-    It enters the projection as an outflow only, never as income. Each scenario keeps the series
-    alive with probability ``alive``; each expected date is then skipped with probability
-    ``skip``, or paid on a day moved by ``jitter`` (offset days, probability), with an amount drawn
-    uniformly from ``amounts`` (one value for a fixed charge).
-
-    ``name`` must already be display-safe: the loader marks text from outside the conversation.
-
-    ``reducible`` is kept for the loader and ignored: a detected recurring charge happens whether
-    or not spending is cut, so a series never joins the cut columns a spending cut acts on.
-    """
-
-    id: str
-    name: str
-    expected: tuple[date, ...]
-    jitter: tuple[tuple[int, float], ...]
-    skip: float
-    alive: float
-    amounts: tuple[int, ...]
-    card_id: str | None = None
-    category_id: str | None = None
-    reducible: bool = False
-
-
-@dataclass(frozen=True, slots=True)
 class SpendRow:
     """Spend on one day in one category from one account; ``card_id`` is None for cash."""
 
@@ -480,9 +445,7 @@ class ProjectionInput:
     spend: tuple[SpendRow, ...] = ()
     # The first day the ledger holds data; days before it are not zero-spend days.
     history_start: date | None = None
-    # Detected recurring payments simulated as their own outflows (step 6 of the blueprint).
-    series: tuple[SeriesForecast, ...] = ()
-    # True when the spend rows already leave out every payment a schedule or a projected
+    # True when the spend rows already leave out every payment a schedule or a detected
     # series accounts for, so no category has to be dropped to avoid counting it twice.
     attributed: bool = False
     horizon_limit_days: int = MAX_HORIZON_DAYS
@@ -570,17 +533,8 @@ def _dense_history(category: SpendCategory) -> list[tuple[date, int]]:
     return days
 
 
-def _pools(category: SpendCategory) -> tuple[list[int], list[int], list[int], bool]:
-    """Weekday, weekend, and all-day pools. The fourth item says whether real history is used."""
-    history = _dense_history(category)
-    real_days = sum(1 for _day, amount in history if amount > 0)
-    if real_days < MIN_REAL_DAYS:
-        return [], [], [], False
-    weekday: list[int] = []
-    weekend: list[int] = []
-    for day, amount in history:
-        (weekend if day.weekday() >= 5 else weekday).append(amount)
-    return weekday, weekend, [amount for _day, amount in history], True
+def _real_days(category: SpendCategory) -> int:
+    return sum(1 for _day, amount in _dense_history(category) if amount > 0)
 
 
 def goal_rows(inputs: ProjectionInput) -> list[GoalRow]:
@@ -620,38 +574,17 @@ def goal_rows(inputs: ProjectionInput) -> list[GoalRow]:
     return rows
 
 
-@dataclass(frozen=True, slots=True)
-class Model:
-    """How everyday spend is drawn. Each field is one switch that had to improve the forecast.
-
-    The defaults are the walk shipped before the scenario kernel: one independent draw per
-    category per day from that category's 90-day pool, weekday and weekend apart, and a flat daily
-    rate for a category with too little history.
-    """
-
-    pooling: str = "category"  # "category": one draw per category; "day": whole historical days
-    pool_resampling: bool = False
-    block_length: int = 1
-    recency_half_life_days: int | None = None
-    rare_mad_multiple: int | None = None
-    prior_quarters: tuple[int, ...] | None = None
-    # False: resampled spend keeps the card it was paid with, and only new charges are held to the
-    # limit, because the history already shows spend moving to cash while a card was full.
-    limit_spend: bool = True
-
-
-LEGACY_MODEL = Model()
-# Admitted on the tuning seeds, one switch at a time, each lowering the mean CRPS by at
-# least 1% with no cell significantly worse: whole days (3.6%), the short-history prior
-# (3.4%), rare days (1.0%), and spend that keeps its card (1.2%). Blocks, recency weights,
-# and pool resampling did not pass.
-# shortcut: iid daily draws (block_length=1) ignore multi-day spend bursts, revisit when
-# a real-ledger check shows clustered breaches or CRPS gain at L=2/3
-MODEL = Model(pooling="day", rare_mad_multiple=3, prior_quarters=(0, 2, 4, 6, 8), limit_spend=False)
+# Admitted on the tuning seeds: whole days, a short-history prior around the stated estimate,
+# and rare large days as their own stream. Each lowered the mean CRPS by at least 1%.
+# shortcut: iid daily draws ignore multi-day spend bursts, revisit when a real-ledger check shows
+# clustered breaches
+RARE_MAD_MULTIPLE = 3
+RESAMPLING = "whole-day vectors, weekday/weekend matched, rare large days as their own stream"
+PRIOR_QUARTERS = (0, 2, 4, 6, 8)
 OBLIGATION_THRESHOLD = 0.99
 CROSSING_SHARE = 0.10
 _OBLIGATION_KINDS = frozenset({"obligation", "instalment", "owed_payment"})
-_LATER_KINDS = frozenset({"hypothetical", "hypothetical_emi", "goal_contribution"})
+_LATER_KINDS = frozenset({"hypothetical", "hypothetical_emi", "goal_contribution", "series"})
 
 
 def _day_index(as_of: date, day: date, days: int) -> int:
@@ -701,9 +634,7 @@ def card_bills(card: CardAccount, as_of: date) -> tuple[tuple[date, int], ...]:
     return tuple(sorted((due, amount) for due, amount in bills.items() if amount > 0))
 
 
-def _card_spec(
-    card: CardAccount, as_of: date, days: int, total: int, *, limit_spend: bool = True
-) -> kernel.CardSpec:
+def _card_spec(card: CardAccount, as_of: date, days: int, total: int) -> kernel.CardSpec:
     due_of_day = np.fromiter(
         (
             _day_index(as_of, card_due_date(card, as_of + timedelta(days=t)), days)
@@ -724,108 +655,17 @@ def _card_spec(
         bills=bills,
         obligation=np.zeros(total, dtype=np.int64),
         other=np.zeros(total, dtype=np.int64),
-        limit_spend=limit_spend,
     )
 
 
 RARE_WINDOW_DAYS = 365
-RECENCY_UNIT = 1_024
 RARE_MIN_DAYS = 10
 DAY_STREAM = 0
-SERIES_STREAM_BASE = 100  # the least a series stream may be; it always starts past the categories
 RARE_STREAM = 999
-
-
-def _probability_threshold(probability: float) -> int:
-    if probability <= 0.0:
-        return 0
-    if probability >= 1.0:
-        return 1 << 32
-    return max(0, min(1 << 32, int(round(probability * float(1 << 32)))))
-
-
-def _series_streams(categories: int, count: int) -> list[int]:
-    """Stream numbers for ``count`` series that no pool or rare stream uses.
-
-    Category pools take 1..``categories``, whole days 0, and rare days 999, so the series start
-    past the categories and step over the rare stream.
-    """
-    taken = {DAY_STREAM, RARE_STREAM, *range(1, categories + 1)}
-    streams: list[int] = []
-    candidate = max(SERIES_STREAM_BASE, categories + 1)
-    while len(streams) < count:
-        if candidate not in taken:
-            streams.append(candidate)
-        candidate += 1
-    return streams
-
-
-def _jitter_spec(jitter: tuple[tuple[int, float], ...]) -> tuple[kernel.I64, kernel.U64]:
-    positive = [(int(offset), float(prob)) for offset, prob in jitter if prob > 0.0]
-    if len(positive) == 0:
-        return np.array([0], dtype=np.int64), np.array([1 << 32], dtype=np.uint64)
-    total = sum(prob for _offset, prob in positive)
-    offsets = np.array([offset for offset, _prob in positive], dtype=np.int64)
-    cumulative = np.empty(len(positive), dtype=np.uint64)
-    running = 0.0
-    prev = 0
-    scale = float(1 << 32)
-    for index, (_offset, prob) in enumerate(positive):
-        running += prob / total
-        if index == len(positive) - 1:
-            current = 1 << 32
-        else:
-            # A share under 2**-33 rounds onto the previous threshold, an empty interval, so that
-            # offset can never be drawn; the detector's jitter is far coarser than that.
-            current = max(prev, min(1 << 32, int(round(running * scale))))
-        cumulative[index] = current
-        prev = current
-    return offsets, cumulative
-
-
-def _series_spec(
-    series: SeriesForecast,
-    as_of: date,
-    days: int,
-    card_index: dict[str, int],
-    stream: int,
-) -> kernel.SeriesSpec:
-    jitter_offsets, jitter_cumulative = _jitter_spec(series.jitter)
-    active_offsets = [int(offset) for offset in jitter_offsets]
-    ordinals = [
-        day.toordinal()
-        for day in series.expected
-        if any(1 <= (day - as_of).days + offset <= days for offset in active_offsets)
-    ]
-    amounts = np.maximum(np.array(series.amounts, dtype=np.int64), 0)
-    card = card_index.get(series.card_id) if series.card_id is not None else None
-    # Never `reducible=series.reducible`: a spending cut trims categories, not a charge the
-    # household has already committed to, so the series stays out of every cut column.
-    return kernel.SeriesSpec(
-        ordinals=np.array(ordinals, dtype=np.int64),
-        alive_threshold=_probability_threshold(series.alive),
-        skip_threshold=_probability_threshold(series.skip),
-        jitter_offsets=jitter_offsets,
-        jitter_cumulative=jitter_cumulative,
-        amounts=amounts,
-        card=card,
-        stream=stream,
-    )
-
-
-def _pays_in_horizon(spec: kernel.SeriesSpec) -> bool:
-    """True when the series can pay at least once inside the horizon."""
-    return spec.alive_threshold > 0 and bool((spec.amounts > 0).any()) and len(spec.ordinals) > 0
 
 
 def _weekend(day: date) -> int:
     return kernel.WEEKEND if day.weekday() >= 5 else kernel.WEEKDAY
-
-
-def _recency(ages: npt.NDArray[np.int64], half_life: int) -> kernel.I64:
-    """Integer weights that halve every ``half_life`` days of age, never below one."""
-    weights = np.rint(RECENCY_UNIT * np.exp2(-ages / half_life)).astype(np.int64)
-    return np.maximum(weights, 1)
 
 
 def _card_split(
@@ -897,20 +737,15 @@ def _category_pool(
     category: SpendCategory,
     split: tuple[tuple[int, float], ...],
     stream: int,
-    model: Model,
 ) -> kernel.Pool | None:
-    """One category's own pool: its real days, its flat estimate, or the short-history prior."""
-    history = _dense_history(category)
-    real = sum(1 for _day, amount in history if amount > 0) >= MIN_REAL_DAYS
+    """One category's own pool: its real days, or the short-history prior around its estimate."""
     weights: kernel.I64 | None = None
-    if real:
+    if _real_days(category) >= MIN_REAL_DAYS:
+        history = _dense_history(category)
         values = np.array([max(0, amount) for _day, amount in history], dtype=np.int64)
         classes = np.array([_weekend(day) for day, _amount in history], dtype=np.int8)
-        if model.recency_half_life_days is not None:
-            ages = np.array([(inputs.as_of - day).days for day, _amount in history], np.int64)
-            weights = _recency(ages, model.recency_half_life_days)
-    elif model.prior_quarters is not None and category.baseline_per_day_paise > 0:
-        values, classes, weights = _prior(inputs, category, model.prior_quarters)
+    elif category.baseline_per_day_paise > 0:
+        values, classes, weights = _prior(inputs, category)
     else:
         values = np.array([category.baseline_per_day_paise] * 2, dtype=np.int64)
         classes = np.array([kernel.WEEKDAY, kernel.WEEKEND], dtype=np.int8)
@@ -921,12 +756,11 @@ def _category_pool(
         classes=classes,
         weights=weights,
         stream=stream,
-        resample=model.pool_resampling and real,
     )
 
 
 def _prior(
-    inputs: ProjectionInput, category: SpendCategory, quarters: tuple[int, ...]
+    inputs: ProjectionInput, category: SpendCategory
 ) -> tuple[kernel.I64, npt.NDArray[np.int8], kernel.I64]:
     """Real days plus pseudo-days around the stated estimate, the prior fading as days arrive.
 
@@ -939,7 +773,7 @@ def _prior(
     days = [start + timedelta(days=offset) for offset in range((inputs.as_of - start).days)]
     real_values = [max(0, int(by_day.get(day, 0))) for day in days]
     spent = sum(1 for value in real_values if value > 0)
-    pseudo = [category.baseline_per_day_paise * quarter // 4 for quarter in quarters]
+    pseudo = [category.baseline_per_day_paise * quarter // 4 for quarter in PRIOR_QUARTERS]
     values: list[int] = []
     classes: list[int] = []
     weights: list[int] = []
@@ -996,7 +830,6 @@ def _day_pool(
     inputs: ProjectionInput,
     sampled: set[str],
     card_index: dict[str, int],
-    model: Model,
 ) -> tuple[kernel.Pool | None, kernel.Rare | None, list[tuple[date, int]]]:
     """Whole historical days of the sampled categories, cash and each card side by side.
 
@@ -1005,9 +838,8 @@ def _day_pool(
     its rate over the longer window instead.
     """
     reducible = {category.id for category in inputs.categories if _cuttable(category)}
-    window = RARE_WINDOW_DAYS if model.rare_mad_multiple is not None else HISTORY_DAYS
     rows, earliest = _day_rows(inputs, card_index)
-    first = _coverage_start(inputs, window)
+    first = _coverage_start(inputs, RARE_WINDOW_DAYS)
     if earliest is not None:
         first = max(first, earliest)
     count = (inputs.as_of - first).days
@@ -1035,30 +867,22 @@ def _day_pool(
         (columns[f"card{k}"] for k in range(len(inputs.cards))), np.zeros(count, np.int64)
     )
     rare_mask = np.zeros(count, dtype=bool)
-    if model.rare_mad_multiple is not None:
-        spent = totals[totals > 0]
-        if len(spent) >= RARE_MIN_DAYS:
-            median = float(np.median(spent))
-            spread = float(np.median(np.abs(spent - median)))
-            # A zero deviation means most spending days look alike; there is nothing to split.
-            # shortcut: zero MAD skips rare-day split and Poisson(k) puts 37% zero-rate mass on
-            # k=1, revisit if real-ledger rare spikes breach P10 in milestone 29
-            if spread > 0:
-                rare_mask = totals > median + model.rare_mad_multiple * spread
+    spent = totals[totals > 0]
+    if len(spent) >= RARE_MIN_DAYS:
+        median = float(np.median(spent))
+        spread = float(np.median(np.abs(spent - median)))
+        # A zero deviation means most spending days look alike; there is nothing to split.
+        # shortcut: zero MAD skips rare-day split and Poisson(k) puts 37% zero-rate mass on
+        # k=1, revisit if real-ledger rare spikes breach P10
+        if spread > 0:
+            rare_mask = totals > median + RARE_MAD_MULTIPLE * spread
     everyday = (ages <= HISTORY_DAYS) & ~rare_mask
-    weights = (
-        _recency(ages[everyday], model.recency_half_life_days)
-        if model.recency_half_life_days is not None
-        else None
-    )
     used = [name for name in names if bool(columns[name][everyday].any()) or name == "cash"]
     pool = (
         kernel.Pool(
             columns={name: columns[name][everyday] for name in used},
             classes=classes[everyday],
-            weights=weights,
             stream=DAY_STREAM,
-            resample=model.pool_resampling,
         )
         if bool(everyday.any())
         else None
@@ -1081,7 +905,6 @@ class Prepared:
     spec: kernel.Spec
     sampled: list[str]
     flat: list[str]
-    model: Model
     # The days resampled as rare large spending, with each day's total.
     rare_days: list[tuple[date, int]] = field(default_factory=list)
 
@@ -1118,12 +941,9 @@ def _validate_amounts(inputs: ProjectionInput) -> None:
             check_paise(amount)
     for row in inputs.spend:
         check_paise(row.amount_paise)
-    for series in inputs.series:
-        for amount in series.amounts:
-            check_paise(amount)
 
 
-def prepare(inputs: ProjectionInput, model: Model) -> Prepared:
+def prepare(inputs: ProjectionInput) -> Prepared:
     _validate_amounts(inputs)
     days = horizon_days(inputs)
     total = days + 1
@@ -1142,9 +962,7 @@ def prepare(inputs: ProjectionInput, model: Model) -> Prepared:
     unconfirmed = np.zeros(total, dtype=np.int64)
     obligation_days: set[int] = set()
     card_index = {card.id: index for index, card in enumerate(inputs.cards)}
-    cards = [
-        _card_spec(card, as_of, days, total, limit_spend=model.limit_spend) for card in inputs.cards
-    ]
+    cards = [_card_spec(card, as_of, days, total) for card in inputs.cards]
 
     for event in inputs.events:
         start = event.at_start or event.date <= as_of
@@ -1203,28 +1021,22 @@ def prepare(inputs: ProjectionInput, model: Model) -> Prepared:
     flat: list[str] = []
     sampled_ids: set[str] = set()
     covered_days = (as_of - _coverage_start(inputs, HISTORY_DAYS)).days
-    mature_day_pool = (
-        model.pooling == "day" and len(inputs.spend) > 0 and covered_days >= MIN_REAL_DAYS
-    )
+    mature_day_pool = len(inputs.spend) > 0 and covered_days >= MIN_REAL_DAYS
     for category in inputs.categories:
-        real = _pools(category)[3]
-        in_day_pool = real or (
+        in_day_pool = _real_days(category) >= MIN_REAL_DAYS or (
             mature_day_pool and category.baseline_source == "computed" and len(category.history) > 0
         )
         (sampled if in_day_pool else flat).append(category.name)
         if in_day_pool:
             sampled_ids.add(category.id)
-    rare: kernel.Rare | None = None
-    rare_days: list[tuple[date, int]] = []
-    if model.pooling == "day":
-        day_pool, rare, rare_days = _day_pool(inputs, sampled_ids, card_index, model)
-        if day_pool is not None:
-            pools.append(day_pool)
+    day_pool, rare, rare_days = _day_pool(inputs, sampled_ids, card_index)
+    if day_pool is not None:
+        pools.append(day_pool)
     for stream, category in enumerate(inputs.categories, start=1):
-        if model.pooling == "day" and category.id in sampled_ids:
+        if category.id in sampled_ids:
             continue
         pool = _category_pool(
-            inputs, category, _card_split(category, inputs.cards, card_index), stream, model
+            inputs, category, _card_split(category, inputs.cards, card_index), stream
         )
         if pool is not None:
             pools.append(pool)
@@ -1241,12 +1053,6 @@ def prepare(inputs: ProjectionInput, model: Model) -> Prepared:
             )
             break
 
-    streams = _series_streams(len(inputs.categories), len(inputs.series))
-    series_specs = tuple(
-        _series_spec(series, as_of, days, card_index, stream)
-        for series, stream in zip(inputs.series, streams, strict=True)
-    )
-
     spec = kernel.Spec(
         start_balance=inputs.starting_balance_paise,
         days=days,
@@ -1261,11 +1067,10 @@ def prepare(inputs: ProjectionInput, model: Model) -> Prepared:
         cards=tuple(cards),
         pools=tuple(pools),
         rare=rare,
-        series=series_specs,
         cut_bps=cut_bps,
         cut_until=cut_until,
     )
-    return Prepared(spec=spec, sampled=sampled, flat=flat, model=model, rare_days=rare_days)
+    return Prepared(spec=spec, sampled=sampled, flat=flat, rare_days=rare_days)
 
 
 def order_rank(count: int, share: float) -> int:
@@ -1370,7 +1175,7 @@ def _summary(
         "credit_limit_exceeded": run.credit_exceeded,
         "obligation_misses": misses,
         "include_unconfirmed": False,
-        "resampling": _describe(prepared.model),
+        "resampling": RESAMPLING,
         "floor_interval": [round(low, 4), round(high, 4)],
         "floor_shortfall_paise": int(floor - breaching.mean()) if len(breaching) > 0 else 0,
         "rare_days": [
@@ -1382,9 +1187,7 @@ def _summary(
     gaps = list(recorded) if recorded is not None else []
     if run.credit_exceeded:
         gaps.append(
-            "projected card spend exceeds the card limit; the excess is treated as cash spend"
-            if prepared.model.limit_spend
-            else "projected card spend exceeds the card limit; a new charge past it is treated "
+            "projected card spend exceeds the card limit; a new charge past it is treated "
             "as cash spend"
         )
     if low < threshold <= high:
@@ -1392,14 +1195,15 @@ def _summary(
             f"borderline: the floor probability's 95% interval ({low:.1%} to {high:.1%}) "
             f"contains the {threshold:.0%} threshold"
         )
-    # Only a series that can actually pay inside the horizon is a gap or a citation.
-    paying = [
-        series
-        for series, series_spec in zip(inputs.series, prepared.spec.series, strict=True)
-        if _pays_in_horizon(series_spec)
-    ]
+    # Only a series that pays inside the horizon is a gap or a citation.
+    end = as_of + timedelta(days=days)
+    paying = {
+        event.source_id: event.name
+        for event in inputs.events
+        if event.kind == "series" and event.source_id is not None and as_of < event.date <= end
+    }
     if len(paying) > 0:
-        names = ", ".join(series.name for series in paying)
+        names = ", ".join(paying.values())
         count = len(paying)
         if count == 1:
             gaps.append(
@@ -1420,17 +1224,17 @@ def _summary(
         if source["id"] not in cited:
             sources.append(source)
             cited.add(source["id"])
-    for series in paying:
-        if series.id not in cited:
+    for series_id, name in paying.items():
+        if series_id not in cited:
             sources.append(
                 {
                     "kind": "series",
-                    "id": series.id,
-                    "name": series.name,
+                    "id": series_id,
+                    "name": name,
                     "detail": "detected, not confirmed",
                 }
             )
-            cited.add(series.id)
+            cited.add(series_id)
 
     source_ids: SourceIds = {
         "accounts": sorted({account.id for account in inputs.liquid}),
@@ -1442,6 +1246,7 @@ def _summary(
                 if event.source_id is not None
                 and event.confirmed
                 and not event.kind.startswith("owed_")
+                and event.kind != "series"
             }
         ),
         "payees": sorted(
@@ -1521,149 +1326,19 @@ def _wilson(successes: int, n: int) -> tuple[float, float]:
     return max(0.0, centre - half), min(1.0, centre + half)
 
 
-def _describe(model: Model) -> str:
-    parts = ["whole-day vectors" if model.pooling == "day" else "one draw per category"]
-    parts.append("weekday/weekend matched")
-    if model.block_length > 1:
-        parts.append(f"blocks of about {model.block_length} days")
-    if model.pool_resampling:
-        parts.append("per-scenario pool resampling")
-    if model.recency_half_life_days is not None:
-        parts.append(f"recency half-life {model.recency_half_life_days} days")
-    if model.rare_mad_multiple is not None:
-        parts.append("rare large days as their own stream")
-    return ", ".join(parts)
-
-
-def _run(
-    inputs: ProjectionInput,
-    *,
-    runs: int,
-    seed: int,
-    keep_days: int = 0,
-    checkpoints: tuple[int, ...] = (),
-    model: Model | None = None,
-) -> tuple[Prepared, kernel.Run]:
-    if runs < 1:
-        raise ValueError("runs must be positive")
-    chosen = model if model is not None else MODEL
-    prepared = prepare(inputs, chosen)
-    settings = kernel.Settings(
-        scenarios=runs,
-        seed=seed,
-        block_length=chosen.block_length,
-        keep_days=keep_days,
-        checkpoints=checkpoints,
-    )
-    return prepared, kernel.run(prepared.spec, settings)
-
-
 def project(
     inputs: ProjectionInput,
     *,
     runs: int = DEFAULT_RUNS,
     seed: int = DEFAULT_SEED,
-    model: Model | None = None,
     threshold: float = FLOOR_THRESHOLD,
 ) -> Projection:
     """Run the scenario kernel and return the curve, floor probability, and data quality."""
-    prepared, run = _run(inputs, runs=runs, seed=seed, model=model)
+    if runs < 1:
+        raise ValueError("runs must be positive")
+    prepared = prepare(inputs)
+    run = kernel.run(prepared.spec, kernel.Settings(scenarios=runs, seed=seed))
     return _summary(inputs, prepared, run, seed, threshold)
-
-
-def simulate_paths(
-    inputs: ProjectionInput,
-    *,
-    runs: int = DEFAULT_RUNS,
-    seed: int = DEFAULT_SEED,
-    days: int | None = None,
-    model: Model | None = None,
-) -> kernel.I64:
-    """Every scenario's daily balance for the first ``days`` days (the whole horizon by default)."""
-    keep = (horizon_days(inputs) + 1) if days is None else days + 1
-    _prepared, run = _run(inputs, runs=runs, seed=seed, keep_days=keep, model=model)
-    assert run.paths is not None
-    return run.paths
-
-
-def safe_amount_today(
-    inputs: ProjectionInput,
-    *,
-    runs: int = DEFAULT_RUNS,
-    seed: int = DEFAULT_SEED,
-    threshold: float = FLOOR_THRESHOLD,
-) -> int:
-    """The largest one-off payment today that keeps the floor probability at the threshold."""
-    _prepared, run = _run(inputs, runs=runs, seed=seed)
-    rank = run.scenarios - _min_held(run.scenarios, threshold)
-    headroom = int(np.partition(run.minima, rank)[rank]) - inputs.floor_paise
-    return max(0, headroom)
-
-
-def checkpoints_for(spec: kernel.Spec, extra: tuple[int, ...] = ()) -> tuple[int, ...]:
-    """The days the horizon's minimum can fall on: before any inflow, and the last day.
-
-    Spend and bills only lower the balance, so it can rise only on a day with an inflow; the
-    minimum over any span ending at a checkpoint is the minimum over its checkpoints.
-    """
-    # Detected series (`spec.series`) are outflows only (non-negative cash or card spend), so
-    # they can never create a rising day and the checkpoint invariant still holds.
-    rising = np.flatnonzero((spec.inflow > 0) | (spec.unconfirmed > 0))
-    days = {int(day) - 1 for day in rising if int(day) > 0} | {spec.days, *extra}
-    return tuple(sorted(day for day in days if 0 <= day <= spec.days))
-
-
-def first_full_payment_date(
-    inputs: ProjectionInput,
-    amount_paise: int,
-    *,
-    start_on: date | None = None,
-    runs: int = DEFAULT_RUNS,
-    seed: int = DEFAULT_SEED,
-    threshold: float = FLOOR_THRESHOLD,
-) -> PaymentDate | None:
-    """Earliest date a single payment of ``amount_paise`` clears the floor threshold.
-
-    Paying on day ``t`` lowers every balance from ``t`` on. Passing then needs the days before
-    ``t`` above the floor and the days from ``t`` on above the floor plus the payment. The second
-    part only changes after a checkpoint and the first only gets harder, so the answer is the
-    start day or the day after a checkpoint, and only checkpoint balances are needed.
-    """
-    if amount_paise <= 0:
-        return None
-    prepared = prepare(inputs, MODEL)
-    days = prepared.spec.days
-    start = 0 if start_on is None else max(0, (start_on - inputs.as_of).days)
-    if start > days:
-        return None
-    marks = checkpoints_for(prepared.spec, (start - 1,) if start > 0 else ())
-    settings = kernel.Settings(
-        scenarios=runs, seed=seed, block_length=MODEL.block_length, checkpoints=marks
-    )
-    run = kernel.run(prepared.spec, settings)
-    assert run.checkpoints is not None
-    balances = run.checkpoints
-    position = {day: column for column, day in enumerate(marks)}
-    prefix = np.minimum.accumulate(balances, axis=1)
-    suffix = np.minimum.accumulate(balances[:, ::-1], axis=1)[:, ::-1]
-    floor = inputs.floor_paise
-    needed = _min_held(runs, threshold)
-    candidates = sorted({start, *(day + 1 for day in marks if start < day + 1 <= days)})
-    for day in candidates:
-        later = [column for column, mark in enumerate(marks) if mark >= day]
-        if len(later) == 0:
-            break
-        after = suffix[:, later[0]] - amount_paise
-        if day > 0:
-            before = prefix[:, position[day - 1]] if day - 1 in position else None
-            assert before is not None
-            values = np.minimum(before, after)
-        else:
-            values = after
-        if int(np.count_nonzero(values >= floor)) >= needed:
-            found = inputs.as_of + timedelta(days=day)
-            return {"date": found.isoformat(), "days": day, "amount_paise": amount_paise}
-    return None
 
 
 def reduce_categories(
@@ -1715,12 +1390,9 @@ __all__ = [
     "ScenarioBaseline",
     "ScenarioChange",
     "SpendCategory",
-    "SeriesForecast",
     "SpendRow",
     "card_bills",
     "card_due_date",
-    "checkpoints_for",
-    "first_full_payment_date",
     "goal_rows",
     "order_rank",
     "prepare",
@@ -1728,7 +1400,5 @@ __all__ = [
     "horizon_days",
     "project",
     "reduce_categories",
-    "safe_amount_today",
-    "simulate_paths",
     "statement_close",
 ]

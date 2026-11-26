@@ -1,8 +1,8 @@
 """The scenario kernel: one integer matrix of future balances, and every statistic from it.
 
 `arno.engine.projection` turns a ledger into a `Spec`: dated cash, card bills, and pools of
-historical spend. This module walks every scenario at once with NumPy, in whole paise, and keeps
-only what the statistics need, so memory stays flat as the horizon grows.
+historical spend. This module walks every scenario at once with NumPy, in whole paise, in one
+unchunked array.
 
 Randomness is counter-based: the draw for a scenario on a day is a SplitMix64 hash of the seed,
 the stream, the scenario, and the date. Scenario ``r`` therefore never depends on how many
@@ -10,8 +10,9 @@ scenarios run, on any other stream, or on a library's sampling methods, and `dra
 pure-Python oracle the vectorized code is tested against.
 
 Within a day the order is fixed: income, card bills due, obligations (an obligation is tested
-here), one-off payments and goal contributions, then spend. Card spend is charged up to the
-card's headroom; the rest leaves cash the same day. Used credit falls only when a bill is paid.
+here), one-off payments and goal contributions, then spend. Everyday spend keeps the card it was
+paid with; only new charges (``other`` and ``obligation``) are held to the card's limit, and what
+does not fit leaves cash the same day. Used credit falls only when a bill is paid.
 """
 
 from __future__ import annotations
@@ -29,8 +30,6 @@ MASK64 = (1 << 64) - 1
 GOLDEN = 0x9E3779B97F4A7C15
 MIX1 = 0xBF58476D1CE4E5B9
 MIX2 = 0x94D049BB133111EB
-# shortcut: chunk peak ~100-365 MiB (scales with cards), revisit if deployed on <1 GiB RAM
-CHUNK_DAYS = 127
 WEEKDAY, WEEKEND = 0, 1
 
 
@@ -85,8 +84,6 @@ class Pool:
     classes: npt.NDArray[np.int8]
     weights: I64 | None = None
     stream: int = 0
-    resample: bool = False
-    pseudo: npt.NDArray[np.bool_] | None = None
 
     @property
     def size(self) -> int:
@@ -118,25 +115,6 @@ class CardSpec:
     bills: dict[int, int] = field(default_factory=dict)
     obligation: I64 | None = None
     other: I64 | None = None
-    # False when resampled spend keeps the card it was paid with: the history already shows spend
-    # moving to cash while the card was full, so only new charges (``other``, ``obligation``, and
-    # detected series) are held to the limit.
-    limit_spend: bool = True
-
-
-@dataclass(frozen=True, slots=True)
-class SeriesSpec:
-    """One detected recurring payment stream, drawn per scenario and occurrence."""
-
-    ordinals: I64  # date ordinals k of expected dates that can land in [1, days]
-    alive_threshold: int  # in [0, 2**32]
-    skip_threshold: int  # in [0, 2**32]
-    jitter_offsets: I64
-    jitter_cumulative: U64  # cumulative integer thresholds summing to 2**32
-    amounts: I64
-    card: int | None = None
-    reducible: bool = False
-    stream: int = 100
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,23 +132,15 @@ class Spec:
     cards: tuple[CardSpec, ...] = ()
     pools: tuple[Pool, ...] = ()
     rare: Rare | None = None
-    series: tuple[SeriesSpec, ...] = ()
     cut_bps: int = 0
     cut_until: int = -1  # last day index the cut applies to
 
 
 @dataclass(frozen=True, slots=True)
 class Settings:
-    scenarios: int = 16_384
+    scenarios: int = 2_048
     seed: int = 0
-    block_length: int = 1
     keep_days: int = 0  # keep full paths for the first this many days (for path-level tests)
-    checkpoints: tuple[int, ...] = ()
-    # With checkpoints: report the reducible spend through this day that has left cash by each
-    # checkpoint, the quantity a spending cut acts on. -1 reports nothing.
-    reducible_until: int = -1
-    # Report each scenario's payable on these days (an affordability obligation check).
-    payable_days: tuple[int, ...] = ()
 
 
 @dataclass(slots=True)
@@ -188,19 +158,8 @@ class Run:
     optimistic_minima: I64 | None
     optimistic_crossings: I64 | None
     paths: I64 | None
-    checkpoints: I64 | None  # (scenarios, len(settings.checkpoints))
-    # Reducible spend through `reducible_until` that has left cash by each checkpoint: cash
-    # spend on its day, card spend when its bill is paid. (scenarios, len(checkpoints))
-    reducible: I64 | None = None
-    # Scenarios in which some card charge went past the limit and left cash early.
-    capped: npt.NDArray[np.bool_] | None = None
     # Every day whose obligation is tested: the spec's own days plus every card bill due day.
-    obligation_days: I64 | None = None
-    # The same measure as `reducible` but with cash spend only through the day before each
-    # checkpoint, which is what a cut can free before that day's obligations are paid.
-    reducible_before: I64 | None = None
-    # Payable on `settings.payable_days`, before the day's spending. (scenarios, len(days))
-    payables: I64 | None = None
+    obligation_days: I64
 
 
 # --- Drawing days ------------------------------------------------------------------------------
@@ -235,9 +194,6 @@ class _Picker:
             sizes=(len(tables[0]), len(tables[1])),
         )
 
-    def pick(self, label: int, values: U64) -> I64:
-        return self.table[self.offsets[label] + below(values, self.sizes[label]).astype(np.int64)]
-
     def pick_days(self, labels: npt.NDArray[np.int8], values: U64) -> I64:
         """One pick per scenario and day, each day restricted to its own class."""
         sizes = np.where(labels == WEEKEND, self.sizes[1], self.sizes[0]).astype(np.uint64)
@@ -246,89 +202,9 @@ class _Picker:
         return self.table[target.astype(np.int64) + offsets[None, :]]
 
 
-def walk(
-    picker: _Picker,
-    pool_classes: npt.NDArray[np.int8],
-    target_classes: npt.NDArray[np.int8],
-    picks: U64,
-    blocks: U64 | None,
-    block_length: int,
-    start: I64 | None = None,
-) -> tuple[I64, I64]:
-    """Pool positions for each scenario and target day, by class-matched stationary blocks.
-
-    With probability 1/L a day starts a new block at a random position of its class; otherwise it
-    takes the next position if that position's class matches. ``start`` carries the previous
-    chunk's last position. Returns the positions and the last column.
-    """
-    scenarios, length = picks.shape
-    out = np.empty((scenarios, length), dtype=np.int64)
-    if block_length <= 1 or blocks is None:
-        out = picker.pick_days(target_classes, picks)
-        return out, out[:, -1].copy()
-    threshold = np.uint64((1 << 32) // block_length)
-    size = len(pool_classes)
-    current = start
-    for column in range(length):
-        label = int(target_classes[column])
-        fresh = picker.pick(label, picks[:, column])
-        if current is None:
-            current = fresh
-        else:
-            following = current + 1
-            keep = ((blocks[:, column] >> np.uint64(32)) >= threshold) & (following < size)
-            safe = np.minimum(following, size - 1)
-            keep &= pool_classes[safe] == label
-            current = np.where(keep, following, fresh)
-        out[:, column] = current
-    assert current is not None
-    return out, current.copy()
-
-
-class _PoolState:
-    """One pool's walk, carried across chunks."""
-
-    def __init__(self, pool: Pool, settings: Settings, history_days: I64) -> None:
-        self.pool = pool
-        self.settings = settings
-        self.picker = _Picker.build(pool.classes, pool.weights)
-        self.last: I64 | None = None
-        self.pseudo: I64 | None = None
-        if pool.resample:
-            # Each scenario's own pseudo-history: the same walk over the real days, so the pool
-            # mean varies across scenarios as a sample mean does.
-            picks = _draws(settings.seed, pool.stream * 8 + 2, settings.scenarios, history_days)
-            blocks = _draws(settings.seed, pool.stream * 8 + 3, settings.scenarios, history_days)
-            self.pseudo, _last = walk(
-                self.picker, pool.classes, pool.classes, picks, blocks, settings.block_length
-            )
-            self.picker = _Picker.build(pool.classes, None)
-
-    def rows(self, day_keys: I64, classes: npt.NDArray[np.int8]) -> I64:
-        settings = self.settings
-        picks = _draws(settings.seed, self.pool.stream * 8, settings.scenarios, day_keys)
-        blocks = (
-            _draws(settings.seed, self.pool.stream * 8 + 1, settings.scenarios, day_keys)
-            if settings.block_length > 1
-            else None
-        )
-        positions, self.last = walk(
-            self.picker,
-            self.pool.classes,
-            classes,
-            picks,
-            blocks,
-            settings.block_length,
-            self.last,
-        )
-        if self.pseudo is None:
-            return positions
-        return np.take_along_axis(self.pseudo, positions, axis=1)
-
-
 def _poisson_table(mean: float, top: int) -> npt.NDArray[np.float64]:
     # shortcut: zero MAD skips rare-day split and Poisson(k) puts 37% zero-rate mass on k=1,
-    # revisit if real-ledger rare spikes breach P10 in milestone 29
+    # revisit if real-ledger rare spikes breach P10
     terms = [math.exp(-mean)]
     for k in range(1, top + 1):
         terms.append(terms[-1] * mean / k)
@@ -362,84 +238,6 @@ class _RareState:
         return happened, below(which, self.size).astype(np.int64)
 
 
-class _SeriesState:
-    """One detected series: the scenarios that keep it, and its payments in one chunk.
-
-    Only the per-scenario alive flags last the whole run. The skip, offset, and amount draws are
-    keyed by scenario and expected date, so a chunk draws just the occurrences that can land in
-    it. An occurrence whose jitter range spans two chunks draws with the same keys in each and
-    scatters only where its day falls.
-    """
-
-    def __init__(self, series: SeriesSpec, spec: Spec, settings: Settings) -> None:
-        self.series = series
-        self.settings = settings
-        self.first_day = spec.first_day
-        self.alive = np.zeros(settings.scenarios, dtype=bool)
-        if len(series.ordinals) == 0 or len(series.amounts) == 0:
-            return
-        alive_draws = _draws(
-            settings.seed,
-            series.stream * 8,
-            settings.scenarios,
-            np.zeros(1, dtype=np.int64),
-        )
-        self.alive = (alive_draws[:, 0] >> np.uint64(32)) < np.uint64(series.alive_threshold)
-
-    def rows(self, begin: int, width: int) -> tuple[I64, I64, I64]:
-        """(scenario, day, amount) for the payments that land in ``begin .. begin + width``."""
-        series = self.series
-        empty = np.empty(0, dtype=np.int64)
-        if not bool(self.alive.any()):
-            return empty, empty, empty
-        low, high = (
-            (int(series.jitter_offsets.min()), int(series.jitter_offsets.max()))
-            if len(series.jitter_offsets) > 0
-            else (0, 0)
-        )
-        base_days = series.ordinals - self.first_day
-        touch = (base_days + high >= begin) & (base_days + low < begin + width)
-        if not bool(touch.any()):
-            return empty, empty, empty
-        ordinals = series.ordinals[touch]
-
-        skip_draws = _draws(
-            self.settings.seed, series.stream * 8 + 1, self.settings.scenarios, ordinals
-        )
-        offset_draws = _draws(
-            self.settings.seed, series.stream * 8 + 2, self.settings.scenarios, ordinals
-        )
-        amount_draws = _draws(
-            self.settings.seed, series.stream * 8 + 3, self.settings.scenarios, ordinals
-        )
-
-        skipped = (skip_draws >> np.uint64(32)) < np.uint64(series.skip_threshold)
-        if len(series.jitter_cumulative) > 0:
-            total = np.uint64(series.jitter_cumulative[-1])
-            target = ((offset_draws >> np.uint64(32)) * total) >> np.uint64(32)
-            offset_index = np.searchsorted(series.jitter_cumulative, target, side="right")
-            offsets = series.jitter_offsets[offset_index]
-        else:
-            offsets = np.zeros_like(offset_draws, dtype=np.int64)
-
-        pay_days = (ordinals - self.first_day)[None, :] + offsets
-        amount_index = below(amount_draws, len(series.amounts)).astype(np.int64)
-        pay_amounts = series.amounts[amount_index]
-
-        valid = (
-            self.alive[:, None]
-            & (~skipped)
-            & (pay_days >= max(begin, 1))
-            & (pay_days < begin + width)
-        )
-        scen_idx, occ_idx = np.nonzero(valid)
-        return (
-            scen_idx.astype(np.int64),
-            pay_days[scen_idx, occ_idx].astype(np.int64),
-            pay_amounts[scen_idx, occ_idx].astype(np.int64),
-        )
-
-
 # --- The walk ----------------------------------------------------------------------------------
 
 
@@ -464,255 +262,74 @@ def obligation_days(spec: Spec) -> I64:
 def run(spec: Spec, settings: Settings) -> Run:
     """Walk every scenario over the horizon and return the statistics the projection reports."""
     scenarios = settings.scenarios
-    total_days = spec.days + 1
+    width = spec.days + 1
     card_count = len(spec.cards)
-    history_days = np.arange(max((pool.size for pool in spec.pools), default=0), dtype=np.int64)
-    states = [_PoolState(pool, settings, history_days[: pool.size]) for pool in spec.pools]
+    keys = np.arange(spec.first_day, spec.first_day + width, dtype=np.int64)
     rare = _RareState(spec.rare, settings) if spec.rare is not None and spec.rare.events else None
-    series_states = [_SeriesState(series, spec, settings) for series in spec.series]
 
     ranks = [max(1, math.ceil(tau * scenarios)) - 1 for tau in (0.1, 0.5, 0.9)]
-    curve = np.empty((total_days, 3), dtype=np.int64)
-    crossings = np.empty(total_days, dtype=np.int64)
-    optimistic = bool(spec.unconfirmed.any())
-    unconfirmed_total = np.cumsum(spec.unconfirmed)
-    optimistic_crossings = np.empty(total_days, dtype=np.int64) if optimistic else None
     effective_obligations = obligation_days(spec)
-    obligation_index = {int(day): index for index, day in enumerate(effective_obligations)}
     obligation_failures = np.zeros(len(effective_obligations), dtype=np.int64)
     obl_rank = scenarios // 100
     obligation_margins = np.full(len(effective_obligations), np.iinfo(np.int64).max, dtype=np.int64)
-    payable_days = np.array(sorted({int(day) for day in settings.payable_days}), dtype=np.int64)
-    payable_index = {int(day): index for index, day in enumerate(payable_days)}
-    payables = (
-        np.empty((scenarios, len(payable_days)), dtype=np.int64) if len(payable_days) > 0 else None
-    )
-    checkpoint_index = {day: index for index, day in enumerate(settings.checkpoints)}
-    checkpoints = (
-        np.empty((scenarios, len(settings.checkpoints)), dtype=np.int64)
-        if settings.checkpoints
-        else None
-    )
-    paths = (
-        np.empty((scenarios, min(settings.keep_days, total_days)), dtype=np.int64)
-        if settings.keep_days
-        else None
-    )
 
-    balance = np.full(scenarios, spec.start_balance, dtype=np.int64)
-    running_min = np.full(scenarios, np.iinfo(np.int64).max, dtype=np.int64)
-    optimistic_min = running_min.copy() if optimistic else None
-    used = [np.full(scenarios, card.used, dtype=np.int64) for card in spec.cards]
-    bills: list[dict[int, I64]] = [
-        {due: np.full(scenarios, amount, dtype=np.int64) for due, amount in card.bills.items()}
-        for card in spec.cards
-    ]
-    cut_carry = {name: np.zeros(scenarios, dtype=np.int64) for name in _cut_columns(card_count)}
-    # Every day a bill can fall due: the start's bills, and wherever a day's charges are due.
-    due_sets = [
-        {int(day) for day in np.unique(card.due_of_day) if day >= 0} | set(card.bills)
-        for card in spec.cards
-    ]
+    cutting = spec.cut_bps > 0 and spec.cut_until >= 0
+    spend = _spend(spec, rare, keys, settings, card_count, cutting)
+    if cutting:
+        _apply_cut(spec, spend, card_count)
+
+    cash_out = spend["cash"]
+    bill_paid = np.zeros((scenarios, width), dtype=np.int64)
+    obligation_overflow = np.zeros((scenarios, width), dtype=np.int64)
     credit_exceeded = False
-    capped = np.zeros(scenarios, dtype=bool)
-    reducible = (
-        np.zeros((scenarios, len(settings.checkpoints)), dtype=np.int64)
-        if settings.checkpoints and settings.reducible_until >= 0
-        else None
-    )
-    reducible_before = (
-        np.zeros((scenarios, len(settings.checkpoints)), dtype=np.int64)
-        if reducible is not None
-        else None
-    )
-    # Cash reducible spend before this chunk; card reducible spend by the bill it joins.
-    reducible_cash = np.zeros(scenarios, dtype=np.int64)
-    reducible_bills: list[dict[int, I64]] = [{} for _card in spec.cards]
-
-    for begin in range(0, total_days, CHUNK_DAYS):
-        end = min(begin + CHUNK_DAYS, total_days)
-        width = end - begin
-        keys = np.arange(spec.first_day + begin, spec.first_day + end, dtype=np.int64)
-        cutting = spec.cut_bps > 0 and begin <= spec.cut_until
-        measuring = reducible is not None and begin <= settings.reducible_until
-        spend = _spend(
-            spec,
-            states,
-            rare,
-            series_states,
-            keys,
-            begin,
-            width,
-            scenarios,
-            card_count,
-            cutting or measuring,
+    for k, card in enumerate(spec.cards):
+        charges = np.zeros((scenarios, width), dtype=np.int64)
+        if card.other is not None:
+            charges = charges + card.other[None, :]
+        if card.obligation is not None:
+            charges = charges + card.obligation[None, :]
+        overflow, exceeded = _charge(
+            card, charges, spend[f"card{k}"], obligation_overflow, bill_paid
         )
-        # The chunk's reducible cash before the cut: a cut may only remove spend, and the
-        # quantity a cut could free is measured on what was there.
-        cash_cut = np.empty((scenarios, 0), dtype=np.int64)
-        if measuring:
-            reducible_cash, cash_cut = _measure_reducible(
-                spec, settings, spend, reducible_cash, reducible_bills, begin, width
-            )
-        if cutting:
-            _apply_cut(spec, spend, cut_carry, begin, width, card_count)
+        credit_exceeded |= exceeded
+        cash_out = cash_out + overflow
 
-        cash_out = spend["cash"]
-        bill_paid = np.zeros((scenarios, width), dtype=np.int64)
-        obligation_overflow = np.zeros((scenarios, width), dtype=np.int64)
-        for k, card in enumerate(spec.cards):
-            charges = spend[f"card{k}"]
-            loose = None
-            if not card.limit_spend:
-                charges = spend[f"card{k}_series"]
-                loose = spend[f"card{k}"] - charges
-            if card.other is not None:
-                charges = charges + card.other[None, begin:end]
-            obligation = card.obligation[begin:end] if card.obligation is not None else None
-            if obligation is not None:
-                charges = charges + obligation[None, :]
-            overflow, exceeded = _charge(
-                card,
-                used[k],
-                bills[k],
-                due_sets[k],
-                charges,
-                loose,
-                obligation,
-                obligation_overflow,
-                bill_paid,
-                begin,
-            )
-            credit_exceeded |= exceeded
-            if exceeded:
-                capped |= overflow.any(axis=1)
-            cash_out = cash_out + overflow
+    fixed = spec.inflow - spec.obligation - spec.later
+    net = fixed[None, :] - cash_out - bill_paid
+    start = np.full(scenarios, spec.start_balance, dtype=np.int64)
+    balances = start[:, None] + np.cumsum(net, axis=1)
 
-        fixed = spec.inflow[begin:end] - spec.obligation[begin:end] - spec.later[begin:end]
-        net = fixed[None, :] - cash_out - bill_paid
-        balances = balance[:, None] + np.cumsum(net, axis=1)
+    for failures, day in enumerate(effective_obligations):
+        before = balances[:, day - 1] if day else start
+        owed = bill_paid[:, day] + spec.obligation[day] + obligation_overflow[:, day]
+        payable = np.where(owed > 0, before + spec.inflow[day] - owed, np.iinfo(np.int64).max)
+        obligation_failures[failures] = int(np.count_nonzero(payable < 0))
+        obligation_margins[failures] = int(np.partition(payable, obl_rank)[obl_rank])
 
-        for column in range(width):
-            day = begin + column
-            failures = obligation_index.get(day)
-            payable_spot = payable_index.get(day)
-            if failures is not None or payable_spot is not None:
-                before = balances[:, column - 1] if column else balance
-                owed = bill_paid[:, column] + spec.obligation[day] + obligation_overflow[:, column]
-                payable = np.where(
-                    owed > 0, before + spec.inflow[day] - owed, np.iinfo(np.int64).max
-                )
-                if failures is not None:
-                    obligation_failures[failures] += int(np.count_nonzero(payable < 0))
-                    obligation_margins[failures] = int(np.partition(payable, obl_rank)[obl_rank])
-                if payable_spot is not None and payables is not None:
-                    payables[:, payable_spot] = payable
-            spot = checkpoint_index.get(day)
-            if spot is not None and checkpoints is not None:
-                checkpoints[:, spot] = balances[:, column]
-                if reducible is not None:
-                    reducible[:, spot] = _realized(
-                        settings, cash_cut, reducible_cash, reducible_bills, begin, day
-                    )
-                if reducible_before is not None:
-                    reducible_before[:, spot] = _realized(
-                        settings,
-                        cash_cut,
-                        reducible_cash,
-                        reducible_bills,
-                        begin,
-                        day,
-                        include_cash_today=False,
-                    )
-
-        curve[begin:end] = np.partition(balances, ranks, axis=0)[ranks].T
-        lows = np.minimum.accumulate(balances, axis=1)
-        lows = np.minimum(lows, running_min[:, None])
-        crossings[begin:end] = np.count_nonzero(lows < spec.floor, axis=0)
-        running_min = lows[:, -1].copy()
-        if optimistic_min is not None and optimistic_crossings is not None:
-            shifted = balances + unconfirmed_total[None, begin:end]
-            optimistic_lows = np.minimum(
-                np.minimum.accumulate(shifted, axis=1), optimistic_min[:, None]
-            )
-            optimistic_crossings[begin:end] = np.count_nonzero(optimistic_lows < spec.floor, axis=0)
-            optimistic_min = optimistic_lows[:, -1].copy()
-        if paths is not None and begin < paths.shape[1]:
-            stop = min(end, paths.shape[1])
-            paths[:, begin:stop] = balances[:, : stop - begin]
-        balance = balances[:, -1].copy()
-
+    lows = np.minimum.accumulate(balances, axis=1)
+    optimistic_lows = (
+        np.minimum.accumulate(balances + np.cumsum(spec.unconfirmed)[None, :], axis=1)
+        if spec.unconfirmed.any()
+        else None
+    )
     return Run(
         scenarios=scenarios,
         days=spec.days,
-        curve=curve,
-        minima=running_min,
-        crossings=crossings,
+        curve=np.partition(balances, ranks, axis=0)[ranks].T,
+        minima=lows[:, -1].copy(),
+        crossings=np.count_nonzero(lows < spec.floor, axis=0),
         obligation_failures=obligation_failures,
         obligation_margins=obligation_margins,
         credit_exceeded=credit_exceeded,
-        optimistic_minima=optimistic_min,
-        optimistic_crossings=optimistic_crossings,
-        paths=paths,
-        checkpoints=checkpoints,
-        reducible=reducible,
-        capped=capped,
+        optimistic_minima=optimistic_lows[:, -1].copy() if optimistic_lows is not None else None,
+        optimistic_crossings=(
+            np.count_nonzero(optimistic_lows < spec.floor, axis=0)
+            if optimistic_lows is not None
+            else None
+        ),
+        paths=balances[:, : settings.keep_days].copy() if settings.keep_days else None,
         obligation_days=effective_obligations,
-        reducible_before=reducible_before,
-        payables=payables,
     )
-
-
-def _measure_reducible(
-    spec: Spec,
-    settings: Settings,
-    spend: dict[str, I64],
-    before: I64,
-    bills: list[dict[int, I64]],
-    begin: int,
-    width: int,
-) -> tuple[I64, I64]:
-    """Add this chunk's card reducible spend to the bills it joins.
-
-    Returns the cash total so far and the chunk's pre-cut cash slice, since a cut rewrites
-    ``spend`` in place and `_realized` measures the spend that was there to cut.
-
-    Only days up to `reducible_until` count. Card spend leaves cash on its bill's due date, so a
-    cut on a card frees nothing until that bill is paid.
-    """
-    stop = min(width, settings.reducible_until - begin + 1)
-    cash = spend["cash_cut"][:, :stop].copy()
-    for k, card in enumerate(spec.cards):
-        dues = card.due_of_day[begin : begin + stop]
-        _add_to_bills(bills[k], spend[f"card{k}_cut"][:, :stop], dues)
-    return before + cash.sum(axis=1), cash
-
-
-def _realized(
-    settings: Settings,
-    cash_cut: I64,
-    cash_after_chunk: I64,
-    bills: list[dict[int, I64]],
-    begin: int,
-    day: int,
-    *,
-    include_cash_today: bool = True,
-) -> I64:
-    """Reducible spend through `reducible_until` that has left cash by the end of ``day``.
-
-    With ``include_cash_today=False``, cash spend is counted only through the day before
-    ``day``: an obligation is paid before that day's spending.
-    """
-    total = cash_after_chunk.copy()
-    stop = day if include_cash_today else day - 1
-    if stop < settings.reducible_until:
-        # The cut window runs past this checkpoint: only the chunk's days up to it have happened.
-        total -= cash_cut[:, max(0, stop - begin + 1) :].sum(axis=1)
-    for card_bills in bills:
-        for due, amount in card_bills.items():
-            if due <= day:
-                total += amount
-    return total
 
 
 def _cut_columns(card_count: int) -> list[str]:
@@ -721,33 +338,27 @@ def _cut_columns(card_count: int) -> list[str]:
 
 def _spend(
     spec: Spec,
-    states: list[_PoolState],
     rare: _RareState | None,
-    series_states: list[_SeriesState],
     keys: I64,
-    begin: int,
-    width: int,
-    scenarios: int,
+    settings: Settings,
     card_count: int,
     with_cut: bool,
 ) -> dict[str, I64]:
+    scenarios, width = settings.scenarios, len(keys)
     names = ["cash", *(f"card{k}" for k in range(card_count))]
     if with_cut:
         names += _cut_columns(card_count)
     spend = {name: np.zeros((scenarios, width), dtype=np.int64) for name in names}
-    # A detected series is a forecast charge, not a resampled day, so it is always held to the
-    # card limit; its share of each card column is kept apart.
-    for k in range(card_count):
-        spend[f"card{k}_series"] = np.zeros((scenarios, width), dtype=np.int64)
-    classes = spec.classes[begin : begin + width]
     drawn = rare.rows(keys) if rare is not None and spec.rare is not None else None
     replaces = spec.rare.replaces_stream if spec.rare is not None else None
-    for state in states:
-        rows = state.rows(keys, classes)
+    for pool in spec.pools:
+        picker = _Picker.build(pool.classes, pool.weights)
+        draws = _draws(settings.seed, pool.stream * 8, scenarios, keys)
+        rows = picker.pick_days(spec.classes, draws)
         # A rare row is a whole day, so it stands in for the draw of the pool it was split from.
-        everyday = ~drawn[0] if drawn is not None and state.pool.stream == replaces else None
+        everyday = ~drawn[0] if drawn is not None and pool.stream == replaces else None
         for name in names:
-            column = state.pool.columns.get(name)
+            column = pool.columns.get(name)
             if column is not None:
                 values = column[rows]
                 spend[name] += values if everyday is None else np.where(everyday, values, 0)
@@ -757,131 +368,80 @@ def _spend(
             column = spec.rare.columns.get(name)
             if column is not None:
                 spend[name] += np.where(happened, column[which], 0)
-    for series_state in series_states:
-        scen_idx, days, vals = series_state.rows(begin, width)
-        if len(days) == 0:
-            continue
-        card = series_state.series.card
-        col = f"card{card}" if card is not None and 0 <= card < card_count else "cash"
-        coords = (scen_idx, days - begin)
-        np.add.at(spend[col], coords, vals)
-        if col != "cash":
-            np.add.at(spend[f"{col}_series"], coords, vals)
-        if with_cut and series_state.series.reducible:
-            np.add.at(spend[f"{col}_cut"], coords, vals)
-    if begin == 0:
-        # Day zero is today: its spend is already in the balance.
-        for column in spend.values():
-            column[:, 0] = 0
+    # Day zero is today: its spend is already in the balance.
+    for column in spend.values():
+        column[:, 0] = 0
     return spend
 
 
-def _apply_cut(
-    spec: Spec, spend: dict[str, I64], carry: dict[str, I64], begin: int, width: int, cards: int
-) -> None:
+def _apply_cut(spec: Spec, spend: dict[str, I64], cards: int) -> None:
     """Remove a share of reducible spend until the cut ends, with cumulative rounding.
 
     Rounding the running total and taking differences keeps the removed amount within half a
     paisa of exact over any horizon, which keeps a cut exactly linear.
     """
-    stop = min(width, spec.cut_until - begin + 1)
-    if stop <= 0:
-        return
+    stop = spec.cut_until + 1
     pairs = [("cash", "cash_cut"), *((f"card{k}", f"card{k}_cut") for k in range(cards))]
     for total_name, cut_name in pairs:
-        reducible = spend[cut_name][:, :stop]
-        running = carry[cut_name][:, None] + np.cumsum(reducible, axis=1)
-        removed_total = _scaled(running, spec.cut_bps)
-        previous = np.concatenate(
-            [_scaled(carry[cut_name], spec.cut_bps)[:, None], removed_total[:, :-1]], axis=1
-        )
-        removed = removed_total - previous
+        running = np.cumsum(spend[cut_name][:, :stop], axis=1)
+        removed = np.diff(_scaled(running, spec.cut_bps), axis=1, prepend=0)
         spend[total_name][:, :stop] -= removed
         spend[cut_name][:, :stop] -= removed
-        carry[cut_name] = running[:, -1].copy()
 
 
 def _charge(
     card: CardSpec,
-    used: I64,
-    bills: dict[int, I64],
-    due_set: set[int],
     charges: I64,
-    loose: I64 | None,
-    obligation: I64 | None,
+    kept: I64,
     obligation_overflow: I64,
     bill_paid: I64,
-    begin: int,
 ) -> tuple[I64, bool]:
-    """Charge one card for a chunk; return the cash part and whether any charge passed the limit.
+    """Charge one card; return the cash part and whether any charge passed the limit.
 
-    Days are split where a bill is due. Within a piece used credit only rises, so the amount
-    charged so far is min(cumulative charges, headroom at the piece start), and the rest is cash.
-    ``loose`` charges are never held to the limit but use up headroom: each day they go on the card
-    first, and ``charges`` get what is left. ``used`` and ``bills`` are updated in place.
+    Days are split where a bill is due. Within a piece used credit only rises. ``kept`` spend is
+    never held to the limit but uses up headroom: each day it goes on the card first, and
+    ``charges`` get what is left. A day's new charges are tested against the limit before its
+    kept spend takes headroom, so an obligation due today cannot be crowded out by everyday spend.
     """
     # shortcut: unknown unbilled split front-loads 100% balance to first due date and projection
     # assumes cards pay in full, revisit if user revolves a card balance or imports balances
     # without recent spend
     scenarios, width = charges.shape
+    used = np.full(scenarios, card.used, dtype=np.int64)
+    bills = {due: np.full(scenarios, amount, dtype=np.int64) for due, amount in card.bills.items()}
     overflow = np.zeros_like(charges)
-    due_days = sorted(day for day in due_set if begin <= day < begin + width)
-    starts = sorted({0, *(day - begin for day in due_days)})
+    due_days = {int(day) for day in np.unique(card.due_of_day) if day >= 0} | set(card.bills)
+    starts = sorted({0, *(day for day in due_days if day < width)})
     exceeded = False
     for index, start in enumerate(starts):
         stop = starts[index + 1] if index + 1 < len(starts) else width
-        day = begin + start
-        paid = bills.pop(day, None)
+        paid = bills.pop(start, None)
         if paid is not None:
             bill_paid[:, start] += paid
             used -= paid
-        piece = charges[:, start:stop]
-        if loose is not None:
-            spilled, increments = _charge_after_loose(
-                card, used, piece, loose[:, start:stop], obligation, obligation_overflow, start
-            )
-            if spilled.any():
-                overflow[:, start:stop] = spilled
-            exceeded |= bool(spilled.any() or (used > card.limit).any())
-            _add_to_bills(bills, increments, card.due_of_day[day : begin + stop])
-            continue
-        headroom = np.maximum(card.limit - used, 0)
-        running = np.cumsum(piece, axis=1)
-        charged = np.minimum(running, headroom[:, None])
-        previous = np.concatenate([np.zeros((scenarios, 1), np.int64), charged[:, :-1]], axis=1)
-        increments = charged - previous
-        spill = piece - increments
-        if spill.any():
-            exceeded = True
-            overflow[:, start:stop] = spill
-            if obligation is not None:
-                before = used[:, None] + previous
-                owed = obligation[None, start:stop]
-                obligation_overflow[:, start:stop] += np.clip(before + owed - card.limit, 0, owed)
-        used += charged[:, -1]
-        dues = card.due_of_day[day : begin + stop]
-        _add_to_bills(bills, increments, dues)
+        spilled, increments = _charge_piece(
+            card, used, charges[:, start:stop], kept[:, start:stop], obligation_overflow, start
+        )
+        if spilled.any():
+            overflow[:, start:stop] = spilled
+        exceeded |= bool(spilled.any() or (used > card.limit).any())
+        _add_to_bills(bills, increments, card.due_of_day[start:stop])
     return overflow, exceeded
 
 
-def _charge_after_loose(
+def _charge_piece(
     card: CardSpec,
     used: I64,
     piece: I64,
     kept: I64,
-    obligation: I64 | None,
     obligation_overflow: I64,
     start: int,
 ) -> tuple[I64, I64]:
-    """One billing piece where each day's ``kept`` spend can stay on the card past the limit.
-
-    Return what of ``piece`` spills to cash and what each day adds to the card. The day's new
-    charges are tested against the card limit before its loose spend takes headroom, so an
-    obligation due today cannot be crowded out by discretionary spend.
-    """
+    """One billing piece: what of ``piece`` spills to cash, and what each day adds to the card."""
     if not piece.any():
         used += kept.sum(axis=1)
         return np.zeros_like(piece), kept
+    obligation = card.obligation
     spilled = np.zeros_like(piece)
     taken = np.zeros_like(piece)
     for column in range(piece.shape[1]):
@@ -912,12 +472,10 @@ def _add_to_bills(bills: dict[int, I64], increments: I64, dues: I64) -> None:
 
 
 __all__ = [
-    "CHUNK_DAYS",
     "CardSpec",
     "Pool",
     "Rare",
     "Run",
-    "SeriesSpec",
     "Settings",
     "Spec",
     "U64",
@@ -925,5 +483,4 @@ __all__ = [
     "draw",
     "mix",
     "run",
-    "walk",
 ]

@@ -58,7 +58,6 @@ from arno.engine.projection import (
     ProjectionInput,
     SafeToSpend,
     Scenario,
-    SeriesForecast,
     SourceRef,
     SpendRow,
     reduce_categories,
@@ -340,8 +339,7 @@ async def _spend_rows(
 
 
 def _detection_from_row(row: dict[str, Any]) -> series.Detection:
-    jitter = tuple((int(pair[0]), float(pair[1])) for pair in row["jitter"])
-    samples = tuple(int(value) for value in row["samples"])
+    """The stored rule of a detection, which is all `series.upcoming` reads."""
     return series.Detection(
         rule=series.Rule(
             family=str(row["family"]),
@@ -351,34 +349,28 @@ def _detection_from_row(row: dict[str, Any]) -> series.Detection:
             description=str(row["description"]),
         ),
         confidence=float(row["confidence"]),
-        rule_posterior=float(row["confidence"]),
-        skip=float(row["skip"]),
-        jitter=jitter,
-        end=0.0,
         alive=float(row["alive"]),
-        matched=tuple(str(movement_id) for movement_id in row["matched_movement_ids"]),
+        jitter=(),
+        matched=(),
         amounts=series.Amounts(
             kind=str(row["amount_kind"]),
             level_paise=int(row["level_paise"]),
             low_paise=int(row["low_paise"]),
             high_paise=int(row["high_paise"]),
-            coverage=0.0,
-            samples=samples,
+            samples=(),
         ),
-        next_dates=(),
     )
 
 
-async def _series_forecasts(
+async def _series_events(
     conn: Connection,
     *,
     as_of: date,
     end: date,
     known_then: bool,
     schedules: Sequence[KnownSchedule],
-    category_reducible: dict[str, bool],
-) -> tuple[tuple[SeriesForecast, ...], set[str]]:
-    """Projected unconfirmed spend detections and their matched movement IDs."""
+) -> tuple[tuple[CashEvent, ...], set[str]]:
+    """Upcoming outflows of detected, unconfirmed spend series, and their matched movement IDs."""
     rows = await conn.fetch(
         """
         SELECT d.*, p.display_name AS payee_name, p.outside_text AS payee_outside_text
@@ -386,11 +378,13 @@ async def _series_forecasts(
         JOIN payees p ON p.id = d.payee_id
         WHERE d.kind = 'spend'
           AND d.confidence >= $1
+          AND d.alive >= $2
           AND p.active
-          AND (NOT $2 OR d.as_of <= $3)
+          AND (NOT $3 OR d.as_of <= $4)
         ORDER BY p.display_name, d.id
         """,
         series.PROJECT_CONFIDENCE,
+        series.PROPOSE_ALIVE,
         known_then,
         as_of,
     )
@@ -398,48 +392,35 @@ async def _series_forecasts(
         return (), set()
 
     cal = calendar_for(as_of - timedelta(days=7), end + timedelta(days=7))
-    forecasts: list[SeriesForecast] = []
+    events: list[CashEvent] = []
     matched_ids: set[str] = set()
     for row in rows:
         payee_name = str(row["payee_name"])
         category_id = str(row["category_id"]) if row["category_id"] else None
-        categories = {category_id} if category_id is not None else set()
         level_paise = int(row["level_paise"])
-        interval_days = family_interval_days(str(row["family"]))
         if is_covered(
             normalized=series.normalize(payee_name),
-            categories=categories,
+            categories={category_id} if category_id is not None else set(),
             amount_paise=level_paise,
-            interval_days=interval_days,
+            interval_days=family_interval_days(str(row["family"])),
             schedules=schedules,
         ):
             continue
-
         detection = _detection_from_row(row)
-        expected = tuple(series.upcoming(detection, after=as_of, until=end, calendar=cal))
-        amounts = (
-            (level_paise,)
-            if row["amount_kind"] in ("fixed", "stepped")
-            else tuple(int(value) for value in row["samples"])
-        )
-        display_name = payee_name
-        forecasts.append(
-            SeriesForecast(
-                id=str(row["id"]),
-                name=display_name,
-                expected=expected,
-                jitter=detection.jitter,
-                skip=detection.skip,
-                alive=detection.alive,
-                amounts=amounts,
+        events.extend(
+            CashEvent(
+                date=day,
+                amount_paise=-level_paise,
+                name=payee_name,
+                kind="series",
+                source_id=str(row["id"]),
                 card_id=str(row["card_id"]) if row["card_id"] else None,
-                category_id=category_id,
-                reducible=category_reducible.get(category_id, False) if category_id else False,
             )
+            for day in series.upcoming(detection, after=as_of, until=end, calendar=cal)
         )
         matched_ids.update(str(movement_id) for movement_id in row["matched_movement_ids"])
 
-    return tuple(forecasts), matched_ids
+    return tuple(events), matched_ids
 
 
 async def _category_rows(conn: Connection) -> list[CategoryRow]:
@@ -721,13 +702,8 @@ async def _load_snapshot(
         for row in schedule_rows
         if row["confirmed"]
     ]
-    series_forecasts, excluded_movement_ids = await _series_forecasts(
-        conn,
-        as_of=as_of,
-        end=end,
-        known_then=known_then,
-        schedules=known_schedules,
-        category_reducible={row.id: row.reducible for row in category_rows},
+    series_events, excluded_movement_ids = await _series_events(
+        conn, as_of=as_of, end=end, known_then=known_then, schedules=known_schedules
     )
 
     scheduled_categories = {
@@ -777,7 +753,7 @@ async def _load_snapshot(
         history_start=await conn.fetchval(
             "SELECT min(date) FROM movements WHERE date <= $1", as_of
         ),
-        series=series_forecasts,
+        series=series_events,
         attributed_categories=frozenset(
             category_id
             for _, category_id in scheduled_categories
@@ -1013,8 +989,11 @@ async def _resolve_changes(
     income_schedules = [row for row in schedule_rows if str(row["kind"]).startswith("income")]
     income_source_ids = {str(row["id"]) for row in income_schedules}
 
+    series_ids = sorted(
+        {event.source_id for event in inputs.events if event.kind == "series" and event.source_id}
+    )
     series_rows: list[Any] = []
-    if inputs.series:
+    if series_ids:
         series_rows = list(
             await conn.fetch(
                 """
@@ -1024,7 +1003,7 @@ async def _resolve_changes(
                 WHERE d.id = ANY(ARRAY(SELECT unnest($1::text[])))
                 ORDER BY p.display_name, d.id
                 """,
-                [item.id for item in inputs.series],
+                series_ids,
             )
         )
 
@@ -1403,8 +1382,8 @@ def summary(result: Projection) -> dict[str, Any]:
 def card(result: Projection, request: dict[str, Any] | None = None) -> dict[str, Any]:
     """The UI metadata card: the full curve, sources, verdict, and every citation.
 
-    ``request`` echoes the arguments the projection was asked with, so the card can
-    download a workbook that recomputes exactly this request.
+    ``request`` echoes the arguments the projection was asked with, so the affordability lab
+    can rerun exactly this request with changed inputs.
     """
     payload: dict[str, Any] = {
         "card": "projection",

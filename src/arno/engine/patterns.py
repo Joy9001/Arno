@@ -18,13 +18,8 @@ FAMILY_INTERVAL_DAYS: dict[str, int] = {
     "weekly": 7,
     "fortnightly": 14,
     "four_weekly": 28,
-    "twice_monthly": 15,
     "monthly": 30,
-    "last_day": 30,
-    "last_working_day": 30,
-    "nth_weekday": 30,
     "quarterly": 90,
-    "half_yearly": 180,
     "yearly": 365,
 }
 

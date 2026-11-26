@@ -13,7 +13,6 @@ from arno.engine.money import amortize
 from arno.engine.patterns import KnownSchedule, family_interval_days, is_covered
 from arno.engine.projection import (
     DEFAULT_SEED,
-    LEGACY_MODEL,
     CardAccount,
     CashEvent,
     CurvePoint,
@@ -901,7 +900,11 @@ def _flat_category_inputs() -> ProjectionInput:
         liquid=(LiquidAccount(id="acc", name="Bank", balance_paise=1_000_000),),
         categories=(
             SpendCategory(
-                id="cat_food", name="Food", baseline_per_day_paise=10_000, reducible=True
+                id="cat_food",
+                name="Food",
+                baseline_per_day_paise=10_000,
+                reducible=True,
+                history=tuple((date(2025, 12, 1) + timedelta(days=i), 10_000) for i in range(31)),
             ),
         ),
         ask_horizon_days=20,
@@ -911,8 +914,8 @@ def _flat_category_inputs() -> ProjectionInput:
 def test_a_category_cut_applies_only_until_its_date():
     inputs = _flat_category_inputs()
     reduced, rows = reduce_categories(inputs, 0.5, until=date(2026, 1, 11))
-    # The legacy model spends a flat estimate exactly, so the cut's arithmetic is visible.
-    curve = _curve(project(reduced, runs=3, model=LEGACY_MODEL))
+    # A history of one amount a day spends it exactly, so the cut's arithmetic is visible.
+    curve = _curve(project(reduced, runs=3))
 
     assert curve["2026-01-06"]["median_paise"] == 1_000_000 - 5 * 5_000
     assert curve["2026-01-11"]["median_paise"] == 1_000_000 - 10 * 5_000
@@ -922,7 +925,7 @@ def test_a_category_cut_applies_only_until_its_date():
 
     # Without a date the cut runs to the end of the horizon, which is what the old code did.
     permanent, _rows = reduce_categories(inputs, 0.5)
-    curve = _curve(project(permanent, runs=3, model=LEGACY_MODEL))
+    curve = _curve(project(permanent, runs=3))
     assert curve["2026-01-12"]["median_paise"] == 1_000_000 - 11 * 5_000
 
 

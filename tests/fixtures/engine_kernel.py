@@ -8,7 +8,7 @@ import random
 import numpy as np
 
 from arno.engine import kernel
-from arno.engine.kernel import CardSpec, Pool, SeriesSpec, Settings, Spec
+from arno.engine.kernel import CardSpec, Pool, Settings, Spec
 
 
 def _ref_pick(cumulative: list[int], positions: list[int], value: int) -> int:
@@ -26,70 +26,12 @@ def _ref_picker(classes: list[int], weights: list[int] | None) -> dict[int, tupl
     return out
 
 
-def _ref_walk(
-    picker, pool_classes, targets, seed, stream_pick, stream_block, scenario, keys, length
-) -> list[int]:
-    positions: list[int] = []
-    current = None
-    threshold = (1 << 32) // length
+def _ref_walk(picker, targets, seed, stream, scenario, keys) -> list[int]:
+    positions = []
     for label, key in zip(targets, keys, strict=True):
         cumulative, chosen = picker[label]
-        fresh = _ref_pick(cumulative, chosen, kernel.draw(seed, stream_pick, scenario, key))
-        if current is None or length <= 1:
-            current = fresh
-        else:
-            block = kernel.draw(seed, stream_block, scenario, key) >> 32
-            following = current + 1
-            if (
-                block >= threshold
-                and following < len(pool_classes)
-                and pool_classes[following] == label
-            ):
-                current = following
-            else:
-                current = fresh
-        positions.append(current)
+        positions.append(_ref_pick(cumulative, chosen, kernel.draw(seed, stream, scenario, key)))
     return positions
-
-
-def _ref_series(spec: Spec, settings: Settings, scenario: int) -> dict[int, dict[str, int]]:
-    by_day: dict[int, dict[str, int]] = {}
-    for series in spec.series:
-        if len(series.ordinals) == 0 or len(series.amounts) == 0:
-            continue
-        alive_draw = kernel.draw(settings.seed, series.stream * 8, scenario, 0)
-        if (alive_draw >> 32) >= series.alive_threshold:
-            continue
-        cum = [int(value) for value in series.jitter_cumulative]
-        offsets = [int(value) for value in series.jitter_offsets]
-        col = (
-            f"card{series.card}"
-            if series.card is not None and 0 <= series.card < len(spec.cards)
-            else "cash"
-        )
-        for ordinal in series.ordinals:
-            key = int(ordinal)
-            skip_draw = kernel.draw(settings.seed, series.stream * 8 + 1, scenario, key)
-            if (skip_draw >> 32) < series.skip_threshold:
-                continue
-            offset_draw = kernel.draw(settings.seed, series.stream * 8 + 2, scenario, key)
-            if len(cum) > 0:
-                target = ((offset_draw >> 32) * cum[-1]) >> 32
-                offset = offsets[bisect.bisect_right(cum, target)]
-            else:
-                offset = 0
-            day = (key - spec.first_day) + offset
-            if not (1 <= day <= spec.days):
-                continue
-            amount_draw = kernel.draw(settings.seed, series.stream * 8 + 3, scenario, key)
-            amount_index = ((amount_draw >> 32) * len(series.amounts)) >> 32
-            amount = int(series.amounts[amount_index])
-            slot = by_day.setdefault(day, {})
-            slot[col] = slot.get(col, 0) + amount
-            if series.reducible:
-                cut_col = f"{col}_cut"
-                slot[cut_col] = slot.get(cut_col, 0) + amount
-    return by_day
 
 
 def _reference_walk(spec: Spec, settings: Settings) -> tuple[list[list[int]], list[list[int]]]:
@@ -104,46 +46,16 @@ def _reference_walk(spec: Spec, settings: Settings) -> tuple[list[list[int]], li
         for pool in spec.pools:
             pool_classes = [int(c) for c in pool.classes]
             weights = [int(w) for w in pool.weights] if pool.weights is not None else None
-            if pool.resample:
-                history = list(range(pool.size))
-                pseudo = _ref_walk(
+            rows_by_pool.append(
+                _ref_walk(
                     _ref_picker(pool_classes, weights),
-                    pool_classes,
-                    pool_classes,
-                    settings.seed,
-                    pool.stream * 8 + 2,
-                    pool.stream * 8 + 3,
-                    scenario,
-                    history,
-                    settings.block_length,
-                )
-                positions = _ref_walk(
-                    _ref_picker(pool_classes, None),
-                    pool_classes,
                     classes,
                     settings.seed,
                     pool.stream * 8,
-                    pool.stream * 8 + 1,
                     scenario,
                     keys,
-                    settings.block_length,
                 )
-                rows_by_pool.append([pseudo[p] for p in positions])
-            else:
-                rows_by_pool.append(
-                    _ref_walk(
-                        _ref_picker(pool_classes, weights),
-                        pool_classes,
-                        classes,
-                        settings.seed,
-                        pool.stream * 8,
-                        pool.stream * 8 + 1,
-                        scenario,
-                        keys,
-                        settings.block_length,
-                    )
-                )
-        series_by_day = _ref_series(spec, settings, scenario)
+            )
         balance = spec.start_balance
         used = [card.used for card in spec.cards]
         bills = [dict(card.bills) for card in spec.cards]
@@ -154,7 +66,6 @@ def _reference_walk(spec: Spec, settings: Settings) -> tuple[list[list[int]], li
         for t in range(days):
             spend = {}
             names = ["cash", *(f"card{k}" for k in range(len(spec.cards))), *removed_total]
-            day_series = series_by_day.get(t, {})
             for name in names:
                 spend[name] = 0
                 if t == 0:
@@ -163,7 +74,6 @@ def _reference_walk(spec: Spec, settings: Settings) -> tuple[list[list[int]], li
                     column = pool.columns.get(name)
                     if column is not None:
                         spend[name] += int(column[rows[t]])
-                spend[name] += day_series.get(name, 0)
             if spec.cut_bps and t <= spec.cut_until:
                 for total_name, cut_name in [
                     ("cash", "cash_cut"),
@@ -185,14 +95,9 @@ def _reference_walk(spec: Spec, settings: Settings) -> tuple[list[list[int]], li
                     int(card.obligation[t]) if card.obligation is not None else 0,
                     int(card.other[t]) if card.other is not None else 0,
                 ]
-                loose = 0
-                if card.limit_spend:
-                    charges = [*new, spend[f"card{k}"]]
-                else:
-                    # Resampled spend goes on the card first, past the limit; a series is new.
-                    series_part = day_series.get(f"card{k}", 0) if t > 0 else 0
-                    loose = spend[f"card{k}"] - series_part
-                    charges = [*new, series_part]
+                # Everyday spend goes on the card first, past the limit; the rest is new.
+                loose = spend[f"card{k}"]
+                charges = new
                 for charge_index, amount in enumerate(charges):
                     charged = min(amount, max(card.limit - used[k], 0))
                     overflow = amount - charged
@@ -203,8 +108,7 @@ def _reference_walk(spec: Spec, settings: Settings) -> tuple[list[list[int]], li
                     due = int(card.due_of_day[t])
                     if due >= 0:
                         bills[k][due] = bills[k].get(due, 0) + charged
-                if not card.limit_spend and loose:
-                    # Loose spend keeps the card and takes headroom after the day's new charges.
+                if loose:
                     used[k] += loose
                     due = int(card.due_of_day[t])
                     if due >= 0:
@@ -224,8 +128,6 @@ def _spec(
     cards: int,
     days: int,
     cut: bool = False,
-    series: bool = False,
-    limit_spend: bool = True,
 ) -> Spec:
     total = days + 1
     first_day = 739_000
@@ -260,7 +162,6 @@ def _spec(
                     [rng.randint(1_000, 5_000) if rng.random() < 0.03 else 0 for _ in range(total)],
                     np.int64,
                 ),
-                limit_spend=limit_spend,
             )
         )
     pools = []
@@ -277,34 +178,8 @@ def _spec(
                 classes=np.array([rng.randint(0, 1) for _ in range(size)], np.int8),
                 weights=np.array([rng.randint(1, 5) for _ in range(size)], np.int64),
                 stream=index + 1,
-                resample=index == 1,
             )
         )
-    series_specs: list[SeriesSpec] = []
-    if series:
-        jitter_offsets = np.array([-1, 0, 1, 2], dtype=np.int64)
-        jitter_cumulative = np.array(
-            [1 << 30, (1 << 30) + (1 << 31), (1 << 30) + (1 << 31) + (1 << 29), 1 << 32],
-            dtype=np.uint64,
-        )
-        for index in range(3):
-            occ_days = sorted({0, days, *(rng.randint(1, days) for _ in range(rng.randint(4, 8)))})
-            series_specs.append(
-                SeriesSpec(
-                    ordinals=np.array([first_day + d for d in occ_days], dtype=np.int64),
-                    alive_threshold=int(round(rng.uniform(0.55, 0.95) * (1 << 32))),
-                    skip_threshold=int(round(rng.uniform(0.10, 0.35) * (1 << 32))),
-                    jitter_offsets=jitter_offsets,
-                    jitter_cumulative=jitter_cumulative,
-                    amounts=np.array(
-                        [rng.randint(200, 900) for _ in range(rng.randint(1, 3))],
-                        dtype=np.int64,
-                    ),
-                    card=rng.randrange(cards) if cards > 0 and index == 1 else None,
-                    reducible=index != 2,
-                    stream=100 + index,
-                )
-            )
     return Spec(
         start_balance=rng.randint(5_000, 30_000),
         days=days,
@@ -318,7 +193,6 @@ def _spec(
         floor=2_000,
         cards=tuple(card_specs),
         pools=tuple(pools),
-        series=tuple(series_specs),
         cut_bps=1_500 if cut else 0,
         cut_until=days // 2 if cut else -1,
     )

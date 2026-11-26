@@ -2,8 +2,9 @@
 
 from dataclasses import replace
 from datetime import date, timedelta
+from functools import partial
 
-from arno.engine import affordability, criticals
+from arno.engine import affordability
 from arno.engine.affordability import Hypothetical, afford
 from arno.engine.projection import (
     CardAccount,
@@ -73,8 +74,7 @@ def test_affordability_matches_exact_enumeration_on_512_shared_paths(monkeypatch
     assert actual == expected
 
 
-def test_a_capped_card_falls_back_to_the_max_cut_and_prices_the_bisected_cut(monkeypatch):
-    monkeypatch.setattr(affordability, "MAX_CUT_BPS", 20)
+def test_the_cut_search_finds_the_least_cut_where_a_card_cap_binds():
     runs, seed = 512, 7
     today = date(2026, 1, 1)
     payday = today + timedelta(days=3)
@@ -100,26 +100,8 @@ def test_a_capped_card_falls_back_to_the_max_cut_and_prices_the_bisected_cut(mon
             ),
         ),
     )
-    matrix = criticals.build_critical_matrix(
-        "asked",
-        inputs,
-        cost_paise=0,
-        meta={},
-        cut_until=3,
-        runs=runs,
-        seed=seed,
-    )
-    assert matrix.capped
-    verified = affordability._verify(
-        affordability._Plan("asked", (), 1, 10),
-        matrix,
-        when=today,
-        until=payday,
-        runs=runs,
-        seed=seed,
-        threshold=0.9,
-        spend_paise=100_000,
-    )
-    assert verified is not None
-    assert verified.plan.cut_bps == 9
-    assert verified.plan.cost_paise == 90
+    test = partial(affordability._cut_passes, inputs, payday, runs=runs, seed=seed, threshold=0.9)
+    found = affordability._least(1, 20, test)
+    assert found is not None
+    assert found[0] == 9
+    assert test(8) is None

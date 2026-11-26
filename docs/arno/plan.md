@@ -94,7 +94,7 @@ enough for answers and affordability verdicts on day one.
   the script prints.
 - **Web search:** The model's own search, or Brave Search when `BRAVE_API_KEY` is set, for current
   rates and rules. Replies cite sources as `[n]`.
-- **Affordability:** Computed in code as `yes`, `yes-but`, or `no` from 16,384 seeded daily
+- **Affordability:** Computed in code as `yes`, `yes-but`, or `no` from 2,048 seeded daily
   scenarios. Scheduled events are exact and variable spend is resampled from history. A `yes`
   requires at least a 90% probability of staying above the floor and at least a 99% probability of
   meeting every obligation. A `yes-but` requires a same-date plan (card or EMI, delayed goal
@@ -184,7 +184,7 @@ The following table records the build-versus-buy decision for each component:
 | Component | Decision | Rationale |
 |---|---|---|
 | Agent loop, tool calling, streaming | Buy: PydanticAI | Plain `Agent` with a few capabilities, native tool approval, Vercel AI protocol adapter, and provider switching ([`specs/harness.md`](specs/harness.md)) |
-| Statement file readers | Buy: `pypdfium2`, `python-calamine`, `python-docx`, `striprtf`, `msoffcrypto-tool` | One reader library for each format ([`specs/import.md`](specs/import.md)) |
+| Statement file readers | Buy: `pypdfium2`, `python-calamine`, `msoffcrypto-tool`, `olefile` | One reader library for each format ([`specs/import.md`](specs/import.md)) |
 | Statement layout parsing | Direct extraction, no saved parsers | Images and PDFs of 5 pages or fewer go to one `VISION` call; spreadsheets, text, and longer PDFs go to a `CHAT` run that answers with a sandbox script. The host checks every result before review ([`specs/import.md`](specs/import.md#extraction)) |
 | Speech-to-text | Buy: OpenAI-compatible STT endpoint | Cloud API, or any self-hosted OpenAI-compatible server you run yourself (`STT_BASE_URL`); no bundled server |
 | Textless-page PDF vision | Buy: OpenAI-compatible vision model | Isolated `VISION_*` role for scanned PDF pages during statement imports |
@@ -211,10 +211,10 @@ The following table records the stack for each layer:
 | Data access | Plain SQL over `asyncpg` with one standard pool per event loop (1 to 20 connections) | Schema stays transparent for `run_query`; a standard pool recovers from dropped connections without custom code ([`specs/platform.md`](specs/platform.md#database-connections-and-integrity)) |
 | Migrations | Numbered `.sql` files + `schema_version` table | Plain transactional SQL with recorded checksums; `0001_baseline.sql` squashes the earlier 50, and the migrator refuses a pre-baseline database ([legacy upgrades](operations/legacy-upgrades.md#move-to-the-baseline-schema)) |
 | Type checking | Pyrefly (`strict` preset, zero warnings) | Native Pydantic understanding and per-path strictness ([`operations/typing.md`](operations/typing.md)) |
-| Engine arithmetic | NumPy (integer arrays) | Vectorized 16,384-scenario integer kernel; BSD-3-Clause |
+| Engine arithmetic | NumPy (integer arrays) | Vectorized 2,048-scenario integer kernel; BSD-3-Clause |
 | Background work | Minute loop and `spawn` in the API process; state on the rows the work touches | Zero broker overhead; state persists in every `pg_dump` |
 | Web interface | Vite, React, `@assistant-ui/*`, `radix-ui`, Tailwind CSS 4, Motion, Recharts, React Flow | Static build served by FastAPI under a strict content security policy ([`specs/web-interface.md`](specs/web-interface.md), [`DESIGN.md`](../../DESIGN.md)) |
-| Deployment | Docker Compose (`db`, `api`; optional `local-llm` and `obs`) | Single host deployment; loopback-only ports behind Tailscale |
+| Deployment | Docker Compose (`db`, `api`, `sandbox`; optional `local-llm` and `obs`) | Single host deployment; loopback-only ports behind Tailscale |
 | License | MIT (application code) | Stock Phoenix (`obs` profile) carries Elastic License 2.0 outside the Arno image; direct dependencies are checked by hand against the permissive-only rule |
 
 ### Provider switch and inference accounting

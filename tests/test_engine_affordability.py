@@ -5,20 +5,9 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import date, timedelta
 
-import numpy as np
 import pytest
 
-from arno.engine import affordability, criticals
-from arno.engine.affordability import (
-    MAX_DEFERRABLE_GOALS,
-    Hypothetical,
-    _dominates,
-    _least_cut,
-    _Plan,
-    afford,
-    project_scenario,
-)
-from arno.engine.criticals import CriticalMatrix, min_hold_count
+from arno.engine.affordability import Hypothetical, afford, project_scenario
 from arno.engine.projection import (
     CardAccount,
     CashEvent,
@@ -26,9 +15,9 @@ from arno.engine.projection import (
     LiquidAccount,
     Projection,
     ProjectionInput,
-    SeriesForecast,
     SpendCategory,
     Tradeoff,
+    _min_held,
     project,
     reduce_categories,
 )
@@ -43,7 +32,6 @@ def _inputs(
     cards: tuple[CardAccount, ...] = (),
     goals: tuple[GoalPlan, ...] = (),
     categories: tuple[SpendCategory, ...] = (),
-    series: tuple[SeriesForecast, ...] = (),
 ) -> ProjectionInput:
     return ProjectionInput(
         as_of=date(2026, 1, 1),
@@ -53,7 +41,6 @@ def _inputs(
         cards=cards,
         goals=goals,
         categories=categories,
-        series=series,
         ask_horizon_days=90,
     )
 
@@ -189,12 +176,13 @@ def test_a_later_salary_alone_keeps_the_verdict_no_and_shows_the_wait():
 
 
 def test_the_wait_date_has_to_meet_an_obligation_too():
-    # Balance 110, a 10 series charge on day 1, a 100 obligation on day 5 and a 500 payday on
-    # day 8. The 5 purchase fits the floor on any date, but paying before the fifth can leave too
-    # little for the obligation, so the first date that passes both is day 5.
+    # Balance 102 with a -1,000 floor, a 100 obligation on day 5 and a 500 payday on day 8. The
+    # 5 purchase fits the floor on any date, but paying before the fifth leaves too little for the
+    # obligation, so the first date that passes both is day 5, when the obligation is paid first.
     result = afford(
         _inputs(
-            start=110,
+            start=102,
+            floor=-1_000,
             events=(
                 CashEvent(
                     date=date(2026, 1, 6),
@@ -209,23 +197,12 @@ def test_the_wait_date_has_to_meet_an_obligation_too():
                     kind="income_fixed",
                 ),
             ),
-            series=(
-                SeriesForecast(
-                    id="s1",
-                    name="Gym",
-                    expected=(date(2026, 1, 2),),
-                    jitter=((0, 1.0),),
-                    skip=0.95,
-                    alive=1.0,
-                    amounts=(10,),
-                ),
-            ),
         ),
         Hypothetical(amount_paise=5, date=date(2026, 1, 1)),
         runs=200,
     )
     wait = _trade(result, "wait")
-    assert wait["days"] >= 5
+    assert wait["days"] == 5
     assert wait["date"] == "2026-01-06"
 
 
@@ -682,50 +659,10 @@ def test_tiny_purchase_does_not_raise_when_tradeoffs_consider_card_emi():
     assert "repay" in asked_emi["verdict_reason"].lower()
 
 
-def test_plans_defer_only_the_top_eight_goals(monkeypatch):
-    goals = tuple(
-        GoalPlan(
-            id=f"goal_{index:02d}",
-            name=f"Goal {index:02d}",
-            target_paise=100_000,
-            saved_paise=0,
-            priority=index,
-        )
-        for index in range(1, 16)
-    )
-    events = tuple(
-        CashEvent(
-            date=date(2026, 1, 10),
-            amount_paise=-50_000,
-            name=f"Goal {index:02d} contribution",
-            kind="goal_contribution",
-            goal_id=f"goal_{index:02d}",
-        )
-        for index in range(1, 16)
-    )
-    inputs = _inputs(start=600_000, floor=0, goals=goals, events=events)
-    seen: list[tuple[str, ...]] = []
-    original = affordability._goal_relief
-
-    def spy(current, goal_ids, when):
-        seen.append(goal_ids)
-        return original(current, goal_ids, when)
-
-    monkeypatch.setattr(affordability, "_goal_relief", spy)
-    result = afford(inputs, Hypothetical(amount_paise=50_000, date=date(2026, 1, 1)), runs=20)
-    top_eight = {f"goal_{index:02d}" for index in range(1, 9)}
-    assert seen
-    assert all(set(goal_ids) <= top_eight for goal_ids in seen)
-    assert max(len(goal_ids) for goal_ids in seen) <= MAX_DEFERRABLE_GOALS
-    assert result["verdict"] == "yes-but"
-    delayed = {trade["goal_id"] for trade in result["tradeoffs"] if "goal_id" in trade}
-    assert delayed and delayed <= top_eight
-
-
 def test_min_held_reads_the_threshold_as_written():
-    assert min_hold_count(25, 0.28) == 7
-    assert min_hold_count(16_384, 0.90) == 14_746
-    assert min_hold_count(100, 0.99) == 99
+    assert _min_held(25, 0.28) == 7
+    assert _min_held(16_384, 0.90) == 14_746
+    assert _min_held(100, 0.99) == 99
 
 
 def test_a_card_bill_is_an_obligation_the_verdict_cannot_ignore():
@@ -815,15 +752,6 @@ def test_a_future_card_purchase_uses_credit_freed_by_an_earlier_bill():
     assert result["hypothetical"]["feasible"] is True
 
 
-def test_strict_dominance_keeps_card_and_emi_peers_with_equal_values():
-    card = _Plan("card", (), 100, 500)
-    emi = _Plan("emi", (), 100, 500)
-    assert not _dominates(card, emi)
-    assert not _dominates(emi, card)
-    assert _dominates(_Plan("asked", (), 0, 0), card)
-    assert _dominates(_Plan("card", (), 50, 500), card)
-
-
 def test_a_tradeoff_lists_every_goal_it_delays():
     goals = (
         GoalPlan(id="goal_a", name="Goa", target_paise=100_000, saved_paise=0, priority=1),
@@ -898,200 +826,3 @@ def test_a_skipped_goal_contribution_before_an_obligation_counts():
     assert result["verdict"] == "yes-but"
     trade = next(row for row in result["tradeoffs"] if row["kind"] == "delay_goal")
     assert trade["goal_id"] == "goal"
-
-
-def test_obligation_days_are_gated_independently_across_a_percent():
-    scenarios = 512
-    needed = min_hold_count(scenarios, 0.99)
-    payables = np.zeros((scenarios, 2), np.int64)
-    payables[:5, 0] = -10
-    payables[5:10, 1] = -10
-    reducible = np.zeros((scenarios, 2), np.int64)
-    reducible[:10, :] = 100
-    matrix = CriticalMatrix(
-        method="asked",
-        inputs=_inputs(),
-        cost_paise=0,
-        meta={},
-        marks=(1, 2),
-        balances=np.zeros((scenarios, 2), np.int64),
-        reducible=None,
-        capped=False,
-        obligation_days=(1, 2),
-        payables=payables,
-        obligation_reducible=reducible,
-    )
-    # Five scenarios fail each day, disjoint; each day is inside its own 1% allowance, so no
-    # cut is needed. A scenario-max gate would see ten failing scenarios and demand a cut.
-    assert _least_cut(matrix, matrix.balances, payables, 0, needed, needed) == 0
-
-
-def test_a_provisional_capped_candidate_does_not_prune_a_goal_superset(monkeypatch):
-    goals = (
-        GoalPlan(id="a", name="A", target_paise=100_000, saved_paise=0),
-        GoalPlan(id="b", name="B", target_paise=100_000, saved_paise=0),
-    )
-    inputs = _inputs(
-        goals=goals,
-        events=(
-            CashEvent(
-                date=date(2026, 1, 9),
-                amount_paise=-1_000,
-                name="A contribution",
-                kind="goal_contribution",
-                goal_id="a",
-            ),
-            CashEvent(
-                date=date(2026, 1, 9),
-                amount_paise=-1_000,
-                name="B contribution",
-                kind="goal_contribution",
-                goal_id="b",
-            ),
-        ),
-    )
-    matrix = CriticalMatrix(
-        method="asked",
-        inputs=inputs,
-        cost_paise=0,
-        meta={},
-        marks=(0,),
-        balances=np.zeros((4, 1), np.int64),
-        reducible=np.zeros((4, 1), np.int64),
-        capped=True,
-        obligation_days=(),
-        payables=None,
-        obligation_reducible=None,
-    )
-    monkeypatch.setattr(affordability, "_least_cut", lambda *args, **kwargs: None)
-    plans = affordability._plans(
-        [matrix],
-        ("a", "b"),
-        date(2026, 1, 1),
-        floor=0,
-        needed=3,
-        obligation_needed=4,
-        spend_paise=0,
-    )
-    assert ("a", "b") in {plan.goals for plan in plans}
-    assert all(plan.provisional for plan in plans)
-
-
-def test_verify_recomputes_the_cost_at_the_bisected_cut(monkeypatch):
-    category = SpendCategory(
-        id="cat",
-        name="Food",
-        baseline_per_day_paise=10_000,
-        reducible=True,
-        history=tuple(
-            (date(2026, 1, 1) - timedelta(days=index + 1), 10_000) for index in range(60)
-        ),
-    )
-    inputs = _inputs(start=1_000_000, categories=(category,))
-    plan = _Plan("asked", (), 5_000, 999_999, provisional=True)
-    matrix = CriticalMatrix(
-        method="asked",
-        inputs=inputs,
-        cost_paise=0,
-        meta={},
-        marks=(0,),
-        balances=np.zeros((4, 1), np.int64),
-        reducible=np.ones((4, 1), np.int64),
-        capped=True,
-        obligation_days=(),
-        payables=None,
-        obligation_reducible=None,
-    )
-
-    def fake_evaluate_cut(self, cut_bps):
-        return {"floor_probability": 1.0 if cut_bps >= 2_500 else 0.0, "obligations_met": True}
-
-    monkeypatch.setattr(criticals.PreparedPlan, "evaluate_cut", fake_evaluate_cut)
-    verified = affordability._verify(
-        plan,
-        matrix,
-        when=date(2026, 1, 1),
-        until=date(2026, 2, 1),
-        runs=4,
-        seed=1,
-        threshold=0.9,
-        spend_paise=10_000,
-    )
-    assert verified is not None
-    assert verified.plan.cut_bps == 2_500
-    assert verified.plan.cost_paise == 2_500
-    assert verified.plan.provisional is False
-
-
-def test_criticals_reused_spec_matches_full_project_bit_for_bit():
-    """One prepared spec, varied only by cut, must reproduce a full project() rerun exactly.
-
-    The inputs put far more card spend on the card than its limit (so a cut also changes capped
-    cash) and defer a goal contribution, covering both levers at cut 0 and above.
-    """
-    today = date(2026, 1, 1)
-    payday = today + timedelta(days=5)
-    category = SpendCategory(
-        id="cat",
-        name="Food",
-        baseline_per_day_paise=10_000,
-        baseline_source="computed",
-        reducible=True,
-        history=tuple(
-            (today - timedelta(days=offset), 8_000 + offset * 100) for offset in range(60, 0, -1)
-        ),
-        card_id="card",
-        card_share=1,
-    )
-    card = CardAccount(
-        id="card",
-        name="Card",
-        statement_day=2,
-        due_day=4,
-        outstanding_paise=0,
-        credit_limit_paise=50_000,
-        unbilled_paise=0,
-    )
-    goal = GoalPlan(id="goal", name="Goa", target_paise=100_000, saved_paise=0)
-    applied = _inputs(
-        start=200_000,
-        categories=(category,),
-        cards=(card,),
-        goals=(goal,),
-        events=(
-            CashEvent(
-                date=today + timedelta(days=2),
-                amount_paise=-100_000,
-                name="Card bill",
-                kind="obligation",
-                card_id="card",
-            ),
-            CashEvent(
-                date=today + timedelta(days=2),
-                amount_paise=-5_000,
-                name="Goa contribution",
-                kind="goal_contribution",
-                goal_id="goal",
-            ),
-            CashEvent(date=payday, amount_paise=500_000, name="Salary", kind="income_fixed"),
-        ),
-    )
-    assert criticals.build_critical_matrix(
-        "asked",
-        applied,
-        cost_paise=0,
-        meta={},
-        cut_until=(payday - today).days,
-        runs=256,
-        seed=7,
-    ).capped
-
-    base, removed = affordability._goal_relief(applied, ("goal",), today)
-    assert removed
-    prepared = criticals.prepare_plan(base, until=payday, runs=256, seed=7, threshold=0.9)
-
-    for cut in (0, 1, 2_500, 10_000):
-        reused = prepared.evaluate_cut(cut)
-        full_inputs = base if cut == 0 else reduce_categories(base, cut / 10_000, until=payday)[0]
-        full = project(full_inputs, runs=256, seed=7, threshold=0.9)
-        assert reused == full

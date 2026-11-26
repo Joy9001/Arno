@@ -26,7 +26,7 @@ from typing import Any
 from arno.backup_restore import verify_database
 from arno.db.conn import Connection, connect, conninfo_to_dict, quote_ident
 from arno.engine.affordability import Hypothetical, afford
-from arno.engine.money import allocate, amortize
+from arno.engine.money import amortize
 from arno.engine.projection import CardAccount, CashEvent, LiquidAccount, ProjectionInput, project
 from arno.ledger.common import today
 from arno.ledger.errors import InvalidLedgerError
@@ -142,11 +142,6 @@ def check_engine() -> list[Violation]:
         loan["total_paid"]["paise"] == principal + loan["total_interest"]["paise"],
         "engine_loan_total",
         "total loan payments must reconcile with principal and interest",
-    )
-    _expect(
-        sum(allocate(101, (1, 1, 1))) == 101,
-        "engine_allocation",
-        "largest-remainder allocation must conserve paise",
     )
 
     day = date(2026, 1, 10)

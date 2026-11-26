@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from arno.engine import kernel
-from arno.engine.kernel import CardSpec, Pool, Rare, SeriesSpec, Settings, Spec
+from arno.engine.kernel import CardSpec, Pool, Rare, Settings, Spec
 from tests.fixtures.engine_kernel import _reference_walk, _spec
 
 
@@ -27,21 +27,12 @@ def test_the_numpy_draws_match_the_python_oracle_bit_for_bit():
             assert int(values[scenario, column]) == kernel.draw(20261103, 9, scenario, int(day))
 
 
-@pytest.mark.parametrize("limit_spend", [True, False])
-@pytest.mark.parametrize("with_series", [False, True])
-@pytest.mark.parametrize("block_length", [1, 3])
 @pytest.mark.parametrize("cards", [0, 2])
-def test_the_kernel_matches_a_plain_day_by_day_walk(
-    block_length, cards, with_series, limit_spend, monkeypatch
-):
-    # Small chunks prove that state carries across chunk edges exactly.
-    monkeypatch.setattr(kernel, "CHUNK_DAYS", 17)
-    rng = random.Random(block_length * 10 + cards + (100 if with_series else 0))
+def test_the_kernel_matches_a_plain_day_by_day_walk(cards):
+    rng = random.Random(cards)
     for trial in range(3):
-        spec = _spec(
-            rng, cards=cards, days=75, cut=trial == 1, series=with_series, limit_spend=limit_spend
-        )
-        settings = Settings(scenarios=6, seed=trial, block_length=block_length, keep_days=76)
+        spec = _spec(rng, cards=cards, days=75, cut=trial == 1)
+        settings = Settings(scenarios=6, seed=trial, keep_days=76)
         run = kernel.run(spec, settings)
         expected, payables = _reference_walk(spec, settings)
         assert run.paths is not None
@@ -71,12 +62,11 @@ def test_a_scenario_does_not_depend_on_how_many_run():
     assert large.paths[:8].tolist() == small.paths.tolist()
 
 
-def test_checkpoints_and_obligations_come_from_the_same_walk():
+def test_obligations_come_from_the_same_walk():
     spec = _spec(random.Random(9), cards=1, days=60)
-    settings = Settings(scenarios=250, seed=1, keep_days=61, checkpoints=(0, 10, 60))
+    settings = Settings(scenarios=250, seed=1, keep_days=61)
     run = kernel.run(spec, settings)
-    assert run.paths is not None and run.checkpoints is not None
-    assert run.checkpoints.tolist() == run.paths[:, [0, 10, 60]].tolist()
+    assert run.paths is not None
     assert len(run.obligation_failures) == len(kernel.obligation_days(spec))
     assert len(run.obligation_margins) == len(kernel.obligation_days(spec))
     _paths, payables = _reference_walk(spec, settings)
@@ -156,28 +146,10 @@ def test_a_cut_removes_a_rounded_share_of_reducible_spend_and_nothing_else():
     assert (cut.paths >= base.paths).all()
 
 
-def test_the_reducible_measure_reads_what_was_there_before_the_cut():
-    # Two reducible cash series: 20,000 on day 9 and 10,000 on day 18. A 50% cut halves what
-    # leaves cash, but the measure a cut acts on is the uncut spend, so the day-15 checkpoint
-    # holds day 9's 20,000 in full and the day-30 checkpoint adds day 18's 10,000.
+def test_a_cut_halves_reducible_spend_on_each_day_until_it_ends():
     first_day = 739_000
     days = 30
     total = days + 1
-    jitter = np.array([0], dtype=np.int64)
-    cumulative = np.array([1 << 32], dtype=np.uint64)
-    series = tuple(
-        SeriesSpec(
-            ordinals=np.array([first_day + day], dtype=np.int64),
-            alive_threshold=1 << 32,
-            skip_threshold=0,
-            jitter_offsets=jitter,
-            jitter_cumulative=cumulative,
-            amounts=np.array([amount], dtype=np.int64),
-            reducible=True,
-            stream=100 + index,
-        )
-        for index, (day, amount) in enumerate(((9, 20_000), (18, 10_000)))
-    )
     spec = Spec(
         start_balance=100_000,
         days=days,
@@ -189,19 +161,24 @@ def test_the_reducible_measure_reads_what_was_there_before_the_cut():
         obligation_days=np.zeros(0, np.int64),
         unconfirmed=np.zeros(total, np.int64),
         floor=0,
-        series=series,
+        pools=(
+            Pool(
+                columns={
+                    "cash": np.array([1_000], dtype=np.int64),
+                    "cash_cut": np.array([600], dtype=np.int64),
+                },
+                classes=np.array([0], dtype=np.int8),
+                stream=1,
+            ),
+        ),
         cut_bps=5_000,
-        cut_until=29,
+        cut_until=9,
     )
-    run = kernel.run(
-        spec,
-        Settings(scenarios=8, seed=1, keep_days=total, checkpoints=(15, 30), reducible_until=20),
-    )
-    assert run.paths is not None and run.reducible is not None
-    assert (run.paths[:, 9] == 90_000).all()
-    assert (run.paths[:, 18] == 85_000).all()
-    assert (run.reducible[:, 0] == 20_000).all()
-    assert (run.reducible[:, 1] == 30_000).all()
+    run = kernel.run(spec, Settings(scenarios=4, seed=1, keep_days=total))
+    assert run.paths is not None
+    drops = (run.paths[:, :-1] - run.paths[:, 1:])[0].tolist()
+    # The cut takes 300 of each of days 1 to 9 (day zero is today and spends nothing).
+    assert drops == [*([700] * 9), *([1_000] * 21)]
 
 
 def test_a_rare_day_replaces_its_day_pool_instead_of_adding_onto_it():
@@ -278,8 +255,7 @@ def test_a_rare_day_adds_when_no_pool_matches_replaces_stream():
     assert unique_drops == {1_000, 6_000}
 
 
-@pytest.mark.parametrize("limit_spend", [True, False])
-def test_resampled_spend_keeps_its_card_and_only_new_charges_meet_the_limit(limit_spend):
+def test_resampled_spend_keeps_its_card_and_only_new_charges_meet_the_limit():
     days = 6
     total = days + 1
     other = np.zeros(total, np.int64)
@@ -289,7 +265,6 @@ def test_resampled_spend_keeps_its_card_and_only_new_charges_meet_the_limit(limi
         used=5_000,
         due_of_day=np.full(total, -1, np.int64),
         other=other,
-        limit_spend=limit_spend,
     )
     spec = Spec(
         start_balance=100_000,
@@ -315,14 +290,9 @@ def test_resampled_spend_keeps_its_card_and_only_new_charges_meet_the_limit(limi
     assert run.paths is not None
     drops = (run.paths[:, :-1] - run.paths[:, 1:])[0].tolist()
     assert run.credit_exceeded
-    if limit_spend:
-        # Two days of spend fit; on day 3 the spend and the purchase share the last 1,000.
-        assert drops == [0, 0, 6_000, 2_000, 2_000, 2_000]
-    else:
-        # Spend stays on the card. By day 3 it has used 9,000 of the 10,000 limit, so the
-        # day-3 purchase gets the last 1,000 and 4,000 leaves cash; then the spend passes the
-        # limit on the card.
-        assert drops == [0, 0, 4_000, 0, 0, 0]
+    # Spend stays on the card. By day 3 it has used 9,000 of the 10,000 limit, so the day-3
+    # purchase gets the last 1,000 and 4,000 leaves cash; then the spend passes the limit.
+    assert drops == [0, 0, 4_000, 0, 0, 0]
 
 
 def test_below_requires_a_bound_under_two_to_the_32():
@@ -383,7 +353,6 @@ def test_card_obligations_are_charged_before_loose_spend():
         used=0,
         due_of_day=np.full(total, -1, np.int64),
         obligation=obligation,
-        limit_spend=False,
     )
     spec = Spec(
         start_balance=100_000,

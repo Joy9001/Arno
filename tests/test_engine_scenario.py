@@ -16,7 +16,6 @@ from arno.engine.projection import (
     GoalPlan,
     LiquidAccount,
     ProjectionInput,
-    SeriesForecast,
     project,
 )
 from arno.engine.scenario import (
@@ -38,7 +37,6 @@ def _inputs(
     floor: int = 100_000,
     events: tuple[CashEvent, ...] = (),
     goals: tuple[GoalPlan, ...] = (),
-    series: tuple[SeriesForecast, ...] = (),
     horizon: int = 180,
 ) -> ProjectionInput:
     return ProjectionInput(
@@ -47,7 +45,6 @@ def _inputs(
         liquid=(LiquidAccount(id="acc_1", name="Bank", balance_paise=start),),
         events=events,
         goals=goals,
-        series=series,
         ask_horizon_days=horizon,
     )
 
@@ -167,19 +164,18 @@ def test_pause_schedule_on_goal_contribution_lowers_goal_funding_and_series_date
                 source_id="sch_sip",
                 goal_id="goal_goa",
             ),
-        ),
-        goals=(goal,),
-        series=(
-            SeriesForecast(
-                id="ser_gym",
-                name="Gym",
-                expected=(date(2026, 1, 15), date(2026, 2, 15), date(2026, 3, 15)),
-                jitter=((0, 1.0),),
-                skip=0.0,
-                alive=1.0,
-                amounts=(100_000,),
+            *(
+                CashEvent(
+                    date=day,
+                    amount_paise=-100_000,
+                    name="Gym",
+                    kind="series",
+                    source_id="ser_gym",
+                )
+                for day in (date(2026, 1, 15), date(2026, 2, 15), date(2026, 3, 15))
             ),
         ),
+        goals=(goal,),
     )
 
     applied = apply_changes(
@@ -199,9 +195,11 @@ def test_pause_schedule_on_goal_contribution_lowers_goal_funding_and_series_date
             ),
         ],
     )
-    assert len(applied.inputs.events) == 2
-    assert [e.date for e in applied.inputs.events] == [date(2026, 1, 10), date(2026, 3, 10)]
-    assert applied.inputs.series[0].expected == (date(2026, 3, 15),)
+    assert [(e.name, e.date) for e in applied.inputs.events] == [
+        ("Goa SIP", date(2026, 1, 10)),
+        ("Goa SIP", date(2026, 3, 10)),
+        ("Gym", date(2026, 3, 15)),
+    ]
 
     unchanged = project(base, runs=30)
     changed = project(applied.inputs, runs=30)

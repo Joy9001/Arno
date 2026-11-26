@@ -692,14 +692,13 @@ async def test_load_snapshot_projects_uncovered_series_and_excludes_matched_spen
     await patterns.detect(ledger, as_of=as_of)
     snapshot = await projection_tools.load_snapshot(ledger, as_of=as_of)
 
-    assert len(snapshot.series) == 1
-    forecast = snapshot.series[0]
-    assert forecast.amounts == (64_900,)
-    assert forecast.card_id == card["id"]
-    assert forecast.category_id == cat_id
-    assert forecast.reducible is bool(cat_row["reducible"])
-    assert date(2026, 11, 1) in forecast.expected
-    assert forecast.name == "Netflix"
+    assert [(event.date, event.amount_paise) for event in snapshot.series] == [
+        (date(2026, 11, 1), -64_900),
+        (date(2026, 12, 1), -64_900),
+    ]
+    assert {(event.kind, event.card_id, event.name) for event in snapshot.series} == {
+        ("series", card["id"], "Netflix")
+    }
     assert [(row.date, row.amount_paise) for row in snapshot.spend] == [(date(2026, 9, 18), 15_000)]
 
     early = await projection_tools.load_snapshot(ledger, as_of=date(2026, 9, 25), known_then=True)

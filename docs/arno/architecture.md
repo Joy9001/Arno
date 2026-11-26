@@ -255,9 +255,9 @@ repeating recent manual entries, and statement reconciliation deduplicates later
   for the model while logging full details to traces; browser streams receive plain error messages.
   Read tools carry a 60-second timeout; write tools omit timeouts so a slow commit is never retried
   under a second `tool_call_id`.
-- **Database connections:** The API process maintains a per-loop cache of up to eight idle
-  `asyncpg` connections, opening direct connections immediately when empty so long chat streams
-  never starve other requests ([`specs/platform.md`](specs/platform.md#database-connections-and-integrity)).
+- **Database connections:** The API process maintains one standard `asyncpg` connection pool per
+  event loop (1 to 20 connections), so concurrent requests and chat streams share connections cleanly
+  ([`specs/platform.md`](specs/platform.md#database-connections-and-integrity)).
 - **Minute loop and spawned tasks:** One asyncio loop in the API process fires due scheduled
   questions and the daily tasks, and `spawn` runs work after a write. State stays in Postgres, so
   a restart resumes categorization from `imports.categorize` and claims each question once.
@@ -286,8 +286,8 @@ Phoenix traces observe live turns
 ([note](diagrams/sd-measure-layers.md))._
 
 1. **Automated tests (every commit, zero model calls):** `pytest` over real Postgres with non-loopback
-   sockets blocked (`ALLOW_MODEL_REQUESTS = False`), plus financial invariants (`tests/invariants.py`),
-   web interaction tests, and answer-contract tests.
+   sockets blocked (`ALLOW_MODEL_REQUESTS = False`), plus financial invariants (`tests/invariants.py`)
+   and web interaction tests.
 2. **Agent evaluations (on model, prompt, or tool changes):** `pydantic_evals` runs 85 cases
    across five categories (answers, writes, honesty, never moving money/passwords, and long
    threads) on cloned demo databases with `repeat=3` (`pass^3`).

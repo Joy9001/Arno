@@ -22,7 +22,6 @@ from arno.engine.projection import (
     GoalPlan,
     LiquidAccount,
     ProjectionInput,
-    SeriesForecast,
     SourceRef,
     SpendCategory,
     SpendRow,
@@ -81,7 +80,8 @@ class LedgerSnapshot:
     # yet. Categories read the last HISTORY_DAYS of it.
     spend: tuple[SpendRow, ...] = ()
     history_start: date | None = None
-    series: tuple[SeriesForecast, ...] = ()
+    # Detected, unconfirmed recurring payments as dated outflows of kind "series".
+    series: tuple[CashEvent, ...] = ()
     attributed: bool = False
     attributed_categories: frozenset[str] = frozenset()
     ask_horizon_days: int | None = None
@@ -144,7 +144,7 @@ def _derived_baseline(
 ) -> int | None:
     """A computed daily rate from the spend rows themselves, once three rows fall on two days.
 
-    The rows already leave out what schedules and projected series pay, so a category that holds
+    The rows already leave out what schedules and detected series pay, so a category that holds
     its rent never inherits the rent as everyday spend. The divisor is the days the ledger covers,
     so a new ledger is not averaged over days before it began. A stored computed baseline is never
     read: it counted every payment in the category.
@@ -361,6 +361,7 @@ def build_inputs(snapshot: LedgerSnapshot) -> ProjectionInput:
     floor = snapshot.floor_paise
     events, covered, event_gaps = _events(snapshot)
     events.extend(snapshot.owed)
+    events.extend(snapshot.series)
     categories, baseline_rows, category_gaps = _spend_categories(snapshot, covered)
     gaps = [*snapshot.gaps, *event_gaps, *category_gaps]
     return ProjectionInput(
@@ -387,7 +388,6 @@ def build_inputs(snapshot: LedgerSnapshot) -> ProjectionInput:
             and (snapshot.history_start is None or snapshot.history_start <= row.date)
         ),
         history_start=snapshot.history_start,
-        series=snapshot.series,
         attributed=snapshot.attributed,
     )
 

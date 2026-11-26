@@ -1,4 +1,4 @@
-"""Amortization, compounding, rate inversion, scaling, allocation, and card EMI, in whole paise.
+"""Amortization, compounding, rate inversion, and card EMI, in whole paise.
 
 These are the standard money formulas the agent must not retype in a script. Rates use Decimal;
 money is rounded back to whole paise at every step.
@@ -21,8 +21,8 @@ DEFAULT_GST_BPS = 1800
 DEFAULT_MINIMUM_BPS = 500
 DEFAULT_MINIMUM_FLOOR_PAISE = 20_000
 _RATE_UNIT_SCALE = Decimal(10_000)
-# shortcut: India nominal 12*monthly IRR and 30e/360 + actual/365f only, revisit if a non-India
-# locale pack or US 30/360 / EU effective APR is requested
+# shortcut: India nominal 12*monthly IRR with monthly rest only, revisit if a non-India locale
+# pack or US 30/360 / EU effective APR is requested
 _APR_MONTHLY_SCALE = Decimal(12_000_000)  # 0.0001% a year / 12 months
 _MAX_RATE_UNIT = 1_000_000  # 100.0000% a year in 0.0001% (bps_x100) units
 # The kernel keeps balances in signed 64-bit integers; a larger amount would wrap silently.
@@ -31,11 +31,6 @@ _MAX_MONTHS = 600
 
 # A caller's global Decimal context (precision, rounding, traps) must not move a paisa.
 _DECIMAL_CONTEXT = Context(prec=28, rounding=ROUND_HALF_UP)
-
-DayCount = Literal["30e/360", "actual/365f", "30/360", "actual/365"]
-_CanonicalDayCount = Literal["30e/360", "actual/365f"]
-# 30E/360 is the Eurobond basis; actual/365 fixed is ISDA's Actual/365 (Fixed).
-_DAY_COUNT_ALIASES = {"30/360": "30e/360", "actual/365": "actual/365f"}
 
 
 def _pinned[**P, R](function: Callable[P, R]) -> Callable[P, R]:
@@ -47,13 +42,6 @@ def _pinned[**P, R](function: Callable[P, R]) -> Callable[P, R]:
             return function(*args, **kwargs)
 
     return run
-
-
-def _canonical_day_count(day_count: str) -> _CanonicalDayCount:
-    canonical = _DAY_COUNT_ALIASES.get(day_count, day_count)
-    if canonical not in ("30e/360", "actual/365f"):
-        raise ValueError("day_count must be '30e/360' or 'actual/365f'")
-    return canonical
 
 
 def check_paise(value: int) -> None:
@@ -295,28 +283,9 @@ def add_months(day: date, months: int) -> date:
 _add_months = add_months
 
 
-def _days_30_360(first: date, second: date) -> int:
-    """30E/360 day count: both endpoints clamp to the 30th of their month."""
-    day1 = min(first.day, 30)
-    day2 = min(second.day, 30)
-    return (second.year - first.year) * 360 + (second.month - first.month) * 30 + (day2 - day1)
-
-
-def _validate_amortize_conventions(
-    *,
-    rest: Literal["monthly", "daily"],
-    day_count: DayCount,
-    interest_unit_paise: int,
-    emi_rounding: Literal["half_up", "up"],
-    emi_unit_paise: int,
-    start_date: date | None = None,
-    require_start_date_for_daily: bool = True,
+def _validate_rounding(
+    interest_unit_paise: int, emi_rounding: Literal["half_up", "up"], emi_unit_paise: int
 ) -> None:
-    if rest not in ("monthly", "daily"):
-        raise ValueError("rest must be 'monthly' or 'daily'")
-    _canonical_day_count(day_count)
-    if require_start_date_for_daily and rest == "daily" and start_date is None:
-        raise ValueError("daily rest requires start_date")
     if interest_unit_paise <= 0:
         raise ValueError("interest_unit_paise must be positive")
     if emi_rounding not in ("half_up", "up"):
@@ -347,29 +316,9 @@ def _compute_emi(
 
 
 def _period_interest(
-    balance: Decimal,
-    annual_rate_pct: Decimal,
-    index: int,
-    *,
-    rest: Literal["monthly", "daily"],
-    day_count: _CanonicalDayCount,
-    start_date: date | None,
-    interest_unit_paise: int,
+    balance: Decimal, annual_rate_pct: Decimal, interest_unit_paise: int
 ) -> Decimal:
-    if rest == "monthly":
-        raw = balance * annual_rate_pct / (HUNDRED * MONTHS_IN_YEAR)
-        return _round_unit(raw, interest_unit_paise, "half_up")
-    if start_date is None:
-        raise ValueError("daily rest requires start_date")
-    prev_date = start_date if index == 1 else add_months(start_date, index - 1)
-    curr_date = add_months(start_date, index)
-    if day_count == "actual/365f":
-        days = (curr_date - prev_date).days
-        basis = 365
-    else:
-        days = _days_30_360(prev_date, curr_date)
-        basis = 360
-    raw = balance * annual_rate_pct * Decimal(days) / (HUNDRED * Decimal(basis))
+    raw = balance * annual_rate_pct / (HUNDRED * MONTHS_IN_YEAR)
     return _round_unit(raw, interest_unit_paise, "half_up")
 
 
@@ -391,9 +340,6 @@ def _walk(
     *,
     unbounded: bool,
     start_index: int = 1,
-    start_date: date | None = None,
-    rest: Literal["monthly", "daily"] = "monthly",
-    day_count: _CanonicalDayCount = "30e/360",
     interest_unit_paise: int = 1,
     emi_rounding: Literal["half_up", "up"] = "half_up",
     emi_unit_paise: int = 1,
@@ -426,15 +372,7 @@ def _walk(
                 current_emi = _compute_emi(
                     balance, current_rate, remaining_for_reset, emi_rounding, emi_unit_paise
                 )
-        month_interest = _period_interest(
-            balance,
-            current_rate,
-            index,
-            rest=rest,
-            day_count=day_count,
-            start_date=start_date,
-            interest_unit_paise=interest_unit_paise,
-        )
+        month_interest = _period_interest(balance, current_rate, interest_unit_paise)
         month_principal = min(current_emi - month_interest, balance)
         if month_principal <= 0:
             raise ValueError("this EMI never repays the loan")
@@ -536,8 +474,6 @@ def amortize(
     start_date: date | None = None,
     prepay: Prepay | None = None,
     assumptions: list[str] | None = None,
-    rest: Literal["monthly", "daily"] = "monthly",
-    day_count: DayCount = "30e/360",
     interest_unit_paise: int = 1,
     emi_rounding: Literal["half_up", "up"] = "half_up",
     emi_unit_paise: int = 1,
@@ -575,16 +511,7 @@ def amortize(
         total_fee_paise = processing_fee_paise + fee_gst_paise
         if total_fee_paise >= principal_paise:
             raise ValueError("processing fee and GST must be less than principal")
-    day_count = _canonical_day_count(day_count)
-    _validate_amortize_conventions(
-        rest=rest,
-        day_count=day_count,
-        interest_unit_paise=interest_unit_paise,
-        emi_rounding=emi_rounding,
-        emi_unit_paise=emi_unit_paise,
-        start_date=start_date,
-        require_start_date_for_daily=True,
-    )
+    _validate_rounding(interest_unit_paise, emi_rounding, emi_unit_paise)
     if reset not in ("tenure", "emi"):
         raise ValueError("reset must be 'tenure' or 'emi'")
 
@@ -622,9 +549,6 @@ def amortize(
         months,
         unbounded=unbounded,
         start_index=1,
-        start_date=start_date,
-        rest=rest,
-        day_count=day_count,
         interest_unit_paise=interest_unit_paise,
         emi_rounding=emi_rounding,
         emi_unit_paise=emi_unit_paise,
@@ -656,10 +580,6 @@ def amortize(
         if assumptions is not None and len(assumptions) > 0
         else [f"{annual_rate:g}% a year, as entered; a floating rate can change"]
     )
-    if rest != "monthly":
-        notes.append(f"daily rest ({day_count})")
-    elif day_count != "30e/360":
-        notes.append(f"day count: {day_count}")
     if interest_unit_paise != 1:
         notes.append(f"interest rounded half-up to {interest_unit_paise} paise")
     if emi_rounding != "half_up" or emi_unit_paise != 1:
@@ -765,9 +685,6 @@ def amortize(
             remaining,
             unbounded=unbounded,
             start_index=at_emi,
-            start_date=start_date,
-            rest=rest,
-            day_count=day_count,
             interest_unit_paise=interest_unit_paise,
             emi_rounding=emi_rounding,
             emi_unit_paise=emi_unit_paise,
@@ -794,15 +711,13 @@ def infer_rate(
     months: int,
     emi_paise: int,
     *,
-    rest: Literal["monthly", "daily"] = "monthly",
-    day_count: DayCount = "30e/360",
     interest_unit_paise: int = 1,
     emi_rounding: Literal["half_up", "up"] = "half_up",
     emi_unit_paise: int = 1,
 ) -> RateFit:
     """Infer the annual rate interval in 0.0001% (bps x 100) units for an observed EMI.
 
-    The EMI is assumed monthly-rest, so a daily rest is refused rather than silently ignored.
+    The EMI is assumed monthly-rest.
     ``exact`` is true only when one rate unit reproduces the EMI; a wider interval means several
     rates round to the same instalment, and the note carries the range.
     """
@@ -813,17 +728,7 @@ def infer_rate(
     if emi_paise < 0:
         raise ValueError("emi cannot be negative")
     check_paise(emi_paise)
-    if rest != "monthly":
-        raise ValueError("infer_rate supports monthly rest only")
-    day_count = _canonical_day_count(day_count)
-    _validate_amortize_conventions(
-        rest=rest,
-        day_count=day_count,
-        interest_unit_paise=interest_unit_paise,
-        emi_rounding=emi_rounding,
-        emi_unit_paise=emi_unit_paise,
-        require_start_date_for_daily=False,
-    )
+    _validate_rounding(interest_unit_paise, emi_rounding, emi_unit_paise)
 
     principal = Decimal(principal_paise)
 
@@ -917,63 +822,6 @@ def _round_half_up_div(num: int, den: int) -> int:
     if num >= 0:
         return (2 * num + den) // (2 * den)
     return -((2 * (-num) + den) // (2 * den))
-
-
-def scale_cumulative(amounts: Sequence[int], numerator: int, denominator: int) -> list[int]:
-    """Scale each amount using cumulative half-up rounding in pure integer arithmetic."""
-    if denominator == 0:
-        raise ValueError("denominator cannot be zero")
-    num = int(numerator)
-    den = int(denominator)
-    if den < 0:
-        num = -num
-        den = -den
-
-    result: list[int] = []
-    running = 0
-    prev_rounded = 0
-    for amount in amounts:
-        running += int(amount)
-        curr_rounded = _round_half_up_div(running * num, den)
-        result.append(curr_rounded - prev_rounded)
-        prev_rounded = curr_rounded
-    return result
-
-
-def allocate(total_paise: int, weights: Sequence[int]) -> list[int]:
-    """Split ``total_paise`` across non-negative integer ``weights`` by largest remainder."""
-    if len(weights) == 0:
-        raise ValueError("weights must be non-empty")
-    int_weights = [int(weight) for weight in weights]
-    if any(weight < 0 for weight in int_weights):
-        raise ValueError("weights must be non-negative")
-    total_weight = sum(int_weights)
-    if total_weight <= 0:
-        raise ValueError("at least one weight must be positive")
-
-    total = int(total_paise)
-    sign = -1 if total < 0 else 1
-    abs_total = abs(total)
-
-    parts: list[int] = []
-    remainders: list[tuple[int, int]] = []
-    for index, weight in enumerate(int_weights):
-        if weight == 0:
-            parts.append(0)
-        else:
-            quotient, remainder = divmod(abs_total * weight, total_weight)
-            parts.append(quotient)
-            remainders.append((remainder, index))
-
-    leftover = abs_total - sum(parts)
-    if leftover > 0:
-        remainders.sort(key=lambda item: (-item[0], item[1]))
-        for _remainder, index in remainders[:leftover]:
-            parts[index] += 1
-
-    if sign < 0:
-        return [-part for part in parts]
-    return parts
 
 
 @_pinned
@@ -1372,7 +1220,6 @@ __all__ = [
     "CardPayoff",
     "CardPayoffRow",
     "CompoundResult",
-    "DayCount",
     "Money",
     "Offer",
     "OfferComparison",
@@ -1383,7 +1230,6 @@ __all__ = [
     "ScheduleRow",
     "YearlyRow",
     "add_months",
-    "allocate",
     "amortize",
     "card_emi",
     "card_payoff",
@@ -1392,5 +1238,4 @@ __all__ = [
     "compare_offers",
     "infer_rate",
     "money",
-    "scale_cumulative",
 ]

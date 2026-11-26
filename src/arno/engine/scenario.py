@@ -19,7 +19,6 @@ from arno.engine.projection import (
     MAX_HORIZON_DAYS,
     CashEvent,
     ProjectionInput,
-    SeriesForecast,
     horizon_days,
 )
 
@@ -322,44 +321,20 @@ def _apply_stop_income(
 
 
 def _apply_pause_schedule(
-    change: PauseSchedule,
-    events: list[CashEvent],
-    series_list: list[SeriesForecast],
-    end_date: date,
-) -> tuple[list[CashEvent], list[SeriesForecast], ChangeResult]:
-    if change.source_id is not None:
-        events, removed, moved = _remove_events(
-            events,
-            lambda event: (
-                _in_window(event.date, change.start, change.until, end_date)
-                and event.source_id == change.source_id
-            ),
-        )
-        target = change.label_name or change.source_id
-    else:
-        assert change.series_id is not None
-        removed = moved = 0
-        series_name = change.label_name
-        updated_series: list[SeriesForecast] = []
-        for item in series_list:
-            if item.id != change.series_id:
-                updated_series.append(item)
-                continue
-            series_name = series_name or item.name
-            kept_dates = tuple(
-                day
-                for day in item.expected
-                if not _in_window(day, change.start, change.until, end_date)
-            )
-            removed = len(item.expected) - len(kept_dates)
-            if removed > 0 and item.amounts:
-                moved = removed * (sum(item.amounts) // len(item.amounts))
-            updated_series.append(replace(item, expected=kept_dates))
-        series_list = updated_series
-        target = series_name or change.series_id
-    head = f"Paused {target} {_window_text(change.start, change.until)}"
+    change: PauseSchedule, events: list[CashEvent], end_date: date
+) -> tuple[list[CashEvent], ChangeResult]:
+    # A detected series is a run of dated events whose source id is the series id.
+    target_id = change.source_id or change.series_id
+    kept, removed, moved = _remove_events(
+        events,
+        lambda event: (
+            _in_window(event.date, change.start, change.until, end_date)
+            and event.source_id == target_id
+        ),
+    )
+    head = f"Paused {change.label_name or target_id} {_window_text(change.start, change.until)}"
     label = _format_label(head, removed, f"{money(moved)['text']} removed")
-    return events, series_list, ChangeResult("pause_schedule", label, removed, moved)
+    return kept, ChangeResult("pause_schedule", label, removed, moved)
 
 
 def _apply_change_amount(
@@ -499,7 +474,6 @@ def apply_changes(
                 "set ask_horizon_days from scenario_horizon_days first"
             )
     events = list(inputs.events)
-    series_list = list(inputs.series)
     added_events: list[CashEvent] = []
     results: list[ChangeResult] = []
     has_added_flow = False
@@ -508,7 +482,7 @@ def apply_changes(
         if isinstance(change, StopIncome):
             events, res = _apply_stop_income(change, events, end_date)
         elif isinstance(change, PauseSchedule):
-            events, series_list, res = _apply_pause_schedule(change, events, series_list, end_date)
+            events, res = _apply_pause_schedule(change, events, end_date)
         elif isinstance(change, ChangeAmount):
             events, res = _apply_change_amount(change, events, end_date)
         elif isinstance(change, AddRecurring):
@@ -522,7 +496,7 @@ def apply_changes(
         results.append(res)
 
     return ScenarioApplication(
-        inputs=replace(inputs, events=(*events, *added_events), series=tuple(series_list)),
+        inputs=replace(inputs, events=(*events, *added_events)),
         changes=tuple(results),
         adds_or_raises_inflow=any(item.adds_inflow for item in results),
         has_added_flow=has_added_flow,

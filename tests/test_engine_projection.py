@@ -11,9 +11,7 @@ from arno.engine.affordability import Hypothetical, afford
 from arno.engine.inputs import CategoryRow, LedgerSnapshot, build_inputs
 from arno.engine.money import MAX_PAISE
 from arno.engine.projection import (
-    LEGACY_MODEL,
     MAX_CUT_RATIO,
-    MODEL,
     CardAccount,
     CashEvent,
     CurvePoint,
@@ -21,17 +19,13 @@ from arno.engine.projection import (
     LiquidAccount,
     Projection,
     ProjectionInput,
-    SeriesForecast,
     SpendCategory,
     SpendRow,
     card_bills,
-    first_full_payment_date,
     horizon_days,
     prepare,
     project,
     reduce_categories,
-    safe_amount_today,
-    simulate_paths,
 )
 from arno.tools.projection import load_inputs
 
@@ -268,8 +262,6 @@ def test_a_category_with_too_few_real_days_gets_a_spread_around_its_estimate():
     first = _by_date(result)["2026-01-02"]
     assert first["p10_paise"] < first["median_paise"] < first["p90_paise"]
     assert 980_000 <= first["p10_paise"] and first["p90_paise"] <= 1_000_000
-    legacy = project(_inputs(categories=(sparse,)), runs=20, model=LEGACY_MODEL)
-    assert _by_date(legacy)["2026-01-02"]["median_paise"] == 990_000
 
 
 def test_weekend_history_is_resampled_from_weekend_days():
@@ -305,7 +297,7 @@ def test_owed_money_with_an_expected_date_is_a_cash_event():
     assert _by_date(result)["2026-01-07"]["median_paise"] == 50_000
 
 
-def test_safe_amount_and_first_full_payment_date_use_the_tenth_percentile():
+def test_safe_amount_uses_the_tenth_percentile():
     category = SpendCategory(
         id="cat",
         name="Food",
@@ -313,34 +305,11 @@ def test_safe_amount_and_first_full_payment_date_use_the_tenth_percentile():
         history=tuple((date(2025, 12, 1) + timedelta(days=index), 0) for index in range(60)),
     )
     inputs = _inputs(start=100_000, floor=50_000, categories=(category,))
-    assert safe_amount_today(inputs, runs=50) == 50_000
-    found = first_full_payment_date(inputs, 100_000, runs=50)
-    assert found is None
-    found = first_full_payment_date(inputs, 50_000, runs=50)
-    assert found is not None
-    assert found["date"] == "2026-01-01"
-
-
-def test_first_full_payment_date_returns_none_when_a_past_day_already_breaks_the_floor():
-    inputs = _inputs(
-        start=100_000,
-        floor=0,
-        events=(
-            CashEvent(
-                date=date(2026, 1, 5),
-                amount_paise=-150_000,
-                name="Rent",
-                kind="obligation",
-            ),
-            CashEvent(
-                date=date(2026, 1, 20),
-                amount_paise=300_000,
-                name="Salary",
-                kind="income_fixed",
-            ),
-        ),
-    )
-    assert first_full_payment_date(inputs, 20_000, start_on=date(2026, 1, 5), runs=20) is None
+    assert project(inputs, runs=50)["safe_to_spend"] == {
+        "amount_paise": 50_000,
+        "binding": "floor",
+        "binding_date": "2026-01-01",
+    }
 
 
 @pytest.mark.parametrize("runs", [1, 2, 25, 100])
@@ -461,9 +430,23 @@ async def test_safe_to_spend_matches_the_affordability_boundary_on_the_demo_ledg
 
 
 def _rare_charge_inputs(balance_paise: int) -> ProjectionInput:
-    """Rent on day 5, salary on day 7, and a 5%-likely 60,000 charge on day 3."""
+    """Rent on day 5, salary on day 7, and a rare 60,000 weekend charge: 2026-01-03 is a Saturday.
+
+    The history spends a paisa a day, except that one weekend day in the pool spent 60,000, so each
+    weekend day of the horizon has about a 1 in 26 chance of it.
+    """
+    as_of = date(2026, 1, 1)
+    days = [as_of - timedelta(days=offset) for offset in range(90, 0, -1)]
+    big = next(day for day in reversed(days) if day.weekday() == 5)
+    category = SpendCategory(
+        id="cat",
+        name="Misc",
+        baseline_per_day_paise=1,
+        baseline_source="computed",
+        history=tuple((day, 60_000 if day == big else 1) for day in days),
+    )
     return ProjectionInput(
-        as_of=date(2026, 1, 1),
+        as_of=as_of,
         floor_paise=10_000,
         liquid=(LiquidAccount(id="acc", name="Bank", balance_paise=balance_paise),),
         events=(
@@ -480,38 +463,29 @@ def _rare_charge_inputs(balance_paise: int) -> ProjectionInput:
                 kind="income_fixed",
             ),
         ),
-        series=(
-            SeriesForecast(
-                id="s1",
-                name="Unexpected charge",
-                expected=(date(2026, 1, 3),),
-                jitter=((0, 1.0),),
-                skip=0.95,
-                alive=1.0,
-                amounts=(60_000,),
-            ),
-        ),
+        categories=(category,),
         ask_horizon_days=90,
     )
 
 
 def test_safe_to_spend_obligation_can_be_the_binding_constraint():
-    # 95% of scenarios never trigger the rare series outflow, keeping floor headroom at 60,000
-    # above the 10,000 floor. The 5% that trigger it (>1% allowed obligation misses) tighten the
-    # day-5 obligation margin to 10,000 before salary arrives on day 7.
+    # Over 90% of scenarios never draw the rare weekend charge, keeping floor headroom near 60,000
+    # above the 10,000 floor. The few that draw it (more than the 1% allowed obligation misses)
+    # tighten the day-5 obligation margin to 9,997 before salary arrives on day 7; the other
+    # 3 paise are the history's everyday spend.
     inputs = _rare_charge_inputs(120_000)
     runs = 200
     result = project(inputs, runs=runs, seed=1)
     safe = result["safe_to_spend"]
     assert safe == {
-        "amount_paise": 10_000,
+        "amount_paise": 9_997,
         "binding": "obligation",
         "binding_date": "2026-01-06",
     }
     assert (
         afford(
             inputs,
-            Hypothetical(amount_paise=10_000, date=inputs.as_of, method="account"),
+            Hypothetical(amount_paise=9_997, date=inputs.as_of, method="account"),
             runs=runs,
             seed=1,
         )["verdict"]
@@ -520,7 +494,7 @@ def test_safe_to_spend_obligation_can_be_the_binding_constraint():
     assert (
         afford(
             inputs,
-            Hypothetical(amount_paise=10_001, date=inputs.as_of, method="account"),
+            Hypothetical(amount_paise=9_998, date=inputs.as_of, method="account"),
             runs=runs,
             seed=1,
         )["verdict"]
@@ -545,22 +519,22 @@ def test_safe_to_spend_returns_zero_with_binding_constraint_when_baseline_fails(
 
 
 def test_safe_to_spend_is_zero_when_a_passing_baseline_has_no_headroom():
-    # Four of 37 scenarios take the rare charge, so the floor holds at the baseline but one
-    # paisa would put them below it.
-    inputs = _rare_charge_inputs(120_000)
-    result = project(inputs, runs=37, seed=1)
+    # With this seed four or more of 37 scenarios draw the rare charge and end exactly on the
+    # floor, so the floor holds at the baseline but one paisa would put them below it.
+    inputs = _rare_charge_inputs(120_005)
+    result = project(inputs, runs=37, seed=2)
     assert result["floor_probability"] >= result["floor_threshold"]
     assert result["safe_to_spend"] == {
         "amount_paise": 0,
         "binding": "floor",
-        "binding_date": "2026-01-06",
+        "binding_date": "2026-01-07",
     }
     assert (
         afford(
             inputs,
             Hypothetical(amount_paise=1, date=inputs.as_of, method="account"),
             runs=37,
-            seed=1,
+            seed=2,
         )["verdict"]
         != "yes"
     )
@@ -601,7 +575,6 @@ def test_existing_projection_outputs_are_unchanged_by_safe_to_spend():
     assert result["p10_low_paise"] == 80_000
     assert result["first_floor_crossing"] is None
     assert result["obligations_met"] is True
-    assert safe_amount_today(inputs, runs=50, seed=1) == 30_000
     assert result["safe_to_spend"] == {
         "amount_paise": 30_000,
         "binding": "floor",
@@ -687,7 +660,7 @@ def test_an_unknown_card_split_uses_the_same_due_date_cycle_at_month_ends():
     assert card_bills(due_today, date(2026, 2, 28)) == ((date(2026, 2, 28), 50_000),)
 
 
-def test_a_category_split_over_two_cards_uses_each_share_in_the_legacy_pool():
+def test_a_category_split_over_two_cards_uses_each_share_in_the_day_pool():
     cards = (
         CardAccount(
             id="a",
@@ -706,7 +679,7 @@ def test_a_category_split_over_two_cards_uses_each_share_in_the_legacy_pool():
             credit_limit_paise=1_000_000,
         ),
     )
-    history = tuple((date(2025, 10, 1) + timedelta(days=index), 10_000) for index in range(90))
+    history = tuple((date(2025, 10, 3) + timedelta(days=index), 10_000) for index in range(90))
     category = SpendCategory(
         id="cat",
         name="Food",
@@ -714,14 +687,14 @@ def test_a_category_split_over_two_cards_uses_each_share_in_the_legacy_pool():
         card_shares=(("a", 0.5), ("b", 0.5)),
         history=history,
     )
-    prepared = prepare(_inputs(cards=cards, categories=(category,)), LEGACY_MODEL)
+    prepared = prepare(_inputs(cards=cards, categories=(category,)))
     columns = prepared.spec.pools[0].columns
     assert set(columns["card0"].tolist()) == {5_000}
     assert set(columns["card1"].tolist()) == {5_000}
     assert not columns["cash"].any()
 
     direct = replace(category, card_shares=(), card_id="b", card_share=0.25)
-    prepared = prepare(_inputs(cards=cards, categories=(direct,)), LEGACY_MODEL)
+    prepared = prepare(_inputs(cards=cards, categories=(direct,)))
     columns = prepared.spec.pools[0].columns
     assert "card0" not in columns
     assert set(columns["card1"].tolist()) == {2_500}
@@ -772,7 +745,7 @@ def test_a_whole_day_pool_keeps_the_card_each_payment_actually_used():
         history_start=start,
         ask_horizon_days=90,
     )
-    prepared = prepare(inputs, MODEL)
+    prepared = prepare(inputs)
     columns = prepared.spec.pools[0].columns
     assert int(columns["card0"].sum()) == 20 * 200_000
     assert int(columns["card1"].sum()) == 20 * 100_000
@@ -798,13 +771,9 @@ def test_horizon_limit_days_caps_the_walk():
     assert len(project(inputs, runs=20)["curve"]) == 121
 
 
-@pytest.mark.parametrize("entry_point", ("project", "simulate_paths"))
-def test_a_zero_run_budget_is_refused(entry_point):
+def test_a_zero_run_budget_is_refused():
     with pytest.raises(ValueError, match="runs must be positive"):
-        if entry_point == "project":
-            project(_inputs(), runs=0)
-        else:
-            simulate_paths(_inputs(), runs=0)
+        project(_inputs(), runs=0)
 
 
 def test_reduce_categories_clamps_the_ratio_to_the_engine_range():

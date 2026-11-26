@@ -1,23 +1,13 @@
-"""The engine's levers: the kernel's reducible/capped measures and the affordability plans.
-
-`tests/test_engine_kernel.py` walks every scenario day by day to check the balances. The same
-walk is extended here to `Run.reducible` (the spend a cut could free by each checkpoint) and
-`Run.capped` (a card charge went past its limit). The rest holds the affordability plans to
-exact arithmetic: the least cut, the combined plan, minimality, and a card cut that frees
-nothing before its bill.
+"""The affordability plans held to exact arithmetic: the least cut, the combined plan, minimality,
+and a card cut that frees nothing before its bill.
 """
 
 from __future__ import annotations
 
-import random
 from dataclasses import replace
 from datetime import date, timedelta
 
-import pytest
-
-from arno.engine import kernel
 from arno.engine.affordability import Hypothetical, afford
-from arno.engine.kernel import Settings, Spec
 from arno.engine.projection import (
     DEFAULT_SEED,
     CardAccount,
@@ -30,146 +20,8 @@ from arno.engine.projection import (
     project,
     reduce_categories,
 )
-from tests.fixtures.engine_kernel import _ref_picker, _ref_walk, _spec
 
 RUNS = 200
-# Checkpoints on both sides of a chunk edge (CHUNK_DAYS is 17 here), including days 20 and 34.
-MARKS = (0, 3, 17, 18, 20, 21, 33, 34, 35, 51, 60, 68, 74, 75)
-
-
-def _reference(spec: Spec, settings: Settings) -> tuple[list[list[int]], list[bool]]:
-    """`Run.reducible` and `Run.capped` from a plain walk, without the chunking.
-
-    Reducible cash spend on day t counts once day t has happened, up to `reducible_until`.
-    Reducible card spend on day t counts once the bill it joins is due, so only when that due
-    index is at or before the checkpoint and is not -1. A scenario is capped when any day's
-    card charges went past the remaining limit.
-    """
-    days = spec.days + 1
-    keys = [spec.first_day + t for t in range(days)]
-    classes = [int(c) for c in spec.classes]
-    cards = len(spec.cards)
-    cash_cut: list[list[int]] = [[0] * days for _ in range(settings.scenarios)]
-    card_cut: list[list[list[int]]] = [
-        [[0] * days for _ in range(cards)] for _ in range(settings.scenarios)
-    ]
-    capped: list[bool] = [False] * settings.scenarios
-    for scenario in range(settings.scenarios):
-        rows_by_pool: list[list[int]] = []
-        for pool in spec.pools:
-            pool_classes = [int(c) for c in pool.classes]
-            weights = [int(w) for w in pool.weights] if pool.weights is not None else None
-            if pool.resample:
-                history = list(range(pool.size))
-                pseudo = _ref_walk(
-                    _ref_picker(pool_classes, weights),
-                    pool_classes,
-                    pool_classes,
-                    settings.seed,
-                    pool.stream * 8 + 2,
-                    pool.stream * 8 + 3,
-                    scenario,
-                    history,
-                    settings.block_length,
-                )
-                positions = _ref_walk(
-                    _ref_picker(pool_classes, None),
-                    pool_classes,
-                    classes,
-                    settings.seed,
-                    pool.stream * 8,
-                    pool.stream * 8 + 1,
-                    scenario,
-                    keys,
-                    settings.block_length,
-                )
-                rows_by_pool.append([pseudo[position] for position in positions])
-            else:
-                rows_by_pool.append(
-                    _ref_walk(
-                        _ref_picker(pool_classes, weights),
-                        pool_classes,
-                        classes,
-                        settings.seed,
-                        pool.stream * 8,
-                        pool.stream * 8 + 1,
-                        scenario,
-                        keys,
-                        settings.block_length,
-                    )
-                )
-        used = [card.used for card in spec.cards]
-        bills = [dict(card.bills) for card in spec.cards]
-        for t in range(days):
-            spend: dict[str, int] = {
-                "cash": 0,
-                "cash_cut": 0,
-                **{f"card{k}": 0 for k in range(cards)},
-                **{f"card{k}_cut": 0 for k in range(cards)},
-            }
-            if t > 0:
-                for pool, rows in zip(spec.pools, rows_by_pool, strict=True):
-                    for name in spend:
-                        column = pool.columns.get(name)
-                        if column is not None:
-                            spend[name] += int(column[rows[t]])
-            cash_cut[scenario][t] = spend["cash_cut"]
-            for k, card in enumerate(spec.cards):
-                card_cut[scenario][k][t] = spend[f"card{k}_cut"]
-                paid = bills[k].pop(t, 0)
-                used[k] -= paid
-                charges = spend[f"card{k}"]
-                if card.other is not None:
-                    charges += int(card.other[t])
-                if card.obligation is not None:
-                    charges += int(card.obligation[t])
-                charged = min(charges, max(card.limit - used[k], 0))
-                capped[scenario] |= charges != charged
-                used[k] += charged
-                due = int(card.due_of_day[t])
-                if due >= 0:
-                    bills[k][due] = bills[k].get(due, 0) + charged
-    until = settings.reducible_until
-    reducible: list[list[int]] = []
-    for scenario in range(settings.scenarios):
-        row: list[int] = []
-        for q in settings.checkpoints:
-            last = min(q, until)
-            total = sum(cash_cut[scenario][1 : last + 1])
-            for k, card in enumerate(spec.cards):
-                for t in range(1, last + 1):
-                    due = int(card.due_of_day[t])
-                    if 0 <= due <= q:
-                        total += card_cut[scenario][k][t]
-            row.append(total)
-        reducible.append(row)
-    return reducible, capped
-
-
-@pytest.mark.parametrize("cards", [0, 2])
-def test_reducible_and_capped_match_a_plain_walk(cards, monkeypatch):
-    # Small chunks make every edge (and every measurement window) a real cross-chunk case.
-    monkeypatch.setattr(kernel, "CHUNK_DAYS", 17)
-    capped_seen = False
-    # 20 is inside the 17..33 chunk, 34 starts a chunk, 75 is past the last edge, 200 past all.
-    for trial, until in enumerate((20, 34, 75, 200)):
-        spec = _spec(random.Random(100 * cards + trial), cards=cards, days=75)
-        settings = Settings(
-            scenarios=6,
-            seed=trial,
-            block_length=1 + trial % 3,
-            checkpoints=MARKS,
-            reducible_until=until,
-        )
-        run = kernel.run(spec, settings)
-        expected, capped = _reference(spec, settings)
-        assert run.reducible is not None and run.capped is not None
-        assert run.reducible.tolist() == expected
-        assert run.capped.tolist() == capped
-        capped_seen |= any(capped)
-    # The two-card spec's limits (3,000..12,000 paise) always bind in some scenario; a spec
-    # without cards can never cap.
-    assert capped_seen == (cards == 2)
 
 
 def _category(name: str, per_day: int, *, card: str | None = None) -> SpendCategory:

@@ -2,40 +2,25 @@
 
 The verdict is never prose from a model. The purchase is applied as asked and the scenario kernel
 walks every future once: it passes when the floor probability reaches the threshold and every
-obligation is met. When it does not, each lever is a known change to each scenario's balances at
-the checkpoints, the only days a minimum can fall on:
+obligation is met. When it does not, each lever is tried by rerunning `project`:
 
-- paying by card or card EMI moves the cash onto bill due dates (one kernel run per method);
-- skipping a goal's contributions adds them back from their dates;
-- cutting reducible spend by a share frees that share of the reducible spend that has left cash
-  by each checkpoint (card spend only once its bill is paid).
+- paying by card or card EMI moves the cash onto bill due dates (one variant per method);
+- skipping goals' contributions, the least important goal first, stopping at the first plan
+  that passes;
+- cutting reducible spend by the least share, found by bisection, that passes.
 
-For a lever where more is always at least as safe, each scenario has a critical value, the least
-setting at which it passes, and the least setting that passes a share p of scenarios is the
-ceil(p*N)-th smallest critical value. Plans combine a method, a set of skipped goals, and the
-least cut; a plan is kept only when no other passing plan of that method skips a subset of its
-goals with a cut no larger. Every reported plan is applied to the inputs and rerun on the same
-scenarios, and every number shown comes from that rerun. A later date alone stays a "no": the
-wait date is shown, but a yes-but needs a change that keeps the date.
+Every reported plan is a rerun on the same scenarios that passed, and every number shown comes
+from that rerun. A later date alone stays a "no": the wait date is shown, but a yes-but needs a
+change that keeps the date.
 """
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
-from itertools import combinations
+from functools import partial
 
-import numpy as np
-import numpy.typing as npt
-
-from arno.engine.criticals import (
-    CriticalMatrix,
-    build_critical_matrix,
-    cut_rows,
-    min_hold_count,
-    prepare_plan,
-)
 from arno.engine.money import DEFAULT_GST_BPS, add_months, card_emi, check_paise, money
 from arno.engine.projection import (
     DEFAULT_RUNS,
@@ -58,10 +43,10 @@ from arno.engine.projection import (
     Tradeoff,
     card_bills,
     card_due_date,
-    first_full_payment_date,
     goal_rows,
     horizon_days,
     project,
+    reduce_categories,
 )
 from arno.engine.scenario import (
     ScenarioChangeSpec,
@@ -75,14 +60,6 @@ DEFAULT_EMI_MONTHS = 3
 GOAL_WINDOW_DAYS = 31
 MAX_CUT_BPS = round(MAX_CUT_RATIO * 10_000)
 MAX_PLANS = 4
-# shortcut: goal deferral checks top 8 goals in [when, when+31] only, revisit if a real ledger
-# has >8 active goals or needs pre-purchase goal deferral
-MAX_DEFERRABLE_GOALS = 8
-# How many later dates the wait tradeoff tests before giving up: a dated payment leaves the floor
-# alone, but an obligation it misses can hold the verdict back for a while.
-MAX_WAIT_ATTEMPTS = 12
-# Rounding can leave a verified cut a half paisa short; one or two basis points more fixes it.
-VERIFY_STEPS = 4
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,98 +251,56 @@ def _extend_horizon(inputs: ProjectionInput, meta: HypotheticalMeta) -> Projecti
 
 
 def _passes(result: Projection, *, threshold: float) -> bool:
-    # shortcut: point estimate at S=16384 has +-0.15pp 95% CI on 0.99 gate, revisit with
-    # one-sided Wilson LCB or higher S only after real-ledger coverage error drops below 2pp
+    # shortcut: point estimate at S=2048 has a +-1.3pp 95% CI on the 0.90 gate, revisit with a
+    # one-sided Wilson LCB or more runs if verdicts flip between seeds
     return float(result["floor_probability"]) >= threshold and bool(result["obligations_met"])
 
 
-# --- The levers on one scenario matrix --------------------------------------------------------
+# --- The levers ---------------------------------------------------------------------------------
 
 
-def _goal_relief(
-    inputs: ProjectionInput, goal_ids: tuple[str, ...], when: date
-) -> tuple[ProjectionInput, list[tuple[int, int]]]:
-    """Skip these goals' contributions in the month after the purchase.
-
-    Returns the inputs without them and each removed contribution as (day index, amount).
-    """
+def _goal_relief(inputs: ProjectionInput, goal_ids: tuple[str, ...], when: date) -> ProjectionInput:
+    """The inputs without these goals' contributions in the month after the purchase."""
     window_end = when + timedelta(days=GOAL_WINDOW_DAYS)
-    kept: list[CashEvent] = []
-    removed: list[tuple[int, int]] = []
-    for event in inputs.events:
-        if (
+    kept = tuple(
+        event
+        for event in inputs.events
+        if not (
             event.kind == "goal_contribution"
             and event.goal_id in goal_ids
             and when <= event.date <= window_end
-        ):
-            removed.append((max(0, (event.date - inputs.as_of).days), -event.amount_paise))
-        else:
-            kept.append(event)
-    return replace(inputs, events=tuple(kept)), removed
-
-
-def _shift(marks: tuple[int, ...], removed: list[tuple[int, int]]) -> npt.NDArray[np.int64]:
-    """The cash a set of skipped contributions leaves in hand at each checkpoint."""
-    days = np.array(marks, dtype=np.int64)
-    shift = np.zeros(len(marks), dtype=np.int64)
-    for day, amount in removed:
-        shift += np.where(days >= day, amount, 0)
-    return shift
-
-
-def _critical_cut(
-    balances: npt.NDArray[np.int64],
-    reducible: npt.NDArray[np.int64] | None,
-    floor: int,
-    needed: int,
-) -> int | None:
-    """The least cut in basis points that lets ``needed`` scenarios hold ``counts >= floor``."""
-    if needed <= 0:
-        return 0
-    short = floor - balances
-    if reducible is None:
-        clearing = int(np.count_nonzero((short <= 0).all(axis=1)))
-        return 0 if clearing >= needed else None
-    impossible = (short > 0) & (reducible <= 0)
-    bps = np.where(short > 0, -((-10_000 * short) // np.maximum(reducible, 1)), 0)
-    critical = np.where(impossible.any(axis=1), np.iinfo(np.int64).max, bps.max(axis=1))
-    least = int(np.partition(critical, needed - 1)[needed - 1])
-    return least if least <= MAX_CUT_BPS else None
-
-
-def _least_cut(
-    matrix: CriticalMatrix,
-    balances: npt.NDArray[np.int64],
-    payables: npt.NDArray[np.int64] | None,
-    floor: int,
-    needed: int,
-    obligation_needed: int,
-) -> int | None:
-    """The least cut that clears the floor share and every obligation day's 0.99 share.
-
-    The obligation gate is per due day, as the projection tests it: each day needs
-    ``obligation_needed`` scenarios paying it, so the cut is the largest per-day critical value.
-    ``balances`` is already shifted by any skipped goals; obligations are paid before the day's
-    cash spending, so they use the reducible measure from the day before. A matrix with no
-    obligation column skips the gate.
-    """
-    floor_cut = _critical_cut(balances, matrix.reducible, floor, needed)
-    if floor_cut is None:
-        return None
-    if payables is None or payables.shape[1] == 0:
-        return floor_cut
-    obligation_cut = 0
-    for column in range(payables.shape[1]):
-        reducible = (
-            matrix.obligation_reducible[:, [column]]
-            if matrix.obligation_reducible is not None
-            else None
         )
-        day_cut = _critical_cut(payables[:, [column]], reducible, 0, obligation_needed)
-        if day_cut is None:
-            return None
-        obligation_cut = max(obligation_cut, day_cut)
-    return max(floor_cut, obligation_cut)
+    )
+    return replace(inputs, events=kept)
+
+
+def _least(
+    low: int, high: int, test: Callable[[int], Projection | None]
+) -> tuple[int, Projection] | None:
+    """The least setting in ``[low, high]`` that passes, and its rerun, by bisection.
+
+    The rerun that is returned passed, so every number a plan reports comes from a real run.
+    More is assumed to be at least as safe, which holds up to a paisa of rounding.
+    """
+    best = test(high)
+    if best is None:
+        return None
+    while low < high:
+        middle = (low + high) // 2
+        better = test(middle)
+        if better is None:
+            low = middle + 1
+        else:
+            high, best = middle, better
+    return high, best
+
+
+def _cut_passes(
+    inputs: ProjectionInput, until: date, bps: int, *, runs: int, seed: int, threshold: float
+) -> Projection | None:
+    cut_inputs, _rows = reduce_categories(inputs, bps / 10_000, until=until)
+    result = project(cut_inputs, runs=runs, seed=seed, threshold=threshold)
+    return result if _passes(result, threshold=threshold) else None
 
 
 # --- Plans -------------------------------------------------------------------------------------
@@ -373,124 +308,81 @@ def _least_cut(
 
 @dataclass(frozen=True, slots=True)
 class _Plan:
+    """A set of levers that was rerun and passed, with the run it passed on."""
+
     method: str  # "asked", "card", or "emi"
     goals: tuple[str, ...]
     cut_bps: int
     cost_paise: int
-    # A capped card's fallback at MAX_CUT_BPS has not been verified or bisected yet, so it may
-    # not prune any other candidate.
-    provisional: bool = False
+    result: Projection
+    inputs: ProjectionInput
+    meta: HypotheticalMeta
 
     @property
     def levers(self) -> int:
         return int(self.method != "asked") + len(self.goals) + int(self.cut_bps > 0)
 
 
-def _plans(
-    matrices: list[CriticalMatrix],
+def _variant_plans(
+    method: str,
+    variant: _Applied,
     goals: tuple[str, ...],
-    when: date,
     *,
-    floor: int,
-    needed: int,
-    obligation_needed: int,
+    when: date,
+    until: date | None,
     spend_paise: int,
-    allow_cut: bool = True,
+    runs: int,
+    seed: int,
+    threshold: float,
 ) -> list[_Plan]:
-    """Every minimal plan that clears the floor on the scenarios, fewest levers then cheapest.
+    """Plans for one payment method: defer goals from the least important up, cutting as needed.
 
-    `goals` comes most important first; between equally cheap plans, the one that delays the
-    less important goals comes first, so a priority change revises which goal is offered.
+    Each deferral step reruns the plan. It ends at the first plan that passes without a cut; a
+    step with a cut is kept only if it needs a smaller cut than the step before.
     """
-    goals = goals[:MAX_DEFERRABLE_GOALS]
-    found: list[_Plan] = []
-    for matrix in matrices:
-        obligation_marks = matrix.obligation_days
-        clearing: dict[tuple[str, ...], int] = {}
-        provisional_clearings: set[tuple[str, ...]] = set()
-        for size in range(len(goals) + 1):
-            for subset in combinations(goals, size):
-                _skipped, removed = _goal_relief(matrix.inputs, subset, when)
-                shifted = matrix.balances + _shift(matrix.marks, removed)[None, :]
-                # Obligations are paid before a same-day contribution, so a skipped goal's
-                # cash helps there only from the day after its contribution.
-                obligation_shift = _shift(
-                    obligation_marks, [(day + 1, amount) for day, amount in removed]
-                )
-                payables = (
-                    np.minimum(matrix.payables, np.iinfo(np.int64).max - obligation_shift[None, :])
-                    + obligation_shift[None, :]
-                    if matrix.payables is not None
-                    else None
-                )
-                cut = _least_cut(matrix, shifted, payables, floor, needed, obligation_needed)
-                provisional = False
-                if not allow_cut and cut != 0:
-                    continue
-                if cut is None:
-                    if not matrix.capped:
-                        continue
-                    # Where a card cap binds, a cut also frees same-day cash spill, so the
-                    # critical value can exceed the cap while a smaller cut still passes.
-                    cut = MAX_CUT_BPS
-                    provisional = True
-                if any(
-                    set(other) < set(subset)
-                    and other not in provisional_clearings
-                    and clearing[other] <= cut
-                    for other in clearing
-                ):
-                    continue
-                clearing[subset] = cut
-                if provisional:
-                    provisional_clearings.add(subset)
-                cost = matrix.cost_paise + cut * spend_paise // 10_000
-                found.append(_Plan(matrix.method, subset, cut, cost, provisional))
-    found = [plan for plan in found if plan.levers > 0]
-    # Across methods too: a plan that changes no more, skips a subset of the goals, cuts no more,
-    # and costs no more leaves the other nothing to offer (card float beside a paid EMI). A
-    # provisional candidate neither prunes nor is pruned until a rerun has accepted it.
-    kept = [
-        plan
-        for plan in found
-        if plan.provisional
-        or not any(not other.provisional and _dominates(other, plan) for other in found)
-    ]
-    rank = {goal: index for index, goal in enumerate(goals)}
-    kept.sort(
-        key=lambda plan: (
-            plan.levers,
-            plan.cost_paise,
-            sorted(-rank[goal] for goal in plan.goals),
-            plan.method,
-            plan.goals,
-        )
-    )
-    return kept
+    plans: list[_Plan] = []
+    smallest = MAX_CUT_BPS + 1
+    deferred: tuple[str, ...] = ()
+    for goal in (None, *reversed(goals)):
+        if goal is not None:
+            deferred = (*deferred, goal)
+        relieved = _goal_relief(variant.inputs, deferred, when)
+        result = project(relieved, runs=runs, seed=seed, threshold=threshold)
+        if _passes(result, threshold=threshold):
+            plans.append(
+                _Plan(method, deferred, 0, variant.cost_paise, result, relieved, variant.meta)
+            )
+            break
+        if until is None:
+            continue
+        test = partial(_cut_passes, relieved, until, runs=runs, seed=seed, threshold=threshold)
+        found = _least(1, MAX_CUT_BPS, test)
+        if found is not None and found[0] < smallest:
+            cut, rerun = found
+            smallest = cut
+            cost = variant.cost_paise + cut * spend_paise // 10_000
+            plans.append(_Plan(method, deferred, cut, cost, rerun, relieved, variant.meta))
+    return [item for item in plans if item.levers > 0]
 
 
 def _dominates(better: _Plan, plan: _Plan) -> bool:
-    """Strict Pareto dominance over method change, goals, cut, and cost.
+    """Whether ``better`` changes no more on any lever, costs no more, and differs somewhere.
 
-    One dimension must improve strictly, so two plans can never dominate each other and both be
-    dropped. The method dimension stays the existing yes/no (a lever was changed); ranking card
-    against EMI would be a new product decision.
+    Card float beside a paid EMI is the case: the EMI leaves the reader nothing the card does not.
     """
-    if better == plan:
-        return False
-    if not (
-        int(better.method != "asked") <= int(plan.method != "asked")
+    asks_no_more = (
+        (better.method != "asked") <= (plan.method != "asked")
         and set(better.goals) <= set(plan.goals)
         and better.cut_bps <= plan.cut_bps
         and better.cost_paise <= plan.cost_paise
-    ):
-        return False
-    return (
-        int(better.method != "asked") < int(plan.method != "asked")
-        or set(better.goals) < set(plan.goals)
-        or better.cut_bps < plan.cut_bps
-        or better.cost_paise < plan.cost_paise
     )
+    same = (better.method != "asked", set(better.goals), better.cut_bps, better.cost_paise) == (
+        plan.method != "asked",
+        set(plan.goals),
+        plan.cut_bps,
+        plan.cost_paise,
+    )
+    return asks_no_more and not same
 
 
 def _next_payday(inputs: ProjectionInput, when: date) -> date | None:
@@ -505,81 +397,10 @@ def _next_payday(inputs: ProjectionInput, when: date) -> date | None:
     return income_days[0] if income_days else None
 
 
-@dataclass(frozen=True, slots=True)
-class _Verified:
-    plan: _Plan
-    result: Projection
-    inputs: ProjectionInput
-    meta: HypotheticalMeta
-
-
-def _verify(
-    plan: _Plan,
-    matrix: CriticalMatrix,
-    *,
-    when: date,
-    until: date,
-    runs: int,
-    seed: int,
-    threshold: float,
-    spend_paise: int,
-    allow_cut: bool = True,
-) -> _Verified | None:
-    """Apply the plan, rerun the kernel, and keep it only if it passes there.
-
-    Uncapped cuts can rise a basis point at a time to cover rounding. When a card limit binds,
-    the exact walk can clear with a different cut. Try the cap if the estimate fails, then
-    bisect the passing interval and price the cut the walk accepted. The plan's spec is prepared
-    once; each attempt only changes its cut fields.
-    """
-    inputs, _removed = _goal_relief(matrix.inputs, plan.goals, when)
-    prepared = prepare_plan(inputs, until=until, runs=runs, seed=seed, threshold=threshold)
-
-    def attempt(cut: int) -> _Verified | None:
-        result = (
-            prepared.evaluate_cut(cut)
-            if allow_cut
-            else project(inputs, runs=runs, seed=seed, threshold=threshold)
-        )
-        if not _passes(result, threshold=threshold):
-            return None
-        cost = matrix.cost_paise + cut * spend_paise // 10_000
-        return _Verified(
-            replace(plan, cut_bps=cut, cost_paise=cost, provisional=False),
-            result,
-            inputs,
-            matrix.meta,
-        )
-
-    cut = plan.cut_bps
-    verified = attempt(cut)
-    if matrix.capped and verified is None and cut < MAX_CUT_BPS:
-        cut = MAX_CUT_BPS
-        verified = attempt(cut)
-    elif not matrix.capped:
-        for _step in range(VERIFY_STEPS - 1):
-            if verified is not None or not 0 < cut < MAX_CUT_BPS:
-                break
-            cut += 1
-            verified = attempt(cut)
-    if verified is None or not matrix.capped or cut == 0:
-        return verified
-    low, high = 0, cut
-    while low < high:
-        middle = (low + high) // 2
-        better = attempt(middle)
-        if better is None:
-            low = middle + 1
-        else:
-            high, verified = middle, better
-    return verified
-
-
 def _describe(
-    verified: _Verified, inputs: ProjectionInput, baseline_goals: list[GoalRow], until: date
+    plan: _Plan, inputs: ProjectionInput, baseline_goals: list[GoalRow], until: date
 ) -> Tradeoff:
-    plan = verified.plan
-    meta = verified.meta
+    meta = plan.meta
     parts: list[str] = []
     kinds: list[str] = []
     trade: Tradeoff = {"kind": "", "detail": ""}
@@ -602,11 +423,11 @@ def _describe(
             )
     if plan.goals:
         kinds.append("delay_goal")
-        rows = {row["id"]: row for row in goal_rows(verified.inputs)}
+        rows = {row["id"]: row for row in goal_rows(plan.inputs)}
         before = {row["id"]: row for row in baseline_goals}
         goals: list[GoalSlip] = []
         skipped: list[str] = []
-        for goal_id in plan.goals:
+        for goal_id in reversed(plan.goals):  # most important first
             row = rows[goal_id]
             old = before[goal_id]["completes_on"] if goal_id in before else None
             new = row["completes_on"]
@@ -637,7 +458,7 @@ def _describe(
         parts.append("; ".join(skipped))
     if plan.cut_bps > 0:
         kinds.append("cut_category")
-        rows_cut = cut_rows(inputs, plan.cut_bps, until)
+        _reduced, rows_cut = reduce_categories(inputs, plan.cut_bps / 10_000, until=until)
         trade["until"] = until.isoformat()
         trade["ratio"] = round(plan.cut_bps / 10_000, 4)
         trade["categories"] = rows_cut
@@ -649,7 +470,7 @@ def _describe(
     if len(kinds) > 1:
         trade["levers"] = kinds
     trade["cost_paise"] = plan.cost_paise
-    trade["floor_probability"] = verified.result["floor_probability"]
+    trade["floor_probability"] = plan.result["floor_probability"]
     detail = "; and ".join(parts)
     trade["detail"] = detail[:1].upper() + detail[1:] + "."
     return trade
@@ -681,35 +502,30 @@ def _wait_tradeoff(
 ) -> Tradeoff | None:
     """The earliest later date the purchase passes on, floor and obligations both.
 
-    `first_full_payment_date` reads only the floor, so every date it offers is paid for real and
-    re-projected: a date that still misses an obligation is passed over, searching from the day
-    after it.
+    Paying later is assumed at least as safe, so the earliest passing day inside the horizon is
+    found by bisection; each day tried is paid for real and re-projected.
     """
     when = max(hypothetical.date, inputs.as_of)
     amount = int(hypothetical.amount_paise)
-    start = when
-    for _attempt in range(MAX_WAIT_ATTEMPTS):
-        found = first_full_payment_date(
-            inputs, amount, start_on=start, runs=runs, seed=seed, threshold=threshold
-        )
-        if not found:
-            return None
-        found_on = date.fromisoformat(found["date"])
-        paid = project(_pay_on(inputs, amount, found_on), runs=runs, seed=seed, threshold=threshold)
-        if _passes(paid, threshold=threshold):
-            if found_on == when:
-                # Paying on the asked date is the ask, not a tradeoff.
-                return None
-            return {
-                "kind": "wait",
-                "date": found["date"],
-                "days": found["days"],
-                "detail": (
-                    f"Wait until {found['date']} ({found['days']} days), then pay the full amount."
-                ),
-            }
-        start = found_on + timedelta(days=1)
-    return None
+    first = (when - inputs.as_of).days
+
+    def passes(day: int) -> Projection | None:
+        paid = _pay_on(inputs, amount, inputs.as_of + timedelta(days=day))
+        result = project(paid, runs=runs, seed=seed, threshold=threshold)
+        return result if _passes(result, threshold=threshold) else None
+
+    found = _least(first, horizon_days(inputs), passes)
+    if found is None or found[0] == first:
+        # Paying on the asked date is the ask, not a tradeoff.
+        return None
+    days, _result = found
+    day = (inputs.as_of + timedelta(days=days)).isoformat()
+    return {
+        "kind": "wait",
+        "date": day,
+        "days": days,
+        "detail": f"Wait until {day} ({days} days), then pay the full amount.",
+    }
 
 
 def _tradeoffs(
@@ -725,12 +541,12 @@ def _tradeoffs(
 ) -> list[Tradeoff]:
     when = max(hypothetical.date, inputs.as_of)
     payday = _next_payday(inputs, when) or (when + timedelta(days=30))
-    reducible = any(
-        category.reducible and category.baseline_per_day_paise > 0 for category in inputs.categories
+    reducible = sum(
+        category.baseline_per_day_paise
+        for category in inputs.categories
+        if category.reducible and category.baseline_per_day_paise > 0
     )
-    cut_until = (payday - inputs.as_of).days if reducible and allow_cut else -1
-    needed = min_hold_count(runs, threshold)
-    obligation_needed = min_hold_count(runs, OBLIGATION_THRESHOLD)
+    cuttable = allow_cut and reducible > 0
 
     variants: list[tuple[str, _Applied]] = [("asked", applied)]
     for method in ("card", "emi"):
@@ -745,18 +561,6 @@ def _tradeoffs(
         if other.reason is None:
             extended = replace(other, inputs=_extend_horizon(other.inputs, other.meta))
             variants.append((method, extended))
-    matrices = [
-        build_critical_matrix(
-            name,
-            variant.inputs,
-            cost_paise=variant.cost_paise,
-            meta=variant.meta,
-            cut_until=cut_until,
-            runs=runs,
-            seed=seed,
-        )
-        for name, variant in variants
-    ]
     goals = tuple(
         goal.id
         for goal in sorted(inputs.goals, key=lambda item: (item.priority, item.name))
@@ -767,37 +571,24 @@ def _tradeoffs(
             for event in inputs.events
         )
     )
-    first = matrices[0]
-    spend = int(np.median(first.reducible[:, -1])) if first.reducible is not None else 0
-    plans = _plans(
-        matrices,
-        goals,
-        when,
-        floor=inputs.floor_paise,
-        needed=needed,
-        obligation_needed=obligation_needed,
-        spend_paise=spend,
-        allow_cut=allow_cut,
-    )
-    by_method = {matrix.method: matrix for matrix in matrices}
-    trades: list[Tradeoff] = []
-    for plan in plans:
-        if len(trades) >= MAX_PLANS:
-            break
-        verified = _verify(
-            plan,
-            by_method[plan.method],
-            when=when,
-            until=payday,
-            runs=runs,
-            seed=seed,
-            threshold=threshold,
-            spend_paise=spend,
-            allow_cut=allow_cut,
+    plans: list[_Plan] = []
+    for method, variant in variants:
+        plans.extend(
+            _variant_plans(
+                method,
+                variant,
+                goals,
+                when=when,
+                until=payday if cuttable else None,
+                spend_paise=reducible * (payday - inputs.as_of).days,
+                runs=runs,
+                seed=seed,
+                threshold=threshold,
+            )
         )
-        if verified is not None:
-            trades.append(_describe(verified, inputs, baseline_goals, payday))
-    return trades
+    plans = [plan for plan in plans if not any(_dominates(other, plan) for other in plans)]
+    plans.sort(key=lambda plan: (plan.levers, plan.cost_paise, plan.method, plan.goals))
+    return [_describe(plan, inputs, baseline_goals, payday) for plan in plans[:MAX_PLANS]]
 
 
 def validate_hypothetical(as_of: date, hypothetical: Hypothetical) -> None:

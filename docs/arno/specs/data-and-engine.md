@@ -339,67 +339,51 @@ read-only `REPEATABLE READ` transaction:
   date (or today if passed); spend since statement close joins the next cycle's due date. If the
   unbilled split is unknown, the full outstanding falls on the first due date. An unanchored card
   balance reports an unknown bill amount.
-- **Detected recurring series:** Unconfirmed spend detections with `confidence >= 0.999`
-  (`PROJECT_CONFIDENCE`) enter as stochastic outflows (survival, skip, jitter, and amount draws)
-  labeled in `data_quality`. Detected income never enters the projection.
+- **Detected recurring series:** Unconfirmed spend detections with `confidence == 1.0`
+  (`PROJECT_CONFIDENCE`) enter as recurring scheduled outflows labeled in `data_quality`. Detected
+  income never enters the projection.
 - **Goal contributions and money owed:** Goal contributions transfer liquid cash into fenced
   non-liquid goal accounts. Person balances enter only when an `expected_date` is set.
 
 ### Variable spend model
 
-Everyday spend uses this configuration:
+Everyday spend uses whole-day resampling with rare-day separation and a short-history prior:
 
-```python
-MODEL = Model(
-    pooling="day",
-    rare_mad_multiple=3,
-    prior_quarters=(0, 2, 4, 6, 8),
-    limit_spend=False,
-)
-```
-
-Each switch operates as follows:
-
-- **Whole-day pooling (`pooling="day"`):** Each scenario draws whole historical days from the last
-  90 days (`HISTORY_DAYS`) ending the day before `as_of`, keeping weekdays and weekends separate.
-  Drawing whole days preserves cross-category correlation and exact cash-versus-card and multi-card
-  splits.
-- **Rare large spend (`rare_mad_multiple=3`):** Days in the 365-day window (`RARE_WINDOW_DAYS`)
-  whose positive spend exceeds the median plus 3 _median absolute deviations_ (_MAD_) over
-  spending days leave the everyday pool and are resampled as an independent stream at their long-run
-  rate. Because a rare entry is a whole past day, a rare draw replaces that day's everyday draw
-  rather than adding to it.
-- **Short-history prior (`prior_quarters=(0, 2, 4, 6, 8)`):** Once ledger history covers 14 days
-  (`MIN_REAL_DAYS`), every category with a computed baseline joins the whole-day pool regardless of
-  sparsity. Below 14 real days—or for categories with an estimated baseline—the pool tops up to 14
-  with five pseudo-days at `0`, `1/2`, `1`, `3/2`, and `2` times the stated daily estimate, weighted
-  `r : 14 − r` so the prior fades as real history arrives.
+- **Whole-day pooling:** Each scenario draws whole historical days from the last 90 days
+  (`HISTORY_DAYS`) ending the day before `as_of`, keeping weekdays and weekends separate. Drawing
+  whole days preserves cross-category correlation and exact cash-versus-card and multi-card splits.
+- **Rare large spend:** Days in the 365-day window (`RARE_WINDOW_DAYS`) whose positive spend
+  exceeds the median plus 3 _median absolute deviations_ (_MAD_) over spending days leave the
+  everyday pool and are resampled as an independent stream at their long-run rate. Because a rare
+  entry is a whole past day, a rare draw replaces that day's everyday draw rather than adding to it.
+- **Short-history prior:** Once ledger history covers 14 days (`MIN_REAL_DAYS`), every category
+  with a computed baseline joins the whole-day pool regardless of sparsity. Below 14 real days—or
+  for categories with an estimated baseline—the pool tops up to 14 with five pseudo-days at `0`,
+  `1/2`, `1`, `3/2`, and `2` times the stated daily estimate, weighted `r : 14 − r` so the prior
+  fades as real history arrives.
 - **Payment-level attribution:** Spend history excludes `one_off` movements, movements linked via
   `schedule_payments`, and movements matched to a projected detected series. If a projected
   obligation in a category has no linked payment history, the projection omits that category's
   variable spend and records a gap to prevent double counting; once every projected obligation in
   the category has linked payment evidence, remaining everyday spend joins the pool.
-- **Card limits on resampled spend (`limit_spend=False`):** Historical days already reflect past
-  spills to cash when a card reached its limit, so resampled spend stays on its recorded card.
-  Scheduled obligations, detected series, and hypothetical card or EMI charges claim card headroom
-  first and spill any excess to cash on the charge date; paying a bill releases headroom for charges
-  on or after that day.
+- **Card limits on resampled spend:** Historical days already reflect past spills to cash when a
+  card reached its limit, so resampled spend stays on its recorded card. Scheduled obligations,
+  detected series, and hypothetical card or EMI charges claim card headroom first and spill any
+  excess to cash on the charge date; paying a bill releases headroom for charges on or after that
+  day.
 
 ### Scenario kernel, randomness, and execution
 
-- **Scenarios and RNG:** Every projection runs 16,384 seeded scenarios (`DEFAULT_RUNS`) in signed
-  64-bit integer paise (capped at `MAX_PAISE`). Randomness uses a counter-based SplitMix64 hash over
-  `(seed, stream, scenario, day)` (with bounded draws requiring `0 < bound < 2**32`), verified
-  bit-for-bit against a pure-Python oracle. Scenario `r` never depends on the scenario count or
-  other streams.
+- **Scenarios and RNG:** Every projection runs 2,048 seeded scenarios (`DEFAULT_RUNS`) in one
+  unchunked array of signed 64-bit integer paise (capped at `MAX_PAISE`). Randomness uses a
+  counter-based SplitMix64 hash over `(seed, stream, scenario, day)` (with bounded draws requiring
+  `0 < bound < 2**32`), verified bit-for-bit against a pure-Python oracle. Scenario `r` never
+  depends on the scenario count or other streams.
 - **Intraday order:** Each simulated day applies events in fixed order: income, card bills due,
   obligations and installments (where the obligation check runs), one-off payments and goal
   contributions, then variable spend.
-- **Chunked execution and concurrency:** The kernel walks days in 127-day chunks (`CHUNK_DAYS`),
-  carrying scenario state forward so runtime scales linearly with horizon and peak memory stays
-  between roughly 100 MiB and 365 MiB (scaling with card count). Projection and affordability run
-  off the FastAPI event loop via `asyncio.to_thread` behind a per-loop
-  `asyncio.Semaphore(2)` (`src/arno/tools/projection.py`).
+- **Concurrency:** Projection and affordability run off the FastAPI event loop via
+  `asyncio.to_thread` behind a per-loop `asyncio.Semaphore(2)` (`src/arno/tools/projection.py`).
 
 ### Checkpoint lemma
 
@@ -419,12 +403,12 @@ lever searches from full daily trajectories to a compact scenarios-by-checkpoint
 
 ### Output statistics
 
-Every statistic comes from the same 16,384-scenario matrix:
+Every statistic comes from the same 2,048-scenario matrix:
 
 - **Daily curve:** Median and P10–P90 band at exact integer order statistics (`ceil(0.1N)`,
   `ceil(0.5N)`, `ceil(0.9N)`), with no floating-point interpolation.
 - **Floor probability:** Share of scenarios whose minimum stays at or above `floor_paise`, paired
-  with a 95% Wilson confidence interval (`±0.46` percentage points at 16,384 scenarios) and mean
+  with a 95% Wilson confidence interval (`±1.3` percentage points at 2,048 scenarios) and mean
   shortfall depth among breaching scenarios. When the interval straddles the 90% threshold,
   `data_quality` marks the result borderline.
 - **First floor crossing:** First date on which fewer scenarios remain at or above the floor than
@@ -470,24 +454,15 @@ The following table describes each affordability lever:
 | Lever | Effect |
 |---|---|
 | Pay by card or EMI | Moves cash outflow to the card bill's due date or to `n` monthly installments within available credit. EMI cost uses `money.card_emi` (interest, processing fee, and 18% GST on both); rate and fee fall back from the offer to card defaults (`emi_rate_bps`, `emi_fee_paise`) to a labeled 16% annual rate with zero fee. `no_cost=True` zeroes interest while keeping the fee and its GST |
-| Skip goal contributions | Searches subsets of the 8 highest-priority goals with contributions from the purchase date through 31 days later, returning those contributions to cash on their scheduled dates and reporting each affected goal's delay |
-| Cut reducible spend | Cuts reducible category baselines by up to 50% until the next payday, when normal spend resumes. Card-spend cuts free cash only when that bill's due date arrives |
+| Skip goal contributions | Greedily skips scheduled contributions in reverse goal-priority order (least important goal first) from the purchase date through 31 days later, returning those contributions to cash on their scheduled dates and reporting each affected goal's delay |
+| Cut reducible spend | Cuts reducible category baselines by up to 50% (`5,000` basis points) until the next payday, when normal spend resumes, using binary search over `project()`. Card-spend cuts free cash only when that bill's due date arrives |
 | Wait until date X | Earliest date on which paying from an account passes both gates. Context only; never upgrades `no` to `yes-but` and omitted when equal to the asked date |
 
-For any monotone lever, each scenario has a critical value—the smallest setting at which that
-scenario passes—so the smallest setting passing share `p` of scenarios is the `ceil(p * N)`-th
-smallest critical value. Cuts compute exact integer fractions over both floor checkpoints and every
-99% obligation day. Discrete choices (payment method, EMI tenor, and goal subsets) are enumerated
-and pruned under a strict partial dominance order across method change, goal subset, cut ratio, and
-cost.
-
-Up to four minimal plans return, ordered by fewest levers and then lowest cost (preferring to delay
-lower-priority goals on ties). Each reported plan is applied to the inputs and rerun through the
-full kernel on the same scenarios: a per-day rounding near miss adds one basis point, and scenarios
-where card headroom binds bisect up to the maximum cut (`5,000` basis points) to find the smallest
-passing cut. Reported costs and probabilities reflect the verified cut. Tradeoff kinds are `wait`,
-`pay_by_card`, `delay_goal`, `cut_category`, and `combined` (listing `levers` and every delayed goal
-in `goals`).
+Each lever is evaluated by rerunning `project` on the same scenarios (`afford` in
+`src/arno/engine/affordability.py`). Up to four plans (`MAX_PLANS`) return, ordered by fewest
+levers and lowest cost (preferring to delay lower-priority goals on ties), and every reported
+probability and cost reflects that verified rerun. Tradeoff kinds are `wait`, `pay_by_card`,
+`delay_goal`, `cut_category`, and `combined` (listing `levers` and every delayed goal in `goals`).
 
 ### Multi-event what-if scenarios
 
@@ -509,57 +484,46 @@ without holiday shifting so the kernel stays unchanged. `project_scenario` in
 
 ## Pattern detection
 
-The pure Bayesian calendar-rule detector in `src/arno/engine/series.py` reads up to 800 days of
-effective, non-`one_off` history before `as_of`, retaining at most the newest 200 payments per
-payee. `tools/patterns.py` and `jobs/patterns.py` run it nightly and after every statement commit.
+The pure gap-clustering detector in `src/arno/engine/series.py` reads up to 800 days of effective,
+non-`one_off` history before `as_of`, retaining at most the newest 200 payments per payee.
+`tools/patterns.py` and `jobs/patterns.py` run it nightly and after every statement commit.
 Detections surface as inbox or chat proposals—never silent writes.
 
-### Candidate rules and alignment scoring
+### Cadence clustering and scoring
 
 Payments group by `payee_id`, then by a normalized name that strips digit-only and generic banking
 tokens while preserving non-Latin letters. Spending detection reads `v_spending` (excluding card
 repayments and own-account transfers); income detection reads inflows from `income` into `liquid`
-accounts. Payees need at least 3 payments before scoring.
+accounts. Payees need at least 3 payments (`_MIN_PAYMENTS`) before scoring.
 
-Candidate rules cover weekly, fortnightly, four-weekly, twice monthly, monthly on day `k`, last day,
-last working day, n-th weekday, quarterly, half-yearly, and yearly cadences expanded through
-`india/recurrence.py` and `india/workdays.py` (accounting for second and fourth Saturdays and Indian
-bank holidays). Date-in-month rules test unshifted, next working day, and previous working day; a
-pre-alignment heuristic prunes to at most 8 candidates per payee.
+For each payee, consecutive payment gaps are matched against six cadences—monthly (`30`),
+four-weekly (`28`), weekly (`7`), fortnightly (`14`), quarterly (`90`), and yearly (`365`) days,
+with monthly checked before four-weekly so a 29-day median reads as monthly—within a `±3`-day
+tolerance (`_CADENCE_TOLERANCE`):
 
-Each candidate rule is scored by an exact three-state _dynamic programming_ (_DP_) alignment over
-states (not started, matched or skipped expected date, and unrelated payment), summing every valid
-payment labeling exactly once and matching brute-force enumeration to `1e-12`:
-
-- Each expected date is paid with probability `1 − q` at a date offset drawn from a jitter
-  distribution `f`, skipped with probability `q`, or ends the series with probability `c` (with a
-  uniform latent start prior so young series inside an 800-day window are not penalized for earlier
-  dates).
-- "No pattern" is a homogeneous Poisson process at its fitted rate `lambda = M / (e * T)` for `M`
-  payments over `T` days. Unrelated payments under a rule cost `0.1 * lambda`, preventing
-  high-frequency irregular merchants from scoring as recurring series.
-- Arithmetic runs in `float64` using only `+`, `−`, `×`, `/`, and exact powers of two (`2^-512`)
-  for exponent scaling, keeping rule rankings bit-reproducible without transcendental functions.
+- The series starts at the first payment followed by a gap within tolerance of the winning cadence,
+  ignoring stray earlier payments.
+- `confidence` is the share of gaps from that start sitting within `±3` days of the cadence.
+- `alive` is `1.0` when the latest payment is within 2 cadences (`_ALIVE_CADENCES`) of `as_of`, and
+  `0.0` otherwise.
 
 ### Thresholds, amounts, and proposals
 
-Confidence is `1 − P(no pattern)`, and `alive` is the posterior share of paths ending at the latest
-expected date. Three thresholds govern downstream actions:
+Three thresholds govern downstream actions:
 
-- `PROPOSE_CONFIDENCE = 0.9` and `PROPOSE_ALIVE = 0.5`: minimum confidence and survival probability
-  to raise a recurring-charge or recurring-income proposal.
-- `PROJECT_CONFIDENCE = 0.999`: minimum confidence for an unconfirmed spend detection to enter the
-  projection engine as a stochastic outflow.
+- `PROPOSE_CONFIDENCE = 0.9` and `PROPOSE_ALIVE = 0.5`: minimum confidence and survival flag to
+  raise a recurring-charge or recurring-income proposal.
+- `PROJECT_CONFIDENCE = 1.0`: every gap fits the cadence for an unconfirmed spend detection to
+  enter the projection engine as a recurring outflow.
 
-Amounts classify as `fixed`, `stepped`, or `variable` (variable bills draw uniformly from up to 12
-recent payments). If a payee's full payment list matches no rule but amounts cluster into two tight
-groups of 3 or more payments, each group is scored separately. Detected amount summaries and
-price-change alerts share `price_step` in `src/arno/engine/series.py`: a step requires at least 3
-consecutive payments at the old level (within 2% tolerance) immediately before a sustained shift to
-the new level. For confirmed schedules, consecutive paid occurrences are compared against the stated
-schedule amount (ignoring lower amounts until the 3-day missed-charge grace passes). Only steps whose
-first new-level payment falls within 90 days of `as_of` trigger proposals, deduplicated per series
-or schedule and step date.
+Amounts classify as `fixed` (within 2% of median across all payments), or `variable` (sampling up to
+the last 12 payments). Detected amount summaries and price-change alerts share `price_step` in
+`src/arno/engine/series.py`: a step requires at least 3 consecutive payments at the old level
+(within 2% tolerance) immediately before a sustained shift to the new level. For confirmed
+schedules, consecutive paid occurrences are compared against the stated schedule amount (ignoring
+lower amounts until the 3-day missed-charge grace passes). Only steps whose first new-level
+payment falls within 90 days of `as_of` trigger proposals, deduplicated per series or schedule and
+step date.
 
 The following table lists the proactive proposals and alerts generated by the pattern and risk jobs:
 
@@ -586,9 +550,8 @@ calls them; the agent models the same arithmetic in `run_python`. The formulas a
 local 28-digit, `ROUND_HALF_UP` `Decimal` context so caller settings never shift a paisa. Amounts
 are capped at `MAX_PAISE` and tenures at 600 months.
 
-- **Loan amortization (`amortize`):** Supports monthly and daily rests (`30e/360` and `actual/365f`,
-  with input aliases `30/360` and `actual/365`), configurable interest and EMI rounding units
-  (`half_up` or `up`), and scheduled `rate_changes` (rejecting resets past the term and noting
+- **Loan amortization (`amortize`):** Uses monthly rests with configurable interest and EMI rounding
+  units (`half_up` or `up`), and scheduled `rate_changes` (rejecting resets past the term and noting
   final-payment balloons caused by coarse rounding). Prepayments support `reduce="tenure"` (using
   the EMI active at `at_emi`, including any coincident reset) and `reduce="emi"` (recomputing over
   actual remaining EMIs). Upfront processing fees incur 18% _Goods and Services Tax_ (_GST_),
@@ -611,12 +574,10 @@ are capped at `MAX_PAISE` and tenures at 600 months.
 - **Completeness disclosures:** `amortize`, `card_payoff`, and `compare_offers` each return
   `complete_cost` and `not_included` (listing omitted items such as prepayment or foreclosure
   charges, late or contingent fees, and future floating-rate resets).
-- **Compounding, cumulative rounding, and allocation:** `compound` models start-of-month Indian SIP
-  compounding at a stated assumed annual rate. Cumulative rounding rounds running totals and takes
-  differences so scaled spending series stay within half a paisa at every horizon point. `allocate`
-  provides one largest-remainder split conserving paise everywhere amounts divide. Logged loan
-  payments use `ledger/movements.loan_payment_parts`, booking one month's interest on the first
-  payment in a calendar month and principal on any later payments that month.
+- **Compounding and loan split:** `compound` models start-of-month Indian SIP compounding at a
+  stated assumed annual rate. Logged loan payments use `ledger/movements.loan_payment_parts`, booking
+  one month's interest on the first payment in a calendar month and principal on any later payments
+  that month.
 
 ---
 
@@ -689,9 +650,6 @@ In chat, the agent reads the same figures with `run_query`.
 
 - Steele, Lea, and Flood (2014), "Fast splittable pseudorandom number generators", _OOPSLA_; Salmon,
   Moraes, Dror, and Shaw (2011), "Parallel random numbers: as easy as 1, 2, 3", _SC11_.
-- Needleman and Wunsch (1970), "A general method applicable to the search for similarities in the
-  amino acid sequence of two proteins", _Journal of Molecular Biology_ 48.
-- Fader, Hardie, and Lee (2005), "Counting your customers the easy way", _Marketing Science_ 24.
 
 ---
 
@@ -709,4 +667,4 @@ following table summarizes every invariant group checked by `tests/invariants.py
 | Account identity and views | `accounts.name` is `NULL` if and only if `kind` is `person` or `goal`; `goals.account_id` targets `goal` accounts; `payees.person_account_id` targets `person` accounts and every `person` account has a payee; `v_legs` matches the `movement_legs` count and `v_spending` monthly totals; `v_accounts.balance_paise` and the `v_balances` latest and today IST balances match the leg sums; `v_owed` agrees with person-account sums and reflects only `split`, `settlement`, or `transfer` movements |
 | Schedule payment evidence | Every allocation fits within the movement's eligible capacity per occurrence and across occurrences; `payment_evidence` and `payment_status` match the allocations as of today |
 | Import integrity | Uncommitted imports never create ledger movements (`stmt:<line>` idempotency key or `statement_line` capture); every `committed` import has `check_status = 'VERIFIED'` |
-| Deterministic engine checks | `amortize` conserves every paisa of principal, closes at zero, and satisfies `total_paid == principal + total_interest`; `allocate` conserves paise; `project` conserves opening card bills and obligations on due days, orders `p10 <= median <= p90`, fails `obligations_met` on a day-0 card bill shortfall, and matches `safe_to_spend` to the exact `yes` / non-`yes` boundary of `afford` |
+| Deterministic engine checks | `amortize` conserves every paisa of principal, closes at zero, and satisfies `total_paid == principal + total_interest`; `project` conserves opening card bills and obligations on due days, orders `p10 <= median <= p90`, fails `obligations_met` on a day-0 card bill shortfall, and matches `safe_to_spend` to the exact `yes` / non-`yes` boundary of `afford` |

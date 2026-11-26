@@ -6,27 +6,21 @@ import random
 from datetime import date
 from decimal import ROUND_DOWN, Decimal, localcontext
 from fractions import Fraction
-from typing import cast
 
 import pytest
 
 from arno.engine.money import (
     MAX_PAISE,
     CardPayoff,
-    DayCount,
     _add_months,
     _compute_apr,
-    _days_30_360,
-    _period_interest,
     add_months,
-    allocate,
     amortize,
     card_emi,
     card_payoff,
     compare_offers,
     compound,
     infer_rate,
-    scale_cumulative,
 )
 from arno.india.formatting import format_paise
 
@@ -296,106 +290,6 @@ def test_conventions_emi_rounding_and_interest_unit():
     )
 
 
-def test_conventions_daily_rest_and_day_count():
-    with pytest.raises(ValueError, match="start_date"):
-        amortize(1_000_000_00, 8.5, 12, rest="daily")
-
-    monthly = amortize(1_000_000_00, 12.0, 12, start_date=date(2026, 1, 1))
-    daily_30e_360 = amortize(
-        1_000_000_00, 12.0, 12, start_date=date(2026, 1, 1), rest="daily", day_count="30e/360"
-    )
-    assert daily_30e_360["schedule"] == monthly["schedule"]
-    assert any("daily rest (30e/360)" in note for note in daily_30e_360["assumptions"])
-
-    daily_act_365f = amortize(
-        1_000_000_00,
-        12.0,
-        12,
-        start_date=date(2026, 1, 1),
-        rest="daily",
-        day_count="actual/365f",
-    )
-    # January has 31 days (31/365 > 1/12); February 2026 has 28 days (28/365 < 1/12).
-    assert (
-        daily_act_365f["schedule"][0]["interest_paise"] > monthly["schedule"][0]["interest_paise"]
-    )
-    assert (
-        daily_act_365f["schedule"][1]["interest_paise"] < monthly["schedule"][1]["interest_paise"]
-    )
-    assert any("daily rest (actual/365f)" in note for note in daily_act_365f["assumptions"])
-
-    # The pre-rename spellings stay accepted and label as the canonical conventions.
-    legacy_30e = amortize(
-        1_000_000_00, 12.0, 12, start_date=date(2026, 1, 1), rest="daily", day_count="30/360"
-    )
-    legacy_365f = amortize(
-        1_000_000_00, 12.0, 12, start_date=date(2026, 1, 1), rest="daily", day_count="actual/365"
-    )
-    assert legacy_30e == daily_30e_360
-    assert legacy_365f == daily_act_365f
-    with pytest.raises(ValueError, match="30e/360"):
-        amortize(1_000_000_00, 12.0, 12, day_count=cast(DayCount, "actual/364"))
-
-
-@pytest.mark.parametrize(
-    ("first", "second", "days"),
-    [
-        # 31st clamps to the 30th; February keeps its real last day.
-        (date(2026, 1, 31), date(2026, 2, 28), 28),
-        (date(2028, 1, 31), date(2028, 2, 29), 29),
-        (date(2026, 2, 28), date(2026, 3, 31), 32),
-        (date(2026, 3, 31), date(2026, 4, 30), 30),
-        (date(2026, 4, 30), date(2026, 5, 31), 30),
-        (date(2026, 1, 30), date(2026, 1, 31), 0),
-        (date(2026, 1, 31), date(2026, 1, 31), 0),
-        # Year boundary: 31 December to 1 January is one day, not minus 329.
-        (date(2026, 12, 31), date(2027, 1, 1), 1),
-        (date(2026, 1, 1), date(2026, 12, 31), 359),
-        (date(2026, 2, 1), date(2026, 3, 1), 30),
-        (date(2026, 1, 29), date(2026, 2, 28), 29),
-    ],
-)
-def test_30e_360_day_count_boundaries(first: date, second: date, days: int):
-    assert _days_30_360(first, second) == days
-
-
-def test_actual_365f_counts_the_leap_day_and_every_31_day_month():
-    # ₹36,500 at 12% a year is ₹12 a day: 365 days * 1,200 paise == 12% of 36,500.
-    balance = Decimal(3_650_000)
-    rate = Decimal(12)
-    leap = _period_interest(
-        balance,
-        rate,
-        1,
-        rest="daily",
-        day_count="actual/365f",
-        start_date=date(2028, 2, 15),
-        interest_unit_paise=1,
-    )
-    march = _period_interest(
-        balance,
-        rate,
-        2,
-        rest="daily",
-        day_count="actual/365f",
-        start_date=date(2028, 2, 15),
-        interest_unit_paise=1,
-    )
-    thirty = _period_interest(
-        balance,
-        rate,
-        4,
-        rest="daily",
-        day_count="30e/360",
-        start_date=date(2028, 2, 15),
-        interest_unit_paise=1,
-    )
-    assert leap == Decimal(29 * 1_200)  # 15 Feb to 15 Mar includes 29 February.
-    assert march == Decimal(31 * 1_200)  # 15 Mar to 15 Apr.
-    # 30E/360 charges May's 31 days as 30, on a 360-day basis: 30 * 12% / 360 of 36,500.
-    assert thirty == Decimal(36_500)
-
-
 def test_conventions_floating_rate_changes_tenure_and_emi_reset():
     base = amortize(1_000_000_00, 8.5, 120)
     hike_tenure = amortize(
@@ -559,13 +453,6 @@ def test_infer_rate_round_trip_and_edge_cases():
     assert bracket["high_bps_x100"] == bracket["low_bps_x100"] + 1
 
 
-def test_infer_rate_rejects_a_daily_rest_instead_of_ignoring_it():
-    with pytest.raises(ValueError, match="monthly rest only"):
-        infer_rate(1_000_000, 12, 90_000, rest="daily")
-    with pytest.raises(ValueError, match="monthly rest only"):
-        infer_rate(1_000_000, 12, 90_000, rest="daily", day_count="actual/365f")
-
-
 def test_infer_rate_property_round_trips():
     from typing import Literal
 
@@ -598,65 +485,6 @@ def test_infer_rate_property_round_trips():
         assert fit["exact"] is (fit["low_bps_x100"] == fit["high_bps_x100"])
         if not fit["exact"]:
             assert " to " in fit["note"]
-
-
-def test_allocate_properties_and_edge_cases():
-    # Ties go to lower index; zero weights get 0
-    assert allocate(100, [1, 1, 1]) == [34, 33, 33]
-    assert allocate(100, [0, 1, 0, 1, 1]) == [0, 34, 0, 33, 33]
-    # Negative total works by symmetry
-    assert allocate(-100, [1, 1, 1]) == [-34, -33, -33]
-    assert allocate(0, [1, 2, 3]) == [0, 0, 0]
-
-    with pytest.raises(ValueError):
-        allocate(100, [])
-    with pytest.raises(ValueError):
-        allocate(100, [0, 0, 0])
-    with pytest.raises(ValueError):
-        allocate(100, [1, -1, 2])
-
-    rng = random.Random(42)
-    for _ in range(200):
-        total = rng.randint(-1_000_000, 1_000_000)
-        n_weights = rng.randint(1, 20)
-        weights = [rng.randint(0, 1000) for _ in range(n_weights)]
-        if sum(weights) == 0:
-            weights[0] = 1
-        parts = allocate(total, weights)
-        assert sum(parts) == total
-        total_weight = sum(weights)
-        for part, weight in zip(parts, weights, strict=True):
-            if weight == 0:
-                assert part == 0
-            exact = Fraction(total * weight, total_weight)
-            assert abs(Fraction(part) - exact) < 1
-
-
-def test_scale_cumulative_properties_and_negatives():
-    # Half-up away from zero for positive and negative amounts
-    assert scale_cumulative([1, 1, 1], 1, 2) == [1, 0, 1]
-    assert scale_cumulative([-1, -1, -1], 1, 2) == [-1, 0, -1]
-    assert scale_cumulative([-3], 1, 2) == [-2]
-    assert scale_cumulative([1, 1], -1, -2) == [1, 0]
-    assert scale_cumulative([], 1, 3) == []
-
-    with pytest.raises(ValueError):
-        scale_cumulative([100], 1, 0)
-
-    rng = random.Random(99)
-    for _ in range(200):
-        amounts = [rng.randint(-50_000, 50_000) for _ in range(rng.randint(1, 50))]
-        numerator = rng.randint(-500, 500)
-        denominator = rng.randint(1, 500)
-        scaled = scale_cumulative(amounts, numerator, denominator)
-        assert len(scaled) == len(amounts)
-        prefix_in = 0
-        prefix_out = 0
-        for amount, out in zip(amounts, scaled, strict=True):
-            prefix_in += amount
-            prefix_out += out
-            exact = Fraction(prefix_in * numerator, denominator)
-            assert abs(Fraction(prefix_out) - exact) <= Fraction(1, 2)
 
 
 def test_card_emi_matches_fraction_oracle_on_issuer_example():

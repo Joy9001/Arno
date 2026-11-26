@@ -1,7 +1,7 @@
 """Database loaders and persistence for recurring series detection and missed charges.
 
 Spend and income payments over the last 800 days are grouped by payee and passed to the pure
-Bayesian detector in ``arno.engine.series``. Detections replace ``series_detections`` in one
+gap-clustering detector in ``arno.engine.series``. Detections replace ``series_detections`` in one
 transaction; high-confidence uncovered spend detections become ``new_subscription`` proposals,
 high-confidence income detections become ``new_income`` proposals, and a spend charge that steps
 to a new amount level is proposed as a ``price_change``, once per step.
@@ -342,12 +342,7 @@ async def detect(
                 )
                 for item in group
             ]
-            detection = series.detect(
-                payments,
-                as_of=day,
-                window_start=window_start,
-                calendar=cal,
-            )
+            detection = series.detect(payments, as_of=day, window_start=window_start)
             if detection is None:
                 continue
 
@@ -367,7 +362,7 @@ async def detect(
                     detection.rule.description,
                     detection.confidence,
                     detection.alive,
-                    detection.skip,
+                    0.0,
                     json.dumps([[offset, prob] for offset, prob in detection.jitter]),
                     detection.amounts.kind,
                     detection.amounts.level_paise,
