@@ -1,22 +1,8 @@
-"""The inbox, the seeded chat handoff, and contentless push."""
+"""The inbox and the seeded chat handoff."""
 
 from __future__ import annotations
 
-import json
-import threading
-from types import SimpleNamespace
-
-import pytest
-from pywebpush import WebPushException
-
-from arno.notifications import (
-    PUSH_BODIES,
-    create_notification,
-    push_status,
-    seed_chat_text,
-    send_push_for_kind,
-    subscribe,
-)
+from arno.notifications import create_notification, seed_chat_text
 
 
 async def test_unread_badge_and_mark_read(session_client, db):
@@ -159,46 +145,7 @@ async def test_arno_reads_the_seeded_notification_and_answers_it(session_client,
     assert users == 1
 
 
-async def test_push_subscription_and_a_contentless_ping(session_client, db, monkeypatch):
-    key = session_client.get("/api/push/key")
-    assert key.status_code == 200
-    assert len(key.json()["public_key"]) > 20
-
-    subscribed = session_client.post(
-        "/api/push/subscribe",
-        json={
-            "endpoint": "https://example.invalid/push/abc",
-            "keys": {"p256dh": "p256dh-value", "auth": "auth-value"},
-        },
-    )
-    assert subscribed.status_code == 201, subscribed.text
-    assert subscribed.json()["subscribed"] is True
-
-    sent: list[dict] = []
-
-    def fake_webpush(**kwargs):
-        sent.append(kwargs)
-        return "ok"
-
-    monkeypatch.setattr("arno.notifications.webpush", fake_webpush)
-    await send_push_for_kind(db, "weekly_briefing")
-    assert len(sent) == 1
-    payload = json.loads(sent[0]["data"])
-    assert payload["body"] == "Your weekly briefing is ready"
-    assert "₹" not in sent[0]["data"]
-    assert "Netflix" not in sent[0]["data"]
-    assert sent[0]["vapid_claims"]["sub"]
-
-    removed = session_client.request(
-        "DELETE",
-        "/api/push/subscribe",
-        json={"endpoint": "https://example.invalid/push/abc"},
-    )
-    assert removed.status_code == 200
-    assert removed.json()["removed"] is True
-
-
-async def test_settings_scheduled_questions_and_job_status_round_trip(session_client):
+async def test_settings_and_scheduled_questions_round_trip(session_client):
     patched = session_client.patch(
         "/api/settings",
         json={
@@ -224,50 +171,11 @@ async def test_settings_scheduled_questions_and_job_status_round_trip(session_cl
 
     listed = session_client.get("/api/scheduled-questions")
     assert listed.status_code == 200
-    assert listed.json()["questions"][0]["id"] == question["id"]
+    assert question["id"] in [item["id"] for item in listed.json()["questions"]]
 
     archived = session_client.delete(f"/api/scheduled-questions/{question['id']}")
     assert archived.status_code == 200
     assert archived.json()["active"] is False
-
-    jobs = session_client.get("/api/jobs")
-    assert jobs.status_code == 200
-    kinds = {item["kind"] for item in jobs.json()["schedules"]}
-    assert "weekly_briefing" in kinds
-    assert "reminders" in kinds
-    assert "backup_check" in kinds
-
-
-async def test_subscribe_refuses_non_https_endpoints_and_missing_keys(db):
-    with pytest.raises(ValueError, match="HTTPS"):
-        await subscribe(db, endpoint="http://example.invalid/push", p256dh="p", auth="a")
-    with pytest.raises(ValueError, match="p256dh and auth"):
-        await subscribe(db, endpoint="https://example.invalid/push", p256dh="", auth="a")
-    with pytest.raises(ValueError, match="p256dh and auth"):
-        await subscribe(db, endpoint="https://example.invalid/push", p256dh="p", auth="")
-    assert await db.fetchval("SELECT count(*) FROM push_subscriptions") == 0
-
-
-async def test_a_successful_push_clears_the_last_error(db, monkeypatch):
-    await subscribe(db, endpoint="https://example.invalid/push/ok", p256dh="p", auth="a")
-
-    def failing(**kwargs):
-        del kwargs
-        raise WebPushException("gateway down", response=SimpleNamespace(status=500, text=""))
-
-    monkeypatch.setattr("arno.notifications.webpush", failing)
-    assert await send_push_for_kind(db, "weekly_briefing") == 0
-    degraded = await push_status(db)
-    assert degraded["status"] == "degraded"
-    assert degraded["last_error"].startswith("delivery_failed:")
-
-    monkeypatch.setattr("arno.notifications.webpush", lambda **kwargs: "ok")
-    assert await send_push_for_kind(db, "weekly_briefing") == 1
-    recovered = await push_status(db)
-    assert recovered["status"] == "active"
-    assert recovered["last_error"] is None
-    assert recovered["last_error_at"] is None
-    assert recovered["last_sent_at"] is not None
 
 
 async def test_notification_dedupe_key_inserts_once_and_orders_newest_first(db):
@@ -305,58 +213,6 @@ def test_a_reminder_seeds_its_schedule_name_and_amount():
     assert "₹25,000" in text
 
 
-async def test_push_payload_is_contentless_for_every_kind(db, monkeypatch):
-    await subscribe(db, endpoint="https://example.invalid/ok", p256dh="p", auth="a")
-    sent: list[dict] = []
-    monkeypatch.setattr("arno.notifications.webpush", lambda **kwargs: sent.append(kwargs) or "ok")
-
-    for kind in PUSH_BODIES:
-        await send_push_for_kind(db, kind)
-    assert len(sent) == len(PUSH_BODIES)
-    for call, kind in zip(sent, PUSH_BODIES, strict=True):
-        payload = json.loads(call["data"])
-        assert payload == {"title": "Arno", "body": PUSH_BODIES[kind], "url": "/"}
-        assert "₹" not in call["data"]
-
-
-async def test_a_slow_push_does_not_block_the_event_loop(db, monkeypatch):
-    await subscribe(db, endpoint="https://example.invalid/ok", p256dh="p", auth="a")
-    seen: dict[str, int] = {}
-
-    def fake_webpush(**kwargs):
-        del kwargs
-        seen["thread"] = threading.get_ident()
-        return "ok"
-
-    monkeypatch.setattr("arno.notifications.webpush", fake_webpush)
-    await send_push_for_kind(db, "weekly_briefing")
-    assert seen["thread"] != threading.get_ident()
-
-
-async def test_a_gone_subscription_is_pruned_and_a_server_error_is_kept(db, monkeypatch):
-    for endpoint in (
-        "https://example.invalid/gone",
-        "https://example.invalid/error",
-        "https://example.invalid/ok",
-    ):
-        await subscribe(db, endpoint=endpoint, p256dh="p", auth="a")
-
-    def fake_webpush(**kwargs):
-        endpoint = kwargs["subscription_info"]["endpoint"]
-        if endpoint.endswith("/gone"):
-            raise WebPushException("gone", response=SimpleNamespace(status=410, text=""))
-        if endpoint.endswith("/error"):
-            raise WebPushException("broken", response=SimpleNamespace(status=500, text=""))
-        return "ok"
-
-    monkeypatch.setattr("arno.notifications.webpush", fake_webpush)
-    assert await send_push_for_kind(db, "weekly_briefing") == 1
-    endpoints = {
-        row["endpoint"] for row in await db.fetch("SELECT endpoint FROM push_subscriptions")
-    }
-    assert endpoints == {"https://example.invalid/error", "https://example.invalid/ok"}
-
-
 async def test_notification_pagination_is_stable_across_equal_timestamps(session_client, db):
     await db.execute(
         """
@@ -385,12 +241,7 @@ def test_watch_endpoints_require_a_session(client):
     for path in (
         "/api/notifications",
         "/api/notifications/read-all",
-        "/api/push/key",
-        "/api/push/status",
         "/api/scheduled-questions",
-        "/api/jobs",
-        "/api/jobs/activity",
-        "/api/jobs/job_missing/retry",
     ):
-        method = "POST" if path.endswith(("read-all", "retry")) else "GET"
+        method = "POST" if path.endswith(("read-all",)) else "GET"
         assert client.request(method, path).status_code == 401, path

@@ -15,18 +15,11 @@ from arno.db.conn import Connection, conninfo_to_dict, quote_ident
 from arno.ledger.audit import jsonable
 from arno.ledger.errors import UnavailableLedgerError
 
-# Credential material and link/session hashes are never in a data export. The pg_dump path stays
+# Credential material is never in a data export. The pg_dump path stays
 # complete: it is the backup and restore source.
 SECRET_TABLES = frozenset(
     {
         "model_credentials",
-        "push_subscriptions",
-        "sessions",
-        "setup_tokens",
-        "users",
-        "vapid_keys",
-        "webauthn_challenges",
-        "webauthn_credentials",
     }
 )
 

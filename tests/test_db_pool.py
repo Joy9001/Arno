@@ -23,7 +23,6 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from arno.agent.builder import build_agent
 from arno.agent.deps import AgentDeps
 from arno.api.app import create_app
-from arno.auth.setup import issue_setup_token
 from arno.config import Settings
 from arno.db import conn as db_conn
 from arno.db.conn import (
@@ -34,13 +33,11 @@ from arno.db.conn import (
     connect,
     use_database_url,
 )
-from arno.jobs.runner import JobRunner
 from arno.ledger import audit as ledger_audit
 from arno.ledger.accounts import create_account
 from arno.ledger.audit import write_group
 from arno.ledger.errors import CommitOutcomeUnknownError
 from tests.conftest import _dsn, _mutable_reset
-from tests.software_authenticator import SoftwareAuthenticator
 
 
 @pytest.mark.usefixtures("app")
@@ -49,8 +46,6 @@ async def test_api_reset_repairs_edited_seed_rows_and_keeps_unchanged_ones():
         category = await conn.fetchrow_required(
             "SELECT id, name FROM categories ORDER BY id LIMIT 1"
         )
-        vapid_version = await conn.fetchval("SELECT xmin::text FROM vapid_keys WHERE id = 1")
-        assert vapid_version is not None
         await conn.execute(
             "UPDATE categories SET name = 'Edited category' WHERE id = $1", category["id"]
         )
@@ -62,25 +57,6 @@ async def test_api_reset_repairs_edited_seed_rows_and_keeps_unchanged_ones():
             await conn.fetchval("SELECT name FROM categories WHERE id = $1", category["id"])
             == category["name"]
         )
-        assert (
-            await conn.fetchval("SELECT xmin::text FROM vapid_keys WHERE id = 1") == vapid_version
-        )
-
-
-async def _enroll_async_client(client: httpx.AsyncClient, settings: Settings) -> None:
-    async with connect(_dsn()) as conn:
-        token = (await issue_setup_token(conn, ttl_hours=1)).token
-    authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
-    begin = await client.post("/api/auth/setup/begin", json={"token": token})
-    assert begin.status_code == 200, begin.text
-    credential = authenticator.registration_credential(begin.json()["options"])
-    verified = await client.post(
-        "/api/auth/setup/verify",
-        json={"challenge_id": begin.json()["challenge_id"], "credential": credential},
-    )
-    assert verified.status_code == 200, verified.text
-    async with connect(_dsn()) as conn:
-        await conn.execute("UPDATE sessions SET reverified_at = now() WHERE revoked_at IS NULL")
 
 
 @asynccontextmanager
@@ -98,9 +74,9 @@ async def _authed_app_client(
                 app=target_app, raise_app_exceptions=raise_app_exceptions
             ),
             base_url="http://localhost",
+            headers={"Tailscale-User-Login": settings.owner_email or ""},
         ) as client,
     ):
-        await _enroll_async_client(client, settings)
         yield target_app, client
 
 
@@ -441,33 +417,6 @@ async def test_commit_loss_agent_write_tool_reports_unknown_without_retry(
     assert "do not call this write tool again" in payload["message"].lower()
 
 
-async def test_commit_loss_job_runner_does_not_retry(db: Connection) -> None:
-    attempts = {"n": 0}
-
-    async def uncertain_handler(payload: dict[str, Any]) -> dict[str, Any]:
-        del payload
-        attempts["n"] += 1
-        raise CommitOutcomeUnknownError()
-
-    runner = JobRunner(registry={"uncertain": uncertain_handler}, timeouts={"uncertain": 5})
-    await db.execute("INSERT INTO jobs (key, kind) VALUES ('uncertain:1', 'uncertain')")
-
-    await runner.run_once()
-    row = await db.fetchrow(
-        "SELECT status, attempts, last_error FROM jobs WHERE key = 'uncertain:1'"
-    )
-    assert row is not None
-    assert row["status"] == "failed"
-    assert row["attempts"] == 1
-    assert "recorded" in str(row["last_error"]).lower()
-    assert attempts["n"] == 1
-    assert await db.fetchval("SELECT count(*) FROM notifications WHERE kind = 'job_failed'") == 1
-
-    # Even if run_once is invoked again, a failed job is never retried.
-    await runner.run_once()
-    assert attempts["n"] == 1
-
-
 # 5. Database down and recovery ------------------------------------------------------------------
 
 
@@ -519,9 +468,8 @@ async def test_app_survives_full_database_outage_and_recovers_without_restart(
     )
     proxy_dsn = urlunsplit(parts._replace(netloc=f"{auth}127.0.0.1:{proxy_port}"))
     monkeypatch.setenv("DATABASE_URL", proxy_dsn)
-    proxy_settings = replace(
-        get_settings(refresh=True), agent_ro_password=None, backup_password=None
-    )
+    get_settings(refresh=True)
+    proxy_settings = replace(settings, database_url=proxy_dsn)
 
     try:
         async with _authed_app_client(proxy_settings) as (_, client):

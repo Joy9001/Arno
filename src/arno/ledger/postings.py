@@ -82,6 +82,7 @@ async def create_movement_in_group(
     reverses_id: str | None = None,
     idempotency_key: str | None = None,
     one_off: bool = False,
+    import_id: str | None = None,
     capture: dict[str, Any] | None = None,
     accounts: dict[str, dict[str, Any]] | None = None,
 ) -> MovementRecord:
@@ -122,8 +123,9 @@ async def create_movement_in_group(
     movement_id = await new_id(conn, "mov")
     movement = await conn.fetchrow(
         """
-        INSERT INTO movements (id, date, description, kind, reverses_id, idempotency_key, one_off)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO movements
+            (id, date, description, kind, reverses_id, idempotency_key, one_off, import_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         ON CONFLICT (idempotency_key) DO NOTHING
         RETURNING *
         """,
@@ -134,6 +136,7 @@ async def create_movement_in_group(
         reverses_id,
         idempotency_key,
         one_off,
+        import_id,
     )
     if movement is None:
         # A concurrent call with the same key committed first: return its movement, not a second.
@@ -227,35 +230,4 @@ async def create_movement_in_group(
         )
         group.record_created("captures", capture_row)
 
-    await _sync_card_bill_alerts(conn, group, movement, resolved)
     return MovementRecord(movement=movement, transfer_ids=tuple(ordered_ids))
-
-
-async def _sync_card_bill_alerts(
-    conn: Connection,
-    group: WriteGroup,
-    movement: dict[str, Any],
-    resolved: list[tuple[TransferSpec, dict[str, Any], dict[str, Any]]],
-) -> None:
-    """Settle a card's bill reminder when money reaches it; a reversal reopens it.
-
-    Every recorded, imported, and reversed transfer is written here, so this one hook reaches the
-    reminder rows the job keyed by the card account.
-    """
-    if movement["kind"] == "reversal":
-        # The reversal takes the money back out, so the card is the source leg of that batch.
-        card_ids = {
-            str(source["id"]) for _transfer, source, _target in resolved if source["kind"] == "card"
-        }
-    else:
-        card_ids = {
-            str(target["id"]) for _transfer, _source, target in resolved if target["kind"] == "card"
-        }
-    if not card_ids:
-        return
-    from arno.notifications import sync_card_due_alerts_in_group
-
-    for account_id in sorted(card_ids):
-        await sync_card_due_alerts_in_group(
-            conn, group, account_id=account_id, movement_id=str(movement["id"])
-        )

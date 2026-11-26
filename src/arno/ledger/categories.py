@@ -166,7 +166,7 @@ async def resolve_category(
     """Resolve a category, returning where it came from.
 
     Order: an explicit category, a user rule, the payee's default (also a user correction), an
-    llm rule, a seed rule, then nothing.
+    llm rule, then nothing.
     """
     if category_id:
         category = await _category_row(conn, category_id)
@@ -217,10 +217,9 @@ async def resolve_category(
             "rule_id": None,
         }
 
-    for sources in (("llm",), ("seed",)):
-        rule = best(sources)
-        if rule is not None:
-            return await from_rule(rule)
+    llm_rule = best(("llm",))
+    if llm_rule is not None:
+        return await from_rule(llm_rule)
 
     return {"category_id": None, "category_name": None, "source": "none", "rule_id": None}
 
@@ -238,8 +237,8 @@ async def upsert_rule_in_group(
     normalized = normalize_pattern(pattern)
     if not normalized:
         raise InvalidLedgerError("A rule needs a pattern")
-    if source not in {"user", "llm", "seed"}:
-        raise InvalidLedgerError("A rule source is user, llm, or seed")
+    if source not in {"user", "llm"}:
+        raise InvalidLedgerError("A rule source is user or llm")
     if match not in MATCH_TYPES:
         raise InvalidLedgerError("A rule match is equals, contains, or regex")
     await _category_row(conn, category_id)
@@ -257,7 +256,6 @@ async def upsert_rule_in_group(
                 priority = EXCLUDED.priority,
                 updated_at = now()
             WHERE EXCLUDED.source = 'user'
-               OR (EXCLUDED.source = 'llm' AND category_rules.source = 'seed')
         RETURNING *
         """,
         match,

@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from arno.jobs.backup import backup_alert
-from arno.jobs.schedules import INDIA, builtin_rules, next_occurrence
 
 
 async def _success(db, when: datetime) -> None:
@@ -71,12 +70,3 @@ async def test_a_failed_attempt_is_not_treated_as_a_success(db):
     assert await backup_alert(db, now=installed + timedelta(hours=47)) is None
     assert await backup_alert(db, now=installed + timedelta(hours=49)) is not None
     assert await db.fetchval("SELECT count(*) FROM notifications WHERE kind = 'backup_stale'") == 1
-
-
-def test_backup_check_runs_at_three_ist_which_is_2130_utc():
-    rules = builtin_rules({"notification_time": "08:00", "weekly_briefing_dow": 0})
-    after = datetime(2026, 11, 3, 12, 0, tzinfo=UTC)
-    occurrence = next_occurrence(rules["backup_check"], after=after)
-    assert occurrence is not None
-    assert occurrence.astimezone(INDIA).hour == 3
-    assert occurrence.astimezone(UTC) == datetime(2026, 11, 3, 21, 30, tzinfo=UTC)

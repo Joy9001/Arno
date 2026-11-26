@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 from datetime import timedelta
 
 import pytest
@@ -13,7 +12,6 @@ from arno.ledger.errors import ConflictLedgerError
 from arno.ledger.movements import record_expense
 from arno.ledger.schedule_payments import link_payment, unlink_payment, validate_restored_payment
 from arno.ledger.schedules import create_schedule
-from arno.notifications import ensure_vapid_keys
 
 
 async def test_restoring_a_payment_whose_occurrence_is_gone_conflicts(ledger):
@@ -53,18 +51,3 @@ async def test_restoring_a_payment_whose_occurrence_is_gone_conflicts(ledger):
     }
     with pytest.raises(ConflictLedgerError):
         await validate_restored_payment(ledger, payment)
-
-
-async def test_vapid_keys_are_a_matching_pair(ledger):
-    """Generating the key ourselves still stores a public key that matches the private one."""
-    from cryptography.hazmat.primitives import serialization
-
-    row = await ensure_vapid_keys(ledger)
-    private_key = serialization.load_pem_private_key(row["private_key"].encode(), password=None)
-    point = private_key.public_key().public_bytes(
-        encoding=serialization.Encoding.X962,
-        format=serialization.PublicFormat.UncompressedPoint,
-    )
-
-    assert base64.urlsafe_b64encode(point).decode("ascii").rstrip("=") == row["public_key"]
-    assert len(point) == 65 and point[0] == 4

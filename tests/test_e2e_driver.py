@@ -1,7 +1,7 @@
 """The driver's HTTP surface works, with no model in the loop.
 
 The journeys themselves need a real model, so they are run by hand (see `tests/e2e/README.md`).
-These tests cover the parts that break silently: the passkey ceremony, the upload, the exact body
+These tests cover the parts that break silently: the sign-in, the upload, the exact body
 the composer sends, and how a stream becomes tool calls, cards, and confirm cards.
 """
 
@@ -21,6 +21,7 @@ from arno.ledger.movements import (
     correct_movement,
     record_expense,
 )
+from tests.conftest import PASSPHRASE
 from tests.e2e.driver import (
     Driver,
     _paise,
@@ -28,7 +29,6 @@ from tests.e2e.driver import (
     approval_message,
     build_parser,
     chat_body,
-    issue_setup_token,
     ledger_summary,
     parse_stream,
     render_turn,
@@ -70,22 +70,20 @@ TURN = _sse(
 REQUEST_DATA = TypeAdapter(RequestData)
 
 
-def test_the_driver_enrolls_uploads_and_reads_the_ledger(client):
+def test_the_driver_signs_in_uploads_and_reads_the_ledger(client):
     driver = Driver("http://testserver", http=client)
-    user = driver.enroll(issue_setup_token())
+    assert not driver.logged_in()
+    driver.login(PASSPHRASE)
 
-    assert user["user"]["display_name"]
     assert driver.logged_in()
-    assert driver.auth_state()["setup_required"] is False
 
     uploaded = driver.upload("sbi.csv", sbi_csv(), "text/csv")
     assert uploaded["kind"] == "statement"
     assert uploaded["detected_kind"] == "text"
-    # An upload alone imports nothing: the turn's statement refs start the parser.
-    assert driver.imports()["items"] == []
+    # The upload opens its import and starts reading the file; nothing is in the ledger yet.
+    assert [item["import_id"] for item in driver.imports()["items"]] == [uploaded["import_id"]]
 
     summary = ledger_summary()
-    assert summary["open_imports"] == []
     assert summary["spending"] == []
 
 

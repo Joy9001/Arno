@@ -7,9 +7,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from arno.api.deps import Database, current_session
-from arno.api.notification_query import count_unread, unread_first
 from arno.engine.projection import BASE_HORIZON_DAYS
 from arno.ledger import accounts, movements
+from arno.notifications import count_unread, unread_first
 from arno.tools import projection as projection_tools
 
 router = APIRouter(

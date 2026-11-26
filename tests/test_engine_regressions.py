@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -30,7 +30,6 @@ from arno.india.recurrence import expand_rule, first_occurrence
 from arno.jobs.patterns import _new_subscription
 from arno.jobs.reminders import send_reminders
 from arno.jobs.risk import risk_warning
-from arno.jobs.schedules import INDIA, enqueue_due_schedules, period_for, sync_scheduled_questions
 from arno.ledger.accounts import create_account
 from arno.ledger.common import today as ledger_today
 from arno.ledger.goals import create_goal
@@ -45,7 +44,7 @@ from arno.ledger.movements import (
 from arno.ledger.payees import create_payee
 from arno.ledger.schedule_payments import link_payment
 from arno.ledger.schedules import create_schedule
-from arno.scheduled_questions import create_question
+from arno.scheduled_questions import INDIA, next_occurrence
 from arno.tools import projection as projection_tools
 from arno.tools.patterns import _load_spend_payments, detect_missed
 from arno.tools.projection import (
@@ -455,11 +454,6 @@ def test_expanding_the_same_rule_twice_is_idempotent():
     assert len(first) == len(set(first))
 
 
-def test_ist_midnight_selects_the_right_day_and_period():
-    assert period_for("risk_check", datetime(2026, 11, 8, 18, 29, tzinfo=UTC)) == "2026-11-08"
-    assert period_for("risk_check", datetime(2026, 11, 8, 18, 30, tzinfo=UTC)) == "2026-11-09"
-
-
 def test_a_proposed_rule_is_the_rule_the_detector_found():
     proposal = {
         "kind": "new_subscription",
@@ -478,23 +472,6 @@ def test_a_proposed_rule_is_the_rule_the_detector_found():
     }
     _, _, _, data = _new_subscription(proposal)
     assert data["suggested_rule"] == "FREQ=MONTHLY;BYMONTHDAY=1,31"
-
-
-async def test_a_late_biweekly_run_keeps_its_fourteen_day_phase(db):
-    rule = "FREQ=WEEKLY;INTERVAL=2;BYDAY=SU;BYHOUR=8;BYMINUTE=0"
-    occurrence = datetime(2026, 11, 1, 8, 0, tzinfo=INDIA)
-    await db.execute(
-        """INSERT INTO job_schedules (kind, payload, rule, next_run_at)
-           VALUES ('weekly_briefing', '{}'::jsonb, $1, $2)""",
-        rule,
-        occurrence,
-    )
-    now = datetime(2026, 11, 3, 10, 0, tzinfo=INDIA)
-    assert await enqueue_due_schedules(db, now=now) == 1
-    row = await db.fetchrow("SELECT * FROM job_schedules WHERE kind = 'weekly_briefing'")
-    assert row["next_run_at"] == datetime(2026, 11, 15, 8, 0, tzinfo=INDIA)
-    job = await db.fetchrow("SELECT * FROM jobs")
-    assert job["key"] == f"weekly_briefing:{period_for('weekly_briefing', occurrence)}"
 
 
 async def test_a_card_due_forecast_follows_the_statement_close(ledger):
@@ -585,7 +562,6 @@ async def test_risk_does_not_warn_from_an_unknown_balance(ledger):
         ledger, account_id=account["id"], amount_paise=150_000, description="Lunch"
     )
     assert await risk_warning(ledger) is None
-    assert await ledger.fetchval("SELECT last_checked_at IS NOT NULL FROM risk_state WHERE id = 1")
     assert (
         await ledger.fetchval("SELECT count(*) FROM notifications WHERE kind = 'risk_warning'") == 0
     )
@@ -651,31 +627,6 @@ async def test_a_partially_paid_bill_is_not_reported_missed(ledger):
         ledger, schedule_id=schedule["id"], due_date=dates[0], movement_id=payment["id"]
     )
     assert await detect_missed(ledger, as_of=ledger_today()) == []
-
-
-async def test_a_missed_bill_pushes_a_missed_notification(ledger, monkeypatch):
-    from arno.jobs import patterns as jobs_patterns
-
-    bank = await create_account(ledger, kind="bank", name="SBI", opening_balance_paise=10_000_000)
-    await create_schedule(
-        ledger,
-        kind="obligation",
-        name="Rent",
-        amount_paise=250_000,
-        account_id=bank["id"],
-        rule="FREQ=DAILY;COUNT=1",
-        starts=ledger_today() - timedelta(days=10),
-    )
-    pushed: list[str] = []
-
-    async def record(conn, kind):
-        del conn
-        pushed.append(kind)
-
-    monkeypatch.setattr(jobs_patterns, "send_push_for_kind", record)
-    result = await jobs_patterns.handle_pattern_detection({})
-    assert result["created"] == 1
-    assert pushed == ["missed_recurring"]
 
 
 async def test_a_reversed_refund_is_not_a_recurring_charge(ledger):
@@ -943,36 +894,6 @@ async def test_a_corrected_bill_is_counted_once_in_spend_history(ledger):
     assert sum(amount for _day, amount in shopping.history) == 239_000
 
 
-async def test_a_finite_question_rule_runs_its_count_then_stops(db):
-    await create_question(db, prompt="Did my salary land?", rule="FREQ=DAILY;COUNT=3")
-    schedule = await db.fetchrow("SELECT * FROM job_schedules WHERE kind = 'scheduled_question'")
-    first = schedule["next_run_at"]
-    assert schedule["dtstart"] == first
-
-    for step in range(3):
-        moment = first + timedelta(days=step)
-        assert await enqueue_due_schedules(db, now=moment) == 1
-    schedule = await db.fetchrow("SELECT * FROM job_schedules WHERE kind = 'scheduled_question'")
-    assert schedule["active"] is False
-    assert await db.fetchval("SELECT count(*) FROM jobs WHERE kind = 'scheduled_question'") == 3
-
-    # The consumed rule cannot fire again on a later run.
-    assert await enqueue_due_schedules(db, now=first + timedelta(days=10)) == 0
-
-
-async def test_a_late_finite_question_still_counts_from_its_stored_anchor(db):
-    await create_question(db, prompt="Any bills due?", rule="FREQ=DAILY;COUNT=2")
-    schedule = await db.fetchrow("SELECT * FROM job_schedules WHERE kind = 'scheduled_question'")
-    first = schedule["next_run_at"]
-
-    # One run, then a catch-up five days later: the second occurrence is still the last one.
-    assert await enqueue_due_schedules(db, now=first) == 1
-    assert await enqueue_due_schedules(db, now=first + timedelta(days=5)) == 1
-    schedule = await db.fetchrow("SELECT * FROM job_schedules WHERE kind = 'scheduled_question'")
-    assert schedule["active"] is False
-    assert await db.fetchval("SELECT count(*) FROM jobs WHERE kind = 'scheduled_question'") == 2
-
-
 def _flat_category_inputs() -> ProjectionInput:
     return ProjectionInput(
         as_of=date(2026, 1, 1),
@@ -1191,13 +1112,11 @@ async def test_risk_warns_against_zero_when_no_floor_is_set(db, monkeypatch):
         return _fake_projection(first_floor_crossing="2026-11-20")
 
     monkeypatch.setattr("arno.tools.projection.project", fake_project)
-    await db.execute("UPDATE risk_state SET first_floor_crossing = '2026-12-01' WHERE id = 1")
     row = await risk_warning(db)
     assert row is not None
     body = row["body"]
     assert "staying above zero" in body
     assert "below the 90% line" in body
-    assert "goes below zero by 2026-11-20" in body
     assert "your floor" not in body
     assert "No floor is set" in body
 
@@ -1208,12 +1127,10 @@ async def test_risk_keeps_its_floor_wording_when_a_floor_is_set(db, monkeypatch)
         return _fake_projection(floor_paise=100_000, first_floor_crossing="2026-11-20")
 
     monkeypatch.setattr("arno.tools.projection.project", fake_project)
-    await db.execute("UPDATE risk_state SET first_floor_crossing = '2026-12-01' WHERE id = 1")
     row = await risk_warning(db)
     assert row is not None
     body = row["body"]
     assert "staying above your floor" in body
-    assert "goes below your floor by 2026-11-20" in body
     assert "zero" not in body
 
 
@@ -1295,99 +1212,27 @@ async def test_a_named_loan_prepayment_uses_its_real_remaining_emis(demo_ledger)
     assert prepay["interest_saved"]["paise"] > 0
 
 
-async def _question(db, rule: str) -> str:
-    return str(
-        await db.fetchval(
-            "INSERT INTO scheduled_questions (prompt, rule) VALUES ($1, $2) RETURNING id",
-            "What did I spend on food this week?",
-            rule,
-        )
-    )
-
-
-async def _question_schedule(db, question_id: str):
-    return await db.fetchrow(
-        """
-        SELECT * FROM job_schedules
-        WHERE kind = 'scheduled_question' AND scheduled_question_id = $1
-        """,
-        question_id,
-    )
-
-
 def _at(day: int, hour: int = 9) -> datetime:
     return datetime(2026, 11, day, hour, 0, tzinfo=INDIA)
 
 
-def _local(value: datetime) -> datetime:
-    return value.astimezone(INDIA)
+def _next(rule: str, after: datetime) -> datetime | None:
+    return next_occurrence(rule, after=after, created_at=_at(10), at=time(8, 0))
 
 
-async def test_a_count_one_question_runs_once_and_is_never_restarted(db):
-    question_id = await _question(db, "FREQ=WEEKLY;BYDAY=MO;COUNT=1")
-    await sync_scheduled_questions(db, now=_at(10))
-    row = await _question_schedule(db, question_id)
-    first = _local(row["dtstart"])
-    assert row["active"] is True
-    assert first == datetime(2026, 11, 16, 8, 0, tzinfo=INDIA)
-
-    # A laptop that slept through the Monday still fires it once, on the next tick (Friday).
-    assert await enqueue_due_schedules(db, now=_at(20)) == 1
-    row = await _question_schedule(db, question_id)
-    assert row["active"] is False
-    assert _local(row["dtstart"]) == first
-
-    # The next ticks used to reactivate the row with a fresh dtstart and recompute the count.
-    for now in (_at(20, 10), _at(23), _at(30), _at(30, 10)):
-        await sync_scheduled_questions(db, now=now)
-        row = await _question_schedule(db, question_id)
-        assert row["active"] is False, now
-        assert _local(row["dtstart"]) == first, now
-
-    assert await enqueue_due_schedules(db, now=_at(30, 10)) == 0
-    assert await db.fetchval("SELECT count(*) FROM jobs WHERE kind = 'scheduled_question'") == 1
+def test_a_count_one_question_runs_once_and_is_never_restarted():
+    rule = "FREQ=WEEKLY;BYDAY=MO;COUNT=1"
+    assert _next(rule, _at(10)) == datetime(2026, 11, 16, 8, 0, tzinfo=INDIA)
+    assert _next(rule, _at(20)) is None
+    assert _next(rule, _at(30)) is None
 
 
-async def test_a_count_three_question_runs_three_mondays_and_stops(db):
-    question_id = await _question(db, "FREQ=WEEKLY;BYDAY=MO;COUNT=3")
-    await sync_scheduled_questions(db, now=_at(10))
-    row = await _question_schedule(db, question_id)
-    first = _local(row["dtstart"])
-    assert first == datetime(2026, 11, 16, 8, 0, tzinfo=INDIA)
-
-    for day in (16, 23, 30):
-        assert await enqueue_due_schedules(db, now=_at(day)) == 1, day
-        row = await _question_schedule(db, question_id)
-        assert _local(row["dtstart"]) == first, day
-        await sync_scheduled_questions(db, now=_at(day))
-
-    row = await _question_schedule(db, question_id)
-    assert row["active"] is False
-    for now in (_at(30, 10), datetime(2026, 12, 7, 9, 0, tzinfo=INDIA)):
-        await sync_scheduled_questions(db, now=now)
-        row = await _question_schedule(db, question_id)
-        assert row["active"] is False, now
-        assert _local(row["dtstart"]) == first, now
-        assert await enqueue_due_schedules(db, now=now) == 0
-
-    assert await db.fetchval("SELECT count(*) FROM jobs WHERE kind = 'scheduled_question'") == 3
-
-
-async def test_editing_a_questions_rule_starts_a_new_anchor_and_reactivates_it(db):
-    question_id = await _question(db, "FREQ=WEEKLY;BYDAY=MO;COUNT=1")
-    await sync_scheduled_questions(db, now=_at(10))
-    await enqueue_due_schedules(db, now=_at(16))
-    assert (await _question_schedule(db, question_id))["active"] is False
-
-    await db.execute(
-        "UPDATE scheduled_questions SET rule = $1 WHERE id = $2",
-        "FREQ=WEEKLY;BYDAY=MO;COUNT=2",
-        question_id,
-    )
-    await sync_scheduled_questions(db, now=_at(23))
-    row = await _question_schedule(db, question_id)
-    assert row["active"] is True
-    assert _local(row["dtstart"]) == datetime(2026, 11, 30, 8, 0, tzinfo=INDIA)
+def test_a_count_three_question_runs_three_mondays_and_stops():
+    rule = "FREQ=WEEKLY;BYDAY=MO;COUNT=3"
+    assert _next(rule, _at(10)) == datetime(2026, 11, 16, 8, 0, tzinfo=INDIA)
+    assert _next(rule, _at(16)) == datetime(2026, 11, 23, 8, 0, tzinfo=INDIA)
+    assert _next(rule, _at(23)) == datetime(2026, 11, 30, 8, 0, tzinfo=INDIA)
+    assert _next(rule, _at(30)) is None
 
 
 def _verdict_inputs(

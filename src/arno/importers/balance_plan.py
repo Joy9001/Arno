@@ -1,14 +1,16 @@
 """Statement balance planning, booking, and restoration in one module.
 
-Review and commit must plan against the same closing and the same period. This module resolves
-that window once, forecasts the adjustment the review states, books the opening and anchors in one
-place, and reads the review snapshot back on undo. Plain Python over the database; no agent types.
+Review and commit must plan against the same closing and the same period. `plan_balances` is the
+one function for both: it resolves the window once and either forecasts what the review states or,
+under the commit's locks, books it. The opening and re-anchor adjustments it books carry the
+import's id, so a later commit finds them by that id. The review snapshot is read back on undo.
+Plain Python over the database; no agent types.
 """
 
 from __future__ import annotations
 
 from datetime import date
-from typing import Any, cast
+from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -30,23 +32,19 @@ class BalanceWindow(BaseModel):
 
 
 class BalancePlan(BaseModel):
-    """The read-only forecast the review screen states, from one resolved window."""
+    """What `plan_balances` returns: the forecast, and when booking, what it wrote.
+
+    `groups` and `review` stay empty for a forecast. After booking, `closing_adjustment_paise` is
+    the adjustment written and `review` holds the balance keys of `imports.review`.
+    """
 
     closing: int | None = None
     period_start: date | None = None
     period_end: date | None = None
     closing_adjustment_paise: int = 0
     stated_balance: tuple[int, int] | None = None
-
-
-class BalanceOutcome(BaseModel):
-    """What the booking wrote, for the caller's group list and review snapshot."""
-
     groups: list[str] = Field(default_factory=list)
-    opening_booked_paise: int = 0
-    superseded_anchors: int = 0
-    adjustment_paise: int = 0
-    reanchored_paise: int = 0
+    review: dict[str, Any] = Field(default_factory=dict)
 
 
 class AccountBalanceBefore(BaseModel):
@@ -134,6 +132,7 @@ async def _book_adjustment(
     amount: int,
     day: date,
     description: str,
+    import_id: str | None = None,
 ) -> str:
     """One visible balance adjustment against Equity: an opening or an anchor, never spending."""
     equity = await system_account(conn, "equity")
@@ -157,6 +156,7 @@ async def _book_adjustment(
             description=description,
             kind="adjustment",
             transfers=[transfer],
+            import_id=import_id,
         )
     return group.group_id
 
@@ -316,40 +316,46 @@ def _opening_description(account: dict[str, Any]) -> str:
     return f"Opening balance for {account['name']} statement"
 
 
-_OPENING_LIKE = "Opening balance for % statement"
-_REANCHOR_LIKE = "Stated balance re-anchor for % statement"
-
-
 def _reanchor_description(account: dict[str, Any]) -> str:
     return f"Stated balance re-anchor for {account['name']} statement"
 
 
-async def _live_adjustments(
-    conn: Connection, ledger_account_id: str, day: date, like: str
+async def _import_adjustments(
+    conn: Connection, ledger_account_id: str, day: date, *, opening_of: str | None
 ) -> list[dict[str, Any]]:
-    """This module's own live adjustments of one kind on one day, with their net on the account.
+    """Live import adjustments on one day, with their net on the account.
 
-    Matched by the label's shape, not the account's current name, so a rename keeps them found.
+    With `opening_of`, the opening that import placed on its first day. Without it, the
+    re-anchors: an import's adjustment dated after that import's own period. A closing
+    adjustment carries no import, so neither lookup sees it.
     """
     rows = await conn.fetch(
         """
         SELECT m.id,
                sum(CASE WHEN t.to_account_id = $1 THEN t.amount ELSE -t.amount END)::bigint AS net
         FROM movements m
+        JOIN imports i ON i.id = m.import_id
         JOIN v_movement_state ms ON ms.movement_id = m.id
         JOIN movement_legs ml ON ml.movement_id = m.id
         JOIN pgledger_transfers t ON t.id = ml.transfer_id
         WHERE m.kind = 'adjustment'
           AND ms.is_effective
           AND m.date = $2
-          AND m.description LIKE $3
+          AND CASE WHEN $3::text IS NULL
+                   THEN m.date > coalesce(
+                       i.period_end,
+                       i.period_start,
+                       -- An import with no printed period ends on its last line, like its window.
+                       (SELECT max(sl.date) FROM statement_lines sl WHERE sl.import_id = i.id)
+                   )
+                   ELSE i.id = $3 END
           AND (t.from_account_id = $1 OR t.to_account_id = $1)
         GROUP BY m.id
         ORDER BY m.id
         """,
         ledger_account_id,
         day,
-        like,
+        opening_of,
     )
     return [dict(row) for row in rows]
 
@@ -360,11 +366,12 @@ async def _rebook(
     *,
     day: date,
     description: str,
-    like: str,
+    import_id: str,
+    opening_of: str | None,
     wanted: int,
 ) -> list[str]:
     """Make this day's adjustments of one kind net to `wanted`: reverse them and book it once."""
-    rows = await _live_adjustments(conn, account["ledger_account_id"], day, like)
+    rows = await _import_adjustments(conn, account["ledger_account_id"], day, opening_of=opening_of)
     if sum(int(row["net"]) for row in rows) == wanted:
         return []
     groups: list[str] = []
@@ -374,7 +381,14 @@ async def _rebook(
         groups.append(group.group_id)
     if wanted:
         groups.append(
-            await _book_adjustment(conn, account, amount=wanted, day=day, description=description)
+            await _book_adjustment(
+                conn,
+                account,
+                amount=wanted,
+                day=day,
+                description=description,
+                import_id=import_id,
+            )
         )
     return groups
 
@@ -392,7 +406,7 @@ async def _rebalance_later_openings(
     """
     rows = await conn.fetch(
         """
-        SELECT period_start, check_result FROM imports
+        SELECT id, period_start, check_result FROM imports
         WHERE account_id = $1 AND status = 'committed' AND undone_at IS NULL
           AND period_start > $2
         ORDER BY period_start, committed_at, id
@@ -414,7 +428,8 @@ async def _rebalance_later_openings(
                 account,
                 day=day,
                 description=description,
-                like=_OPENING_LIKE,
+                import_id=row["id"],
+                opening_of=row["id"],
                 wanted=opening - before,
             )
         )
@@ -422,60 +437,20 @@ async def _rebalance_later_openings(
 
 
 async def rebalance_after(
-    conn: Connection, account: dict[str, Any], *, period_end: date | None
+    conn: Connection, account: dict[str, Any], *, period_end: date | None, import_id: str
 ) -> tuple[list[str], int]:
     """Re-place what sits after a statement: later openings, then a later stated balance.
 
-    Commit runs this after booking a statement; the repair runs it for imports committed before
-    the commit path did. With nothing stale it writes nothing.
+    Commit runs this after booking a statement. With nothing stale it writes nothing.
     """
     groups: list[str] = []
     if period_end is not None:
         groups.extend(await _rebalance_later_openings(conn, account, after=period_end))
-    anchor_groups, reanchored = await _hold_later_anchor(conn, account, period_end=period_end)
+    anchor_groups, reanchored = await _hold_later_anchor(
+        conn, account, period_end=period_end, import_id=import_id
+    )
     groups.extend(anchor_groups)
     return groups, reanchored
-
-
-async def _reanchor_opening(
-    conn: Connection,
-    account: dict[str, Any],
-    *,
-    period_start: date | None,
-    period_end: date | None,
-    opening: int | None,
-) -> tuple[list[str], int, int]:
-    """Book the statement's opening at its first day and supersede what it explains.
-
-    An account with no earlier entry, or one a later statement moved, holds no balance at
-    `period_start`: book the printed opening there. A balance adjustment dated inside the
-    statement is the old answer to a question this statement now answers row by row, so it is
-    reversed; a genuine difference still shows in the closing adjustment.
-    """
-    groups: list[str] = []
-    if period_start is None or opening is None:
-        return groups, 0, 0
-    superseded = await _superseded_anchors(
-        conn, account["ledger_account_id"], period_start, period_end or period_start
-    )
-    booked = opening - await _account_balance_at(
-        conn, account["ledger_account_id"], period_start, before=True
-    )
-    if booked:
-        groups.append(
-            await _book_adjustment(
-                conn,
-                account,
-                amount=booked,
-                day=period_start,
-                description=_opening_description(account),
-            )
-        )
-    for row in superseded:
-        async with write_group(conn, actor="user") as group:
-            await movements_mod.reverse_movement(group, str(row["id"]))
-        groups.append(group.group_id)
-    return groups, booked, len(superseded)
 
 
 async def _hold_later_anchor(
@@ -483,6 +458,7 @@ async def _hold_later_anchor(
     account: dict[str, Any],
     *,
     period_end: date | None,
+    import_id: str,
 ) -> tuple[list[str], int]:
     """Keep a balance stated after the statement: the balance on that day stays its figure.
 
@@ -495,12 +471,11 @@ async def _hold_later_anchor(
     anchor_paise = account["statement_balance_paise"]
     if period_end is None or anchor_day is None or anchor_paise is None or anchor_day <= period_end:
         return [], 0
-    description = _reanchor_description(account)
     current = await _account_balance_at(conn, account["ledger_account_id"], anchor_day)
     held = sum(
         int(row["net"])
-        for row in await _live_adjustments(
-            conn, account["ledger_account_id"], anchor_day, _REANCHOR_LIKE
+        for row in await _import_adjustments(
+            conn, account["ledger_account_id"], anchor_day, opening_of=None
         )
     )
     wanted = int(anchor_paise) - (current - held)
@@ -508,87 +483,52 @@ async def _hold_later_anchor(
         conn,
         account,
         day=anchor_day,
-        description=description,
-        like=_REANCHOR_LIKE,
+        description=_reanchor_description(account),
+        import_id=import_id,
+        opening_of=None,
         wanted=wanted,
     )
     return groups, (wanted - held) if groups else 0
 
 
-async def _closing_difference(
-    conn: Connection,
-    *,
-    account: dict[str, Any],
-    closing: int,
-    day: date,
+async def _forecast_delta(
+    conn: Connection, ledger_account_id: str, lines: list[dict[str, Any]], period_end: date
 ) -> int:
-    ledger = await _account_balance_at(conn, account["ledger_account_id"], day)
-    return int(closing) - ledger
+    """What the statement's rows would add to the account by `period_end`.
 
-
-async def _adjust_closing(
-    conn: Connection,
-    *,
-    account: dict[str, Any],
-    closing: int,
-    day: date,
-) -> tuple[str | None, int]:
-    difference = await _closing_difference(conn, account=account, closing=closing, day=day)
-    if difference == 0:
-        return None, 0
-    group = await _book_adjustment(
-        conn,
-        account,
-        amount=difference,
-        day=day,
-        description=f"Balance adjustment for {account['name']} statement",
-    )
-    return group, difference
-
-
-async def review_closing_adjustment(
-    conn: Connection,
-    *,
-    account: dict[str, Any],
-    check: dict[str, Any],
-    window: BalanceWindow,
-    lines: list[dict[str, Any]],
-) -> int:
-    """The balance adjustment a commit would book at the statement's last day, before it runs.
-
-    The review screen states this amount, so the same arithmetic the commit does: the rows it
-    would write (a merge only moves the difference), the opening it would book at the first day,
-    and the adjustments the statement's own dates supersede. A forecast is not the booking: the
-    commit recomputes the difference and refuses to book one the review did not confirm.
+    A merge only moves the difference to the movement it matched.
     """
-    closing = window.closing
-    period_start = window.period_start
-    period_end = window.period_end
-    if closing is None or period_end is None:
-        return 0
+    kept = [line for line in lines if line["match_state"] != "ignored"]
+    matched = {str(line["movement_id"]) for line in kept if line["movement_id"]}
+    found: dict[str, tuple[date, int]] = {}
+    if matched:
+        rows = await conn.fetch(
+            """
+            SELECT m.id, m.date,
+                   coalesce(sum(CASE WHEN t.from_account_id = $1 THEN -t.amount
+                                     WHEN t.to_account_id = $1 THEN t.amount
+                                     ELSE 0 END), 0)::bigint AS net
+            FROM movements m
+            LEFT JOIN movement_legs ml ON ml.movement_id = m.id
+            LEFT JOIN pgledger_transfers t ON t.id = ml.transfer_id
+            WHERE m.id = ANY($2::text[])
+            GROUP BY m.id, m.date
+            """,
+            ledger_account_id,
+            sorted(matched),
+        )
+        found = {str(row["id"]): (row["date"], int(row["net"])) for row in rows}
     delta = 0
-    for line in lines:
-        if line["match_state"] == "ignored":
-            continue
-        amount = int(line["amount_paise"])
+    for line in kept:
         already = 0
         if line["movement_id"]:
-            movement_id = str(line["movement_id"])
-            if await _movement_date(conn, movement_id) <= period_end:
-                already = await _net_on_account(conn, movement_id, account["ledger_account_id"])
-        delta += amount - already
-    opening = statement_opening(check)
-    if opening is not None and period_start is not None:
-        delta += opening - await _account_balance_at(
-            conn, account["ledger_account_id"], period_start, before=True
-        )
-        if period_end >= period_start:
-            for row in await _superseded_anchors(
-                conn, account["ledger_account_id"], period_start, period_end
-            ):
-                delta -= int(row["net"])
-    ledger = await _account_balance_at(conn, account["ledger_account_id"], period_end)
-    return int(closing) - (ledger + delta)
+            movement = found.get(str(line["movement_id"]))
+            if movement is None:
+                raise InvalidLedgerError("The matched movement disappeared")
+            if movement[0] <= period_end:
+                already = movement[1]
+        delta += int(line["amount_paise"]) - already
+    return delta
 
 
 async def plan_balances(
@@ -597,104 +537,134 @@ async def plan_balances(
     account: dict[str, Any],
     row: dict[str, Any],
     lines: list[dict[str, Any]],
+    book: bool = False,
+    adjustment_confirmed: bool = False,
 ) -> BalancePlan:
-    """Read-only forecast for the review screen, from the same window the commit books."""
+    """The one plan for a statement's balances: the review's forecast, or the commit's booking.
+
+    Both read the same window. Without `book` it writes nothing and forecasts the adjustment a
+    commit would book at the statement's last day: the rows it would write (a merge only moves
+    the difference), the opening it would place at the first day, and the adjustments the
+    statement's own dates supersede. With `book`, called after the commit wrote its rows and
+    under its locks, it places the opening, supersedes those adjustments, books the closing
+    difference, and re-places what sits after the statement. The booking recomputes the
+    difference from the ledger and refuses one the review did not confirm.
+    """
     window = resolve_balance_window(row, lines)
     check = row["check_result"] or {}
-    adjustment = await review_closing_adjustment(
-        conn, account=account, check=check, window=window, lines=lines
-    )
+    closing, start, end = window.closing, window.period_start, window.period_end
+    ledger_id = account["ledger_account_id"]
+    opening = statement_opening(check)
+    opening_delta = 0
+    superseded: list[dict[str, Any]] = []
+    if opening is not None and start is not None:
+        superseded = await _superseded_anchors(conn, ledger_id, start, end or start)
+        opening_delta = opening - await _account_balance_at(conn, ledger_id, start, before=True)
+
+    if not book:
+        adjustment = 0
+        if closing is not None and end is not None:
+            delta = await _forecast_delta(conn, ledger_id, lines, end)
+            delta += opening_delta - sum(int(item["net"]) for item in superseded)
+            adjustment = int(closing) - (await _account_balance_at(conn, ledger_id, end) + delta)
+        conflict = await stated_balance_conflict(
+            conn,
+            account=account,
+            check=check,
+            lines=lines,
+            period_start=start,
+            period_end=end,
+        )
+        return BalancePlan(
+            closing=closing,
+            period_start=start,
+            period_end=end,
+            closing_adjustment_paise=adjustment,
+            stated_balance=conflict,
+        )
+
+    # The statement is bank evidence for every day it covers, so a stated balance on one of those
+    # days is replaced. Never silently: the review says both figures, and this gate needs its yes.
     conflict = await stated_balance_conflict(
-        conn,
-        account=account,
-        check=check,
-        lines=lines,
-        period_start=window.period_start,
-        period_end=window.period_end,
+        conn, account=account, check=check, lines=lines, period_start=start, period_end=end
     )
-    return BalancePlan(
-        closing=window.closing,
-        period_start=window.period_start,
-        period_end=window.period_end,
-        closing_adjustment_paise=adjustment,
-        stated_balance=conflict,
-    )
-
-
-async def apply_balances(
-    conn: Connection,
-    *,
-    account: dict[str, Any],
-    check: dict[str, Any],
-    period_start: date | None,
-    period_end: date | None,
-    closing: int | None,
-    adjustment_confirmed: bool = False,
-) -> tuple[BalanceOutcome, dict[str, Any]]:
-    """Book the opening, the closing adjustment, and a later anchor, once both paths hold locks.
-
-    Returns the groups to join to the import's undo groups and the balance keys for its review.
-    A non-zero closing difference needs the review screen's confirmation before it is booked.
-    """
+    if conflict is not None and not adjustment_confirmed:
+        stated, shown = conflict
+        raise ConflictLedgerError(
+            stated_balance_reason(stated, account["statement_balance_as_of"], shown),
+            details={"stated_balance_paise": stated, "statement_balance_paise": shown},
+        )
+    import_id = str(row["id"])
     groups: list[str] = []
-    anchor_groups, opening_booked, superseded = await _reanchor_opening(
-        conn,
-        account,
-        period_start=period_start,
-        period_end=period_end,
-        opening=statement_opening(check),
-    )
-    groups.extend(anchor_groups)
+    if opening_delta and start is not None:
+        groups.append(
+            await _book_adjustment(
+                conn,
+                account,
+                amount=opening_delta,
+                day=start,
+                description=_opening_description(account),
+                import_id=import_id,
+            )
+        )
+    for item in superseded:
+        async with write_group(conn, actor="user") as group:
+            await movements_mod.reverse_movement(group, str(item["id"]))
+        groups.append(group.group_id)
 
     adjustment = 0
-    if closing is not None and period_end is not None:
-        difference = await _closing_difference(
-            conn, account=account, closing=closing, day=period_end
-        )
+    if closing is not None and end is not None:
+        difference = int(closing) - await _account_balance_at(conn, ledger_id, end)
         # A statement whose closing disagrees with the ledger is a real difference, not a rounding.
         # It is the user's call: the review says the amount, and commit books it only when the
         # review screen carried that confirmation.
         if difference and not adjustment_confirmed:
             raise ConflictLedgerError(
-                closing_adjustment_reason(difference, period_end)
-                + " Confirm the adjustment first.",
+                closing_adjustment_reason(difference, end) + " Confirm the adjustment first.",
                 details={"adjustment_paise": difference, "adjustment_confirmed": False},
             )
-        adjustment_group, adjustment = await _adjust_closing(
-            conn, account=account, closing=closing, day=period_end
-        )
-        if adjustment_group:
-            groups.append(adjustment_group)
+        if difference:
+            adjustment = difference
+            groups.append(
+                await _book_adjustment(
+                    conn,
+                    account,
+                    amount=difference,
+                    day=end,
+                    description=f"Balance adjustment for {account['name']} statement",
+                )
+            )
 
-    later_groups, reanchored = await rebalance_after(conn, account, period_end=period_end)
+    later_groups, reanchored = await rebalance_after(
+        conn, account, period_end=end, import_id=import_id
+    )
     groups.extend(later_groups)
 
     existing_as_of = account["statement_balance_as_of"]
-    statement_updated = (
-        closing is not None
-        and period_end is not None
-        and (existing_as_of is None or period_end >= existing_as_of)
-    )
     snapshot = BalanceReviewSnapshot(
         account_before=AccountBalanceBefore(
             statement_balance_paise=account["statement_balance_paise"],
             statement_balance_as_of=existing_as_of,
         ),
-        statement_updated=statement_updated,
+        statement_updated=(
+            closing is not None
+            and end is not None
+            and (existing_as_of is None or end >= existing_as_of)
+        ),
         adjustment_paise=adjustment,
-        opening_booked_paise=opening_booked,
-        superseded_anchors=superseded,
+        opening_booked_paise=opening_delta,
+        superseded_anchors=len(superseded),
         reanchored_paise=reanchored,
         anchors_repaired=True,
     )
-    outcome = BalanceOutcome(
+    return BalancePlan(
+        closing=closing,
+        period_start=start,
+        period_end=end,
+        closing_adjustment_paise=adjustment,
         groups=groups,
-        opening_booked_paise=opening_booked,
-        superseded_anchors=superseded,
-        adjustment_paise=adjustment,
-        reanchored_paise=reanchored,
+        review=snapshot.to_review_json(),
     )
-    return outcome, snapshot.to_review_json()
 
 
 async def restore_account_balance(
@@ -747,46 +717,16 @@ async def restore_account_balance(
         )
 
 
-async def _movement_date(conn: Connection, movement_id: str) -> date:
-    row = await conn.fetchrow("SELECT date FROM movements WHERE id = $1", movement_id)
-    if row is None:
-        raise InvalidLedgerError("The matched movement disappeared")
-    return cast(date, row["date"])  # movements.date is a date column
-
-
-async def _net_on_account(conn: Connection, movement_id: str, ledger_account_id: str) -> int:
-    row = await conn.fetchrow(
-        """
-        SELECT coalesce(sum(
-            CASE WHEN t.from_account_id = $1 THEN -t.amount
-                 WHEN t.to_account_id = $2 THEN t.amount
-                 ELSE 0 END
-        ), 0)::bigint AS net
-        FROM movement_legs ml
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
-        WHERE ml.movement_id = $3
-        """,
-        ledger_account_id,
-        ledger_account_id,
-        movement_id,
-    )
-    return int(row["net"]) if row else 0
-
-
 # Public seams for the balance tests; the booking path calls the private helpers above directly.
 book_adjustment = _book_adjustment
 superseded_anchors = _superseded_anchors
-adjust_closing = _adjust_closing
 
 
 __all__ = [
     "AccountBalanceBefore",
-    "BalanceOutcome",
     "BalancePlan",
     "BalanceReviewSnapshot",
     "BalanceWindow",
-    "adjust_closing",
-    "apply_balances",
     "book_adjustment",
     "closing_adjustment_reason",
     "closing_source_reason",
@@ -794,7 +734,6 @@ __all__ = [
     "plan_balances",
     "resolve_balance_window",
     "restore_account_balance",
-    "review_closing_adjustment",
     "statement_balance_on",
     "statement_opening",
     "stated_balance_conflict",

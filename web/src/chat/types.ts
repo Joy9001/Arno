@@ -16,6 +16,7 @@ export type ChatDataParts = {
     attachment_id: string;
     filename: string;
     detected_kind?: string;
+    import_id?: string;
   };
   photo: {
     attachment_id: string;

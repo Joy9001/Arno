@@ -6,7 +6,6 @@ from datetime import date
 
 import pytest
 
-from arno.jobs import recaps as recap_job
 from arno.ledger.accounts import create_account
 from arno.ledger.movements import record_expense, record_income, record_refund
 from arno.ledger.payees import create_payee
@@ -217,14 +216,6 @@ async def test_an_empty_period_says_so_and_the_list_starts_at_the_first_row(ledg
 
     await recaps.mark_seen(ledger, "month-2026-10", today=TODAY)
     assert (await recaps.recap_list(ledger, today=TODAY))["unseen"] == 0
-
-
-async def test_the_job_announces_a_month_once_and_skips_a_quiet_week(ledger):
-    await _seed(ledger)
-    first = await recap_job.announce_recaps(ledger, today=TODAY)
-    assert [row["data"]["period_id"] for row in first] == ["month-2026-10"]
-    assert first[0]["title"] == "Your October recap is ready"
-    assert await recap_job.announce_recaps(ledger, today=TODAY) == []
 
 
 def test_recap_routes_need_a_session(client):

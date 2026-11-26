@@ -35,7 +35,6 @@ function record(id: string, status: ImportRecord["status"]): ImportRecord {
     reason: "password required",
     recovery_action: null,
     can_retry_parse: false,
-    parser_saved: false,
     categorize: null,
     created_at: "2026-11-01T10:00:00Z",
     committed_at: null,
@@ -71,7 +70,6 @@ describe("the statement password card", () => {
     installFetch((url) => {
       if (url.startsWith("/api/import-history")) return respond({ items: [] });
       if (url === "/api/accounts") return respond({ accounts: [] });
-      if (url === "/api/layouts") return respond({ items: [] });
       if (url === "/api/imports/imp_1") return respond(record("imp_1", "needs_password"));
       if (url === "/api/imports/imp_2") return respond(record("imp_2", "needs_password"));
       return undefined;
@@ -96,7 +94,6 @@ describe("the statement password card", () => {
     installFetch((url) => {
       if (url.startsWith("/api/import-history")) return respond({ items: [] });
       if (url === "/api/accounts") return respond({ accounts: [] });
-      if (url === "/api/layouts") return respond({ items: [] });
       if (url === "/api/imports/imp_1/password") {
         unlocked = true;
         return respond(record("imp_1", "parsing"));

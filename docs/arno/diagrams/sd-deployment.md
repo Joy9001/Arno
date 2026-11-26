@@ -9,7 +9,7 @@ only routes out are the LLM endpoints you choose and encrypted off-site backups.
 **Diagram type:** Architecture, grouped by network boundary.
 
 **What the budget forced out:** Ollama (an optional local profile that runs on the
-host), contentless push pings, and the host CLI are left out;
+host), the optional notification webhook (`ARNO_NOTIFY_WEBHOOK_URL`), and the host CLI are left out;
 [`../specs/platform.md`](../specs/platform.md) and
 [`../operations/self-hosting.md`](../operations/self-hosting.md) cover them. 8 nodes, 3 zones, 8
 arrows; the accent marks the API and the single entry point.

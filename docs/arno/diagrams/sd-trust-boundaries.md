@@ -6,11 +6,17 @@ rows. The agent reads it back as data. Every write passes the gate: everyday wri
 with undo, and wide writes wait for your tap. Data goes to the LLM
 endpoints you chose, and no other route leads out.
 
+**Sign-in boundary (not drawn):** `api` trusts the `Tailscale-User-Login` header only because it
+listens on loopback behind `tailscale serve`. The `sandbox` shares `sandbox-net` with `api`, so
+`api` refuses every request from that subnet (`ARNO_SANDBOX_SUBNET`), and refuses cross-site
+requests, so neither model-written code nor a hostile page can borrow the header.
+
 **Diagram type:** Architecture, using the secure paved road pattern.
 
-**What the budget forced out:** A photo going straight into the thread, voice notes,
-encrypted backups, push pings, and statement passwords are left out; the step 7 text covers them. 7 nodes, 3 zones, 10 paths; the accent marks the gate and your tap, the one
-privileged moment.
+**What the budget forced out:** A photo going straight into the thread, voice notes, encrypted
+backups, the optional notification webhook, and statement passwords are left out; the step 7 text
+covers them. 7 nodes, 3 zones, 10 paths; the accent marks the gate and your tap, the one privileged
+moment.
 
 ![Outside text reaches the agent, but wide writes need you](./sd-trust-boundaries.png)
 

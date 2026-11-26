@@ -6,12 +6,14 @@ import hashlib
 from datetime import date
 from typing import Any
 
+from arno.importers.extract import ExtractedAccount, ExtractedStatement, finalize_extracted
 from arno.importers.periods import ledger_opening as opening_balance
 from arno.importers.pipeline import create_import
 from arno.importers.reconcile import insert_lines, reconcile
 from arno.ledger.accounts import create_account
 from arno.ledger.audit import new_id
 from tests.fixtures.import_review import review_statement
+from tests.import_fixtures import statement_from_csv
 
 PERIOD = (date(2026, 4, 1), date(2026, 4, 30))
 
@@ -146,7 +148,65 @@ async def queued_import(
 async def upload(
     conn, payload: bytes, *, account_id: str | None = None, name: str = "statement.csv"
 ) -> str:
-    """Put a statement file in the database and open the import the parser would see."""
+    """Put a statement file in the database and open its import, as an upload does."""
     attachment_id = await attachment(conn, payload, name=name)
     row = await create_import(conn, attachment_id=attachment_id, account_id=account_id)
     return row["id"]
+
+
+def extracted(
+    rows: list[dict],
+    *,
+    opening: int | None = None,
+    closing: int | None = None,
+    period: tuple[date, date] | None = PERIOD,
+    name: str | None = None,
+    institution: str | None = None,
+    account_number: str | None = None,
+    **extra: Any,
+) -> ExtractedStatement:
+    """What extraction returns for these rows (`row()` dicts), ready for `finalize_extracted`."""
+    return ExtractedStatement(
+        account=ExtractedAccount(name=name, institution=institution, account_number=account_number),
+        opening=opening,
+        closing=closing,
+        period_start=period[0].isoformat() if period else None,
+        period_end=period[1].isoformat() if period else None,
+        rows=rows,
+        **extra,
+    )
+
+
+async def finalize(conn, import_id: str, rows: list[dict], *, text: str = "", **kwargs: Any) -> str:
+    """Finish an import the way extraction does; returns its status."""
+    return await finalize_extracted(conn, import_id, extracted(rows, **kwargs), text=text)
+
+
+PROFILES: dict[str, dict[str, Any]] = {
+    "sbi": {
+        "layout": "bank",
+        "name": "SBI savings",
+        "institution": "SBI",
+        "account_number": "50100123456789",
+    },
+    "card": {"layout": "card", "name": "Slice card", "institution": "Slice"},
+    "wallet": {"layout": "wallet", "name": "PhonePe", "institution": "PhonePe"},
+    "cash": {"layout": "wallet", "name": "Cash Account", "institution": "Cash"},
+}
+
+
+async def read_csv(conn, import_id: str, profile: str = "sbi") -> str:
+    """Finish an import by reading its stored CSV as extraction would; returns its status."""
+    data = bytes(
+        await conn.fetchval(
+            "SELECT a.data FROM imports i JOIN attachments a ON a.id = i.attachment_id "
+            "WHERE i.id = $1",
+            import_id,
+        )
+    )
+    return await finalize_extracted(
+        conn,
+        import_id,
+        statement_from_csv(data, **PROFILES[profile]),
+        text=data.decode("utf-8"),
+    )

@@ -174,7 +174,7 @@ verdicts without duplicating ledger data. Read-only.
 - **User benefit:** Answers financial questions inside another assistant the user already has open.
 - **Enabling shape:** Thin MCP adapter over `src/arno/tools/` using `mcp` or `fastmcp-slim`
   ([T12](#external-tool-registry)), tailnet-only, authenticated with a scoped, expiring, revocable
-  token created in **Settings** behind a fresh passkey. Start with typed reads; defer `run_query`.
+  token created in **Settings**. Start with typed reads; defer `run_query`.
 - **Acceptance criteria:** Write tools are unreachable and rejected server-side; tokens are scoped
   read-only, revocable, and excluded from logs and exports; returns preserve outside-text markers,
   as-of dates, source IDs, and zero-versus-unknown semantics; access stays tailnet-only.
@@ -318,12 +318,13 @@ against the ledger, flagging unknown accounts or stale liability balances.
 - **C24 (Freelancer receivables and net payouts):** Invoice aging and gross-to-net reconciliation
   ride on C15's freelance trigger; payment-gateway webhooks ([T10](#external-tool-registry)) are
   not pursued because Arno stays off the public internet.
-- **C25 (Merchant identity enrichment):** Internal seed rules and categorizer rules handle Indian
-  UPI payees; external enrichment (such as US/Canada-only Plaid Enrich) is parked unless a measured
-  miss rate justifies it.
-- **C26 (Additional notification and approval channels):** Inbox and web push exist; chat-app
-  bridges are parked in [`parked.md`](parked.md#chat-app-integrations-signal-telegram-whatsapp) and
-  may be superseded by C31.
+- **C25 (Merchant identity enrichment):** Saved category rules and the model categorizer handle
+  Indian UPI payees; external enrichment (such as US/Canada-only Plaid Enrich) is parked unless a
+  measured miss rate justifies it.
+- **C26 (Additional notification and approval channels):** The inbox and an optional webhook
+  (`ARNO_NOTIFY_WEBHOOK_URL`) exist; chat-app bridges are parked in
+  [`parked.md`](parked.md#chat-app-integrations-signal-telegram-whatsapp) and may be superseded by
+  C31.
 - **C27 (Business-system and accountant handoff):** Business accounting sync (Tally, Xero,
   QuickBooks, Zoho) and GST/LEI checks are outside personal finance scope; JSON, CSV, and workbook
   exports already cover accountant handoff.

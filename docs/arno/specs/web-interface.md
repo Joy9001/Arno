@@ -9,7 +9,7 @@ underlying API and authentication contracts.
 
 The web app uses **six primary destinations** on a slim desktop icon rail: **Ask** (agent home),
 **Chats**, **Money**, **Activity**, **Recaps**, and **Settings**, with the orb brand button at the
-top of the rail and a live **Background work** indicator above **Settings** whenever jobs run. On
+top of the rail. On
 phones, the rail collapses into a five-slot bottom tab bar (**Ask**, **Money**, **Activity**,
 **Recaps**, and **More**), while conversation history stays inside the chat view.
 
@@ -23,8 +23,7 @@ The following table lists every live route and alias handled by `web/src/Shell.t
 
 | Route | Destination and behavior |
 |---|---|
-| `/setup` | Passkey enrollment page (outside the shell); also shown automatically when `setup_required` is true |
-| Sign-in view | Passkey login screen shown outside the shell whenever unauthenticated |
+| Sign-in view | Outside the shell whenever unauthenticated: a passphrase form when `ARNO_PASSPHRASE` is set, otherwise a note that access is through Tailscale |
 | `#ask` | Agent home: greeting, composer, starting questions, and noticed items |
 | `#chats`, `#chats/<thread>`, `#chats/<thread>/<message>` | Conversation list beside the thread in **Chat** or **Flow** view, jumping to a specific message when valid |
 | `#money/timeline` (alias `#money/projection`) | Ledger spending behind today joined with the Monte Carlo projection ahead |
@@ -36,7 +35,7 @@ The following table lists every live route and alias handled by `web/src/Shell.t
 | `#activity/imports`, `#activity/imports/<import_id>` | Statement upload, active import review, and paginated import history |
 | `#activity/inbox` | Notification inbox and scheduled-question management |
 | `#recaps`, `#recaps/<period_id>` | Daily, weekly, and monthly ledger-computed recap stories |
-| `#settings/<section>` | One of 11 settings sections (`profile`, `categories`, `notifications`, `passkeys`, `questions`, `memory`, `history`, `jobs`, `backups`, `export`, `deletion`) |
+| `#settings/<section>` | One of 10 settings sections (`profile`, `categories`, `notifications`, `questions`, `memory`, `history`, `diagnostics`, `backups`, `export`, `deletion`) |
 | `#home`, `#home/<thread>[/<message>]` | Legacy aliases redirected to `#ask` or `#chats/<thread>[/<message>]` |
 
 ## Page specifications
@@ -69,7 +68,7 @@ The following table specifies the financial workspace panels:
 | **Money → People** | Tiles grouped into owed-to-you, you-owe, and settled, clearly stating direction | Ask about a person or record a settlement in chat |
 | **Activity → Ledger** | Date, kind, account, and search filters above a cursor-paginated movement list (25 per page) plus the **Uncategorized** queue (`GET /api/uncategorized`) grouping unlabeled payees by frequency and total | Open movement provenance and balanced transfers, undo eligible rows, ask about a movement, create custom categories, or assign categories directly to uncategorized payee groups |
 | **Activity → Imports** | Statement upload/start controls, active import review (status badge, counts, **Needs a decision** filter for ambiguous matches, suggested own-account transfers, and credit-card credit classifications, manual opening balance input, and closing adjustment confirmation), keyset-paginated import history | Resolve line decisions, enter statement passwords, commit, reject, undo committed imports, or purge stored statement files |
-| **Activity → Inbox** | Filterable notifications by kind (proposal, reminder, risk, pattern, scheduled answer, job failure) beside scheduled-question shortcuts | Mark read, open in a seeded chat, or resolve items |
+| **Activity → Inbox** | Filterable notifications by kind (proposal, reminder, risk, pattern, scheduled answer, job failure) beside scheduled-question shortcuts | Mark read or open in a seeded chat |
 | **Recaps** | Sidebar period list grouped into **Daily**, **Weekly**, and **Monthly** recaps with **New** badges, paired with a keyboard-navigable story viewer (`ArrowLeft` / `ArrowRight`) where every figure links to its underlying ledger rows; empty ledgers display an onboarding state instead of ₹0 stories | Step through stories, open contributing ledger rows, track detected recurring charges in chat, or ask about a period |
 
 ### Settings
@@ -83,28 +82,21 @@ The following table lists all 11 Settings sections:
 |---|---|---|
 | Everyday | **Profile & floor** (`profile`) | Display name, financial floor (INR with client validation), currency, time zone, default horizon, and last model error summary |
 | Everyday | **Categories** (`categories`) | Active and archived categories (create, rename, archive/restore, toggle `reducible` for affordability tradeoffs) and paginated merchant rules (add, promote `llm` rules to user rules, delete) |
-| Everyday | **Notifications** (`notifications`) | Briefing day, notification time, reminder lead days, and Web Push browser permission and subscription toggle (`PushStatus`) |
-| Everyday | **Passkeys** (`passkeys`) | Registered passkeys, current session info, rename/delete controls (protecting the last passkey), and **Add a device** QR enrollment flow |
+| Everyday | **Notifications** (`notifications`) | Briefing day, notification time, and reminder lead days |
 | Everyday | **Scheduled questions** (`questions`) | Paginated user-defined recurring questions with RRULE schedules and an active toggle |
 | Everyday | **Agent memory** (`memory`) | Saved memories across all three live kinds (`preference`, `fact`, `rule`) with kind chips, editable body text, source, scope, enable/disable toggle, and permanent delete with deletion preview |
 | Everyday | **History** (`history`) | Cursor-paginated audit log (`HistoryPanel`) of write groups with actor, timestamp, summary, and undo action |
-| Advanced | **Background work** (`jobs`) | Live and recent job statuses with retry controls for failed jobs, plus **Models and diagnostics** (`RuntimeInfo`) displaying each role's configured model and host and an **Open Phoenix** link when `ARNO_PHOENIX_UI_URL` is configured |
+| Advanced | **Diagnostics** (`diagnostics`) | **Models and diagnostics** (`RuntimeInfo`) displaying each role's configured model and host and an **Open Phoenix** link when `ARNO_PHOENIX_UI_URL` is configured |
 | Advanced | **Backups** (`backups`) | Last successful backup status, age, and recovery instructions; distinguishes unavailable status from no backup yet |
-| Advanced | **Export** (`export`) | Format guidance, `ExportScope` listing the eight excluded credential tables, and fresh-passkey-gated downloads for JSON, CSV ZIP, and `pg_dump` |
-| Advanced | **Delete everything** (`deletion`) | `DeletionScope` preview of every table affected, requiring fresh passkey re-verification and the typed `"delete everything"` confirmation phrase |
+| Advanced | **Export** (`export`) | Format guidance, `ExportScope` listing the excluded credential tables, and downloads for JSON, CSV ZIP, and `pg_dump` |
+| Advanced | **Delete everything** (`deletion`) | `DeletionScope` preview of every table affected, requiring the typed `"delete everything"` confirmation phrase |
 
-### Background work indicators and toasts
+### Badges and categorization status
 
-The shell runs a single polling loop over `GET /api/jobs/activity` (every 3 seconds while a job is
-running or due within 30 seconds, and every 30 seconds while idle), backed by a `zustand` store
-(`web/src/jobs.ts`):
-
-- **Rail and tab-bar indicator (`BackgroundWork`):** Shows a spinner and active job summary on the
-  desktop rail and mobile tab bar, navigating to `#settings/jobs` on select.
-- **Job toasts (`JobToasts`):** Uses Radix `Toast` to announce finished categorizations (with a
-  **Review** shortcut to **Uncategorized**), batch submissions, scheduled answers, weekly
-  briefings, and job failures (persisting until dismissed, with inline **Retry** and **Details**
-  actions).
+The shell refreshes the inbox and recap badges every 30 seconds. A committed import shows its
+categorize state (`imports.categorize`) and looks again every few seconds while the state is
+`queued` or `running`; a `failed` state offers **Retry**, which calls
+`POST /api/imports/{id}/categorize`.
 
 ## Threads and import cards
 
@@ -113,9 +105,10 @@ running when it opens (Arno answering an inbox item, or a turn that outlived its
 its stream. A new conversation gets its server id from `POST /api/threads` before its first message,
 photo, or voice note.
 
-An attached statement shows as an import card in the thread. The card carries the statement's status
-line and the password field for an encrypted file. No step-by-step run view exists: statement
-extraction is being rebuilt ([`import.md`](import.md#extraction-status)).
+An attached statement shows as an import card in the thread, backed by the import its upload
+opened. The card carries the statement's progress line and links to the password field for an
+encrypted file. No step-by-step run view exists: extraction runs by itself
+([`import.md`](import.md#extraction)).
 
 ## Responsive and state rules
 
@@ -150,5 +143,5 @@ server in production). The following table lists the key dependencies installed 
 | Chat and streaming UI | `ai` 7 (pinned to match `VercelAIAdapter` `sdk_version=7`), `@ai-sdk/react`, `@assistant-ui/react`, `@assistant-ui/ai-sdk`, `@assistant-ui/generative-ui`, `@assistant-ui/react-streamdown`, `assistant-stream`, `streamdown`, `@streamdown/code` |
 | Components and styling | `@radix-ui/themes`, Radix Primitives (`@radix-ui/react-dialog`, `@radix-ui/react-popover`, `@radix-ui/react-tabs`, `radix-ui`), `tailwindcss` v4 (`@tailwindcss/vite`), `tw-animate-css`, `tw-shimmer`, `class-variance-authority`, `clsx`, `tailwind-merge` |
 | Visualization, icons, and motion | `recharts`, `lucide-react`, `motion`, `react-spinners` |
-| State, validation, auth, and QR | `zustand`, `zod`, `@simplewebauthn/browser`, `qrcode.react` |
+| State and validation | `zustand`, `zod` |
 | Testing and linting | `vitest`, `@testing-library/react`, `@testing-library/dom`, `jsdom`, `eslint`, `typescript-eslint` |

@@ -8,7 +8,7 @@ from typing import Any
 
 from arno.db.conn import Connection, connect
 from arno.india.formatting import format_paise
-from arno.notifications import create_notification, send_push_for_kind
+from arno.notifications import create_notification
 from arno.tools import patterns
 
 logger = logging.getLogger("arno.jobs.patterns")
@@ -125,14 +125,9 @@ async def run_pattern_detection(
     return created
 
 
-async def handle_pattern_detection(payload: dict[str, Any]) -> dict[str, Any]:
-    del payload
+async def handle_pattern_detection() -> None:
     async with connect() as conn:
-        rows = await run_pattern_detection(conn)
-        for kind in ("new_subscription", "new_income", "missed_recurring", "price_change"):
-            if any(row["kind"] == kind for row in rows):
-                await send_push_for_kind(conn, kind)
-        return {"created": len(rows), "ids": [row["id"] for row in rows]}
+        await run_pattern_detection(conn)
 
 
 __all__ = ["handle_pattern_detection", "run_pattern_detection"]

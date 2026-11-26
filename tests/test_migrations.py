@@ -17,11 +17,6 @@ from tests.invariants import check_ledger
 
 EXPECTED_TABLES = {
     "settings",
-    "users",
-    "webauthn_credentials",
-    "sessions",
-    "webauthn_challenges",
-    "setup_tokens",
     "pgledger_accounts",
     "pgledger_transfers",
     "pgledger_entries",
@@ -32,8 +27,6 @@ EXPECTED_TABLES = {
     "captures",
     "imports",
     "statement_lines",
-    "statement_layouts",
-    "parser_versions",
     "attachments",
     "schedules",
     "series_detections",
@@ -48,12 +41,7 @@ EXPECTED_TABLES = {
     "messages",
     "audit_log",
     "notifications",
-    "push_subscriptions",
-    "jobs",
-    "job_schedules",
     "backup_runs",
-    "vapid_keys",
-    "risk_state",
 }
 
 EXPECTED_VIEWS = {
@@ -175,7 +163,6 @@ async def test_agent_ro_can_read_the_ledger_but_not_auth_tables(clean_database):
             assert await conn.fetchval(f"SELECT count(*) FROM {readable}") == 0
 
         for forbidden in (
-            "users",
             "accounts",
             "movement_legs",
             "pgledger_accounts_view",
@@ -564,14 +551,6 @@ async def test_subtype_foreign_keys_and_single_user_guard(db):
                 "VALUES ('Bad Person', 'person', 'acc_missing_00000000000000')"
             )
     assert getattr(exc_payee.value, "constraint_name", None) == "payees_person_account_id_fkey"
-
-    async with db.transaction():
-        await db.execute("INSERT INTO users (webauthn_user_handle) VALUES (decode('01', 'hex'))")
-        with pytest.raises(asyncpg.UniqueViolationError) as exc_user:
-            await db.execute(
-                "INSERT INTO users (webauthn_user_handle) VALUES (decode('02', 'hex'))"
-            )
-    assert getattr(exc_user.value, "constraint_name", None) == "users_one_row_idx"
 
 
 async def test_pgledger_accounts_name_equals_account_id_for_every_kind(db):
@@ -1299,7 +1278,6 @@ async def test_a_populated_pre_0032_database_upgrades_and_keeps_its_ledger(tmp_p
             assert {
                 "categories_lower_name_idx",
                 "payees_lower_upi_id_idx",
-                "statement_layouts_lower_inst_kind_idx",
             } <= indexes
 
             assert await check_ledger(conn) == []

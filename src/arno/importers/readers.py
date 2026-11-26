@@ -1,52 +1,29 @@
-"""Readers: turn any file into cells or positioned words on the host.
+"""Host file handling for statements: kind, lock, unlock, PDF pages, and a text preview.
 
-Monty never touches the file. It sees plain dicts, lists, strings, ints, floats, bools and
-None. Every date crosses as an ISO string. The reader is chosen by magic bytes, never the
-extension, and a locked Office file is decrypted here before Calamine sees it.
+The host never turns a file into rows. It sniffs the kind from magic bytes, opens locks, counts and
+renders PDF pages for the vision path, and reads a few header lines so the period and the account
+can be found. The sandbox and the vision model do the reading.
 """
 
 from __future__ import annotations
 
 import asyncio
-import csv
-import datetime as dt
-import functools
 import io
 import json
-import re
-import struct
 import threading
 import zipfile
-import zlib
 from collections.abc import Callable
-from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any, TypedDict, override
+from typing import Any
 
 MAX_ZIP_TOTAL = 200 * 1024 * 1024
 MAX_ZIP_MEMBERS = 50
+MAX_DOC_PAGES = 150
+PREVIEW_ROWS = 40
 
-_KIND_NAMES = {
-    "xlsx": "xlsx",
-    "xls": "xls",
-    "xlsb": "xlsb",
-    "ods": "ods",
-    "docx": "docx",
-    "html": "html",
-    "rtf": "rtf",
-    "ofx": "ofx",
-    "mt940": "mt940",
-    "camt": "camt",
-    "xml": "xml",
-    "json": "json",
-    "pdf": "pdf",
-    "image": "image",
-    "text": "text",
-    "zip": "zip",
-    "doc": "doc",
-    "ole_other": "ole_other",
-    "encrypted_ooxml": "encrypted_ooxml",
-}
+# PDFium is not thread-safe, and PDF work runs on worker threads (`in_pdf_worker`), so every
+# call that touches it takes this one lock.
+_PDF_LOCK = threading.RLock()
 
 
 class DocError(Exception):
@@ -70,24 +47,23 @@ def sniff(data: bytes) -> str:
         or head[:3] == b"\xff\xd8\xff"
         or data[:4] in (b"II*\x00", b"MM\x00*")
         or data[:2] == b"BM"
+        or (data[:4] == b"RIFF" and data[8:12] == b"WEBP")
     ):
         return "image"
     if head[:4] == b"PK\x03\x04":
         try:
             with zipfile.ZipFile(io.BytesIO(data)) as archive:
                 names = set(archive.namelist())
+                if "xl/workbook.xml" in names:
+                    return "xlsx"
+                if "xl/workbook.bin" in names:
+                    return "xlsb"
+                if "word/document.xml" in names:
+                    return "docx"
+                if "mimetype" in names and b"opendocument.spreadsheet" in archive.read("mimetype"):
+                    return "ods"
         except zipfile.BadZipFile as exc:
             raise DocError("corrupt", "bad zip") from exc
-        if "xl/workbook.xml" in names:
-            return "xlsx"
-        if "xl/workbook.bin" in names:
-            return "xlsb"
-        if "word/document.xml" in names:
-            return "docx"
-        if "mimetype" in names:
-            with zipfile.ZipFile(io.BytesIO(data)) as archive:
-                if b"opendocument.spreadsheet" in archive.read("mimetype"):
-                    return "ods"
         return "zip"
     if head[:4] == b"\xd0\xcf\x11\xe0":
         import olefile  # pyrefly: ignore[untyped-import]  # olefile ships no type information
@@ -126,6 +102,19 @@ def sniff(data: bytes) -> str:
     return "text"
 
 
+def image_media_type(data: bytes) -> str | None:
+    """Only still images a multimodal model accepts. The header comes from the bytes."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    return None
+
+
 def decode_text(data: bytes) -> tuple[str, str]:
     if data[:3] == b"\xef\xbb\xbf":
         return data[3:].decode("utf-8"), "utf-8-sig"
@@ -137,522 +126,151 @@ def decode_text(data: bytes) -> tuple[str, str]:
         return data.decode("cp1252", errors="replace"), "cp1252"
 
 
-def _clean_cell(value: Any) -> Any:
-    if isinstance(value, dt.datetime):
-        return value.date().isoformat() if value.time() == dt.time(0) else value.isoformat()
-    if isinstance(value, dt.date):
-        return value.isoformat()
-    if isinstance(value, (dt.time, dt.timedelta)):
-        return str(value)
-    if isinstance(value, str):
-        return value
-    return value
+def unwrap_zip(data: bytes) -> bytes:
+    """The one file inside a ZIP; a statement archive of several files is refused."""
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        infos = [info for info in archive.infolist() if not info.is_dir()]
+        if len(infos) > MAX_ZIP_MEMBERS or sum(i.file_size for i in infos) > MAX_ZIP_TOTAL:
+            raise DocError("zip_too_big", "member count or uncompressed size over limit")
+        if len(infos) != 1:
+            raise DocError("zip_many", "upload one statement at a time, not an archive of files")
+        parts = Path(infos[0].filename).parts
+        if infos[0].filename.startswith(("/", "\\")) or ".." in parts:
+            raise DocError("zip_path", infos[0].filename)
+        return archive.read(infos[0])
 
 
-class _TableFrame(TypedDict):
-    """One open `<table>` while parsing: its rows so far, the open row, and the open cell."""
+def is_locked(data: bytes) -> bool:
+    """Whether the file needs a password before it can be read."""
+    kind = sniff(data)
+    if kind == "encrypted_ooxml":
+        return True
+    if kind != "pdf":
+        return False
+    import pypdfium2 as pdfium
 
-    rows: list[list[str]]
-    row: list[str] | None
-    cell: list[str] | None
-
-
-class _HTMLTables(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__(convert_charrefs=True)
-        self.tables: list[list[list[str]]] = []
-        self.stack: list[_TableFrame] = []
-        self.skip = 0
-
-    @override
-    def handle_starttag(self, tag: str, attrs: Any) -> None:
-        del attrs
-        if tag in ("script", "style"):
-            self.skip += 1
-        elif tag == "table":
-            self.stack.append({"rows": [], "row": None, "cell": None})
-        elif tag == "tr" and self.stack:
-            self.stack[-1]["row"] = []
-        elif tag in ("td", "th") and self.stack and self.stack[-1]["row"] is not None:
-            self.stack[-1]["cell"] = []
-
-    @override
-    def handle_endtag(self, tag: str) -> None:
-        if tag in ("script", "style"):
-            self.skip = max(0, self.skip - 1)
-            return
-        if not self.stack:
-            return
-        table = self.stack[-1]
-        if tag in ("td", "th") and table["cell"] is not None:
-            if table["row"] is not None:
-                table["row"].append(" ".join("".join(table["cell"]).split()))
-            table["cell"] = None
-        elif tag == "tr" and table["row"] is not None:
-            if any(cell for cell in table["row"]):
-                table["rows"].append(table["row"])
-            table["row"] = None
-        elif tag == "table":
-            self.tables.append(self.stack.pop()["rows"])
-
-    @override
-    def handle_data(self, data: str) -> None:
-        if self.skip:
-            return
-        if self.stack and self.stack[-1]["cell"] is not None:
-            self.stack[-1]["cell"].append(data)
+    with _PDF_LOCK:
+        try:
+            pdfium.PdfDocument(data).close()
+        except pdfium.PdfiumError as exc:
+            return "password" in str(exc).lower()
+    return False
 
 
-def html_tables(text: str) -> list[list[list[str]]]:
-    parser = _HTMLTables()
-    parser.feed(text)
-    return [table for table in parser.tables if table]
+def unlock(data: bytes, password: str) -> bytes:
+    """The file without its lock. The password is used here and kept nowhere."""
+    kind = sniff(data)
+    if kind == "encrypted_ooxml":
+        import msoffcrypto
+
+        office = msoffcrypto.OfficeFile(io.BytesIO(data))
+        out = io.BytesIO()
+        try:
+            office.load_key(password=password)
+            office.decrypt(out)
+        except Exception as exc:  # noqa: BLE001 - a wrong key is a readable problem
+            raise DocError("wrong_password", type(exc).__name__) from exc
+        return out.getvalue()
+    if kind != "pdf":
+        return data
+    import pypdfium2 as pdfium
+    import pypdfium2.raw as pdfium_c
+
+    with _PDF_LOCK:
+        try:
+            pdf = pdfium.PdfDocument(data, password=password)
+        except pdfium.PdfiumError as exc:
+            raise DocError("wrong_password", "PDF") from exc
+        buffer = io.BytesIO()
+        # Without this flag PDFium keeps the encryption, and the copy still needs the password.
+        pdf.save(buffer, flags=pdfium_c.FPDF_REMOVE_SECURITY)
+        return buffer.getvalue()
 
 
-# PDFium is not thread-safe, and document work runs on worker threads (`in_doc_worker`) while
-# light reads (page count, period detection) still run on the event loop. Every method that
-# touches PDFium takes this one re-entrant lock.
-_DOC_LOCK = threading.RLock()
+def _open_pdf(data: bytes) -> Any:
+    import pypdfium2 as pdfium
+
+    try:
+        return pdfium.PdfDocument(data)
+    except pdfium.PdfiumError as exc:
+        raise DocError("corrupt", str(exc)[:80]) from exc
 
 
-def _serialized[**P, R](method: Callable[P, R]) -> Callable[P, R]:
-    @functools.wraps(method)
-    def call(*args: P.args, **kwargs: P.kwargs) -> R:
-        with _DOC_LOCK:
-            return method(*args, **kwargs)
+def pdf_pages(data: bytes) -> tuple[int, int]:
+    """(page count, pages with a text layer) of an unlocked PDF."""
+    with _PDF_LOCK:
+        pdf = _open_pdf(data)
+        counts = [pdf[i].get_textpage().count_chars() for i in range(len(pdf))]
+    return len(counts), sum(1 for chars in counts if chars > 20)
 
-    return call
+
+def render_pages(data: bytes) -> list[bytes]:
+    """Every page of an unlocked PDF as PNG, for the vision model."""
+    import struct
+    import zlib
+
+    def chunk(tag: bytes, payload: bytes) -> bytes:
+        crc = zlib.crc32(tag + payload) & 0xFFFFFFFF
+        return struct.pack(">I", len(payload)) + tag + payload + struct.pack(">I", crc)
+
+    pages: list[bytes] = []
+    with _PDF_LOCK:
+        pdf = _open_pdf(data)
+        for index in range(len(pdf)):
+            # `rev_byteorder` makes PDFium emit RGB; each PNG row is a filter byte plus the pixels.
+            bitmap = pdf[index].render(scale=2, rev_byteorder=True)
+            raw, stride, width = bytes(bitmap.buffer), bitmap.stride, bitmap.width
+            rows = b"".join(
+                b"\x00" + raw[y * stride : y * stride + width * 3] for y in range(bitmap.height)
+            )
+            header = struct.pack(">IIBBBBB", width, bitmap.height, 8, 2, 0, 0, 0)
+            pages.append(
+                b"\x89PNG\r\n\x1a\n"
+                + chunk(b"IHDR", header)
+                + chunk(b"IDAT", zlib.compress(rows, 6))
+                + chunk(b"IEND", b"")
+            )
+    return pages
 
 
-class Doc:
-    """One opened file: pages for PDF/image, sheets for tabular things, lines for text."""
-
-    @_serialized
-    def __init__(self, data: bytes, *, password: str | None = None) -> None:
-        self.data = data
-        self.password = password
-        self.kind = sniff(data)
-        self.name = ""
-        self._pdf: Any = None
-        self._sheets: list[tuple[str, list[list[Any]]]] | None = None
-        self._lines: list[str] | None = None
-        self._words_cache: dict[int, list[dict[str, Any]]] = {}
-        self.members: list[tuple[str, bytes]] = []
-        self._last_reading_rotation = 0
-        self.delimiter: str | None = None
-        self.encoding: str | None = None
-        self._open()
-
-    # Opening -------------------------------------------------------------------------------
-    def _open(self) -> None:
-        kind = self.kind
-        if kind == "encrypted_ooxml":
-            import msoffcrypto
-
-            if not self.password:
-                raise DocError("password_required", "encrypted Office file")
-            office = msoffcrypto.OfficeFile(io.BytesIO(self.data))
-            try:
-                office.load_key(password=self.password)
-                out = io.BytesIO()
-                office.decrypt(out)
-            except Exception as exc:  # noqa: BLE001 - a wrong key is a readable problem
-                raise DocError("wrong_password", type(exc).__name__) from exc
-            self.data = out.getvalue()
-            self.kind = kind = sniff(self.data)
+def preview_text(data: bytes, kind: str) -> str:
+    """The file's first lines as plain text, for finding its period and account. Best effort."""
+    try:
         if kind == "pdf":
-            import pypdfium2 as pdfium
-
-            try:
-                self._pdf = pdfium.PdfDocument(self.data, password=self.password)
-            except pdfium.PdfiumError as exc:
-                message = str(exc).lower()
-                if "password" in message:
-                    code = "password_required" if not self.password else "wrong_password"
-                    raise DocError(code, "PDF") from exc
-                raise DocError("corrupt", str(exc)[:80]) from exc
-        elif kind in ("xlsx", "xls", "xlsb", "ods"):
+            with _PDF_LOCK:
+                pdf = _open_pdf(data)
+                return "\n".join(
+                    str(pdf[i].get_textpage().get_text_range()) for i in range(min(len(pdf), 2))
+                )
+        if kind in ("xlsx", "xls", "xlsb", "ods"):
             from python_calamine import CalamineWorkbook
 
-            try:
-                workbook = CalamineWorkbook.from_filelike(io.BytesIO(self.data))
-            except Exception as exc:  # noqa: BLE001 - calamine raises many types
-                raise DocError("corrupt", f"{type(exc).__name__}: {str(exc)[:80]}") from exc
-            self._sheets = []
-            for name in workbook.sheet_names:
-                try:
-                    rows = workbook.get_sheet_by_name(name).to_python(skip_empty_area=False)
-                except OSError:  # chart sheets and other non-cell sheets
-                    rows: list[list[Any]] = []
-                self._sheets.append(
-                    (name, [[_clean_cell(cell) for cell in self._trim(row)] for row in rows])
-                )
-        elif kind == "docx":
-            import docx
-
-            document = docx.Document(io.BytesIO(self.data))
-            self._sheets = [
-                (f"table{i}", [[cell.text for cell in row.cells] for row in table.rows])
-                for i, table in enumerate(document.tables)
-            ]
-            self._sheets.append(
-                ("paragraphs", [[p.text] for p in document.paragraphs if p.text.strip()])
-            )
-        elif kind == "html":
-            text, self.encoding = decode_text(self.data)
-            self._sheets = [(f"table{i}", table) for i, table in enumerate(html_tables(text))]
-        elif kind == "rtf":
-            from striprtf.striprtf import rtf_to_text
-
-            raw = re.sub(r"\\cellx-?\d+", "", decode_text(self.data)[0])
-            raw = raw.replace("\\cell", "\\tab ").replace("\\row", "\\par ")
-            self._lines = rtf_to_text(raw).splitlines()
-            self._sheets = [("text", [[line] for line in self._lines])]
-        elif kind == "zip":
-            self.members = self._zip_members()
-        elif kind in ("camt", "xml"):
-            try:
-                self._lines = self._xml_lines(self.data)
-                self._sheets = [("text", [[line] for line in self._lines])]
-            except Exception:  # noqa: BLE001 - malformed XML gets the text reader
-                text, self.encoding = decode_text(self.data)
-                self._lines = text.splitlines()
-                self._sheets = [("text", [[line] for line in self._lines])]
-        elif kind in ("doc", "ole_other", "image"):
-            pass
-        else:
-            text, self.encoding = decode_text(self.data)
-            self._lines = text.splitlines()
-            self._sheets = [("text", self._text_rows(self._lines))]
-
-    @_serialized
-    def readable_bytes(self) -> bytes:
-        """The bytes a later replay can open without the password.
-
-        An encrypted Office file is decrypted in place, so `data` is already plain. A PDF is
-        rewritten by PDFium, which drops the password from the saved copy.
-        """
-        if self.kind == "pdf" and self.password and self._pdf is not None:
-            import pypdfium2.raw as pdfium_c
-
-            buffer = io.BytesIO()
-            # Without this flag PDFium keeps the encryption, and the copy still needs the password.
-            self._pdf.save(buffer, flags=pdfium_c.FPDF_REMOVE_SECURITY)
-            return buffer.getvalue()
-        return self.data
-
-    @staticmethod
-    def _trim(row: list[Any]) -> list[Any]:
-        row = list(row)
-        while row and row[-1] in ("", None):
-            row.pop()
-        return row
-
-    def _text_rows(self, lines: list[str]) -> list[list[str]]:
-        """Pick the delimiter that structures the file's own rows; tolerate preambles.
-
-        Width comes first, then how many lines carry that same count. A stray `;` or `,` inside
-        one narration, or inside a preamble line such as `Opening Balance: 3,500.00`, is one
-        narrow line; a real delimiter repeats a wider field count across the row lines. Counting
-        only how many lines carry a delimiter let a single `;` in a narration beat a six-column
-        CSV and split every cell on the next import of the same layout.
-        """
-        if self.kind != "text":
-            return [[line] for line in lines]
-        sample = [line for line in lines if line.strip()][:60]
-        best: str | None = None
-        best_score = (0, 0)
-        for delimiter in ("\t", ";", "|", ","):
-            counts = [line.count(delimiter) for line in sample if line.count(delimiter)]
-            if not counts:
-                continue
-            modal = max(sorted(set(counts)), key=lambda count: (counts.count(count), count))
-            score = (modal, len(counts))
-            if score > best_score:
-                best, best_score = delimiter, score
-        if best:
-            self.delimiter = best
-            csv.field_size_limit(4 * 1024 * 1024)
-            try:
-                return [row for row in csv.reader(lines, delimiter=best)]
-            except csv.Error as exc:
-                raise DocError("corrupt", f"csv: {exc}") from exc
-        return [[line] for line in lines]
-
-    def _zip_members(self) -> list[tuple[str, bytes]]:
-        with zipfile.ZipFile(io.BytesIO(self.data)) as archive:
-            infos = [info for info in archive.infolist() if not info.is_dir()]
-            if (
-                len(infos) > MAX_ZIP_MEMBERS
-                or sum(info.file_size for info in infos) > MAX_ZIP_TOTAL
-            ):
-                raise DocError("zip_too_big", "member count or uncompressed size over limit")
-            members: list[tuple[str, bytes]] = []
-            for info in infos:
-                name = info.filename
-                parts = Path(name).parts
-                if name.startswith(("/", "\\")) or ".." in parts:
-                    raise DocError("zip_path", name)
-                members.append((Path(name).name, archive.read(info)))
-            return members
-
-    @staticmethod
-    def _xml_lines(data: bytes) -> list[str]:
-        """Flatten CAMT or other XML into `path: text` lines; the script has no XML library."""
-        import xml.etree.ElementTree as ET
-
-        root = ET.fromstring(data)
-        lines: list[str] = []
-
-        def local(tag: str) -> str:
-            return tag.rsplit("}", 1)[-1]
-
-        def walk(element: Any, path: str) -> None:
-            name = local(element.tag)
-            here = f"{path}/{name}" if path else name
-            if element.text and element.text.strip():
-                lines.append(f"{here}: {' '.join(element.text.split())}")
-            for child in element:
-                walk(child, here)
-
-        walk(root, "")
-        return lines
-
-    # Host functions -----------------------------------------------------------------------
-    @_serialized
-    def info(self) -> dict[str, Any]:
-        info: dict[str, Any] = {"kind": self.kind}
-        if self._pdf is not None:
-            pages = []
-            for index in range(len(self._pdf)):
-                page = self._pdf[index]
-                chars = page.get_textpage().count_chars()
-                pages.append(
-                    {
-                        "page": index,
-                        "chars": chars,
-                        "text_layer": chars > 20,
-                        "rotation": page.get_rotation(),
-                    }
-                )
-            info["pages"] = len(pages)
-            info["text_layer_pages"] = sum(1 for page in pages if page["text_layer"])
-            info["page_info"] = pages if len(pages) <= 5 else pages[:2] + [{"...": len(pages) - 2}]
-        if self.kind == "image":
-            info["pages"] = 1
-            info["text_layer_pages"] = 0
-        if self._sheets is not None:
-            info["sheets"] = [
-                {
-                    "name": name,
-                    "rows": len(rows),
-                    "cols": max((len(row) for row in rows), default=0),
-                }
-                for name, rows in self._sheets
-            ]
-        if self.delimiter:
-            info["delimiter"] = self.delimiter
-        if self.encoding:
-            info["encoding"] = self.encoding
-        return info
-
-    def cells(self, sheet: Any = 0) -> list[list[Any]]:
-        if self._sheets is None:
-            raise DocError("no_sheets", f"{self.kind} has no cell view")
-        if isinstance(sheet, str):
-            for name, rows in self._sheets:
-                if name == sheet:
-                    return rows
-            raise DocError("no_such_sheet", sheet)
-        try:
-            return self._sheets[int(sheet)][1]
-        except (IndexError, TypeError, ValueError) as exc:
-            raise DocError("no_such_sheet", str(sheet)) from exc
-
-    @_serialized
-    def words(self, page: Any = 0) -> list[dict[str, Any]]:
-        page = int(page)
-        if page in self._words_cache:
-            return self._words_cache[page]
-        if self._pdf is not None:
-            words = self._pdf_words(page)
-        else:
-            raise DocError("no_words", f"{self.kind} has no word view")
-        self._words_cache[page] = words
-        return words
-
-    def words_range(self, first: Any = 0, last: Any = 0) -> list[list[dict[str, Any]]]:
-        first, last = int(first), int(last)
-        if last < first:
-            raise DocError("bad_range", "last is before first")
-        return [self.words(page) for page in range(first, min(last, self.page_count()) + 1)]
-
-    @_serialized
-    def page_count(self) -> int:
-        if self._pdf is not None:
-            return len(self._pdf)
-        if self.kind == "image":
-            return 1
-        return 0
-
-    @staticmethod
-    def _xf(
-        rotation: int, left: float, bottom: float, right: float, top: float, w: float, h: float
-    ) -> tuple[float, float, float, float]:
-        if rotation == 0:
-            return left, right, h - top, h - bottom
-        if rotation == 90:
-            return bottom, top, left, right
-        if rotation == 180:
-            return w - right, w - left, bottom, top
-        return h - top, h - bottom, w - right, w - left
-
-    def _pdf_words(self, page_no: int) -> list[dict[str, Any]]:
-        page = self._pdf[page_no]
-        x0, y0, x1, y1 = page.get_mediabox()
-        width, height = x1 - x0, y1 - y0
-        textpage = page.get_textpage()
-        text = textpage.get_text_range()
-        raw: list[Any] = []
-        for index, char in enumerate(text):
-            if char.isspace() or char == "\x00":
-                raw.append(None)
-                continue
-            left, bottom, right, top = textpage.get_charbox(index, loose=True)
-            raw.append((char, left - x0, bottom - y0, right - x0, top - y0))
-        sample = [item for item in raw if item][:400]
-        best, best_score = page.get_rotation(), -1
-        for rotation in (page.get_rotation(), 0, 90, 180, 270):
-            score, previous = 0, None
-            for _char, left, bottom, right, top in sample:
-                vx0, vx1, vt, vb = self._xf(rotation, left, bottom, right, top, width, height)
-                if (
-                    previous
-                    and 0 <= vx0 - previous[0] < 3 * (vb - vt)
-                    and abs((vt + vb) / 2 - previous[1]) < 0.5 * (vb - vt)
-                ):
-                    score += 1
-                previous = (vx1, (vt + vb) / 2)
-            if score > best_score:
-                best, best_score = rotation, score
-        self._last_reading_rotation = best
-        out: list[dict[str, Any]] = []
-        current: dict[str, Any] | None = None
-        for item in raw:
-            if item is None:
-                if current:
-                    out.append(current)
-                current = None
-                continue
-            char, left, bottom, right, top = item
-            vx0, vx1, vt, vb = self._xf(best, left, bottom, right, top, width, height)
-            height_here = max(vb - vt, 1.0)
-            if current is not None and (
-                abs((vt + vb) / 2 - (current["top"] + current["bottom"]) / 2) > 0.5 * height_here
-                or vx0 - current["x1"] > 0.45 * height_here
-                or vx0 - current["x1"] < -height_here
-            ):
-                out.append(current)
-                current = None
-            if current is None:
-                current = {"text": char, "x0": vx0, "x1": vx1, "top": vt, "bottom": vb}
-            else:
-                current["text"] += char
-                current["x1"] = max(current["x1"], vx1)
-                current["top"] = min(current["top"], vt)
-                current["bottom"] = max(current["bottom"], vb)
-        if current:
-            out.append(current)
-        for word in out:
-            for key in ("x0", "x1", "top", "bottom"):
-                word[key] = round(word[key], 1)
-        return out
-
-    @_serialized
-    def page_png(self, page: Any = 0) -> bytes:
-        """A PNG for the vision role, encoded with the standard library."""
-        if self.kind == "image":
-            return self.data
-        if self._pdf is None:
-            raise DocError("no_pages", f"{self.kind} has no page view")
-        bitmap = self._pdf[int(page)].render(scale=2)
-        width, height = bitmap.width, bitmap.height
-        buffer = bytes(bitmap.buffer)
-        # PDFium gives BGRA, bottom-up. Convert to RGB, top-down.
-        channels = 4 if len(buffer) >= width * height * 4 else 3
-        rows = []
-        stride = width * channels
-        for y in range(height - 1, -1, -1):
-            line = bytearray(width * 3)
-            base = y * stride
-            for x in range(width):
-                pixel = buffer[base + x * channels : base + x * channels + 3]
-                line[x * 3 : x * 3 + 3] = bytes((pixel[2], pixel[1], pixel[0]))
-            rows.append(b"\x00" + bytes(line))
-        raw = b"".join(rows)
-
-        def chunk(tag: bytes, payload: bytes) -> bytes:
-            return (
-                struct.pack(">I", len(payload))
-                + tag
-                + payload
-                + struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF)
-            )
-
-        header = struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0)
-        return (
-            b"\x89PNG\r\n\x1a\n"
-            + chunk(b"IHDR", header)
-            + chunk(b"IDAT", zlib.compress(raw, 6))
-            + chunk(b"IEND", b"")
-        )
+            workbook = CalamineWorkbook.from_filelike(io.BytesIO(data))
+            rows = workbook.get_sheet_by_index(0).to_python()[:PREVIEW_ROWS]
+            return "\n".join(" ".join(str(cell) for cell in row if cell != "") for row in rows)
+        if kind in ("image", "doc", "ole_other", "zip", "docx"):
+            return ""
+        return "\n".join(decode_text(data)[0].splitlines()[:PREVIEW_ROWS])
+    except Exception:  # noqa: BLE001 - a preview is best effort; the checks say when it is missing
+        return ""
 
 
-async def in_doc_worker[T](fn: Callable[[], T]) -> T:
-    """Run document work (PDF text extraction, word redaction) on a worker thread.
-
-    Opening a 57-page statement and reading every page's words took seconds of CPU, and on the
-    event loop it stalled every request, poll, and job for that long. PDFium is not thread-safe,
-    so one lock serializes document work across imports; the loop stays free.
-    """
-
-    def call() -> T:
-        with _DOC_LOCK:
-            return fn()
-
-    return await asyncio.to_thread(call)
+async def in_pdf_worker[T](fn: Callable[[], T]) -> T:
+    """Run PDF work on a worker thread: rendering a long statement would stall the event loop."""
+    return await asyncio.to_thread(fn)
 
 
-def open_documents(data: bytes, *, password: str | None = None) -> list[Doc]:
-    """Open a file, or every statement inside a ZIP, each on its own."""
-    return _open_documents(data, password=password)
-
-
-def _open_documents(data: bytes, *, password: str | None = None) -> list[Doc]:
-    doc = Doc(data, password=password)
-    if doc.kind != "zip":
-        return [doc]
-    docs: list[Doc] = []
-    for name, member in doc.members:
-        if name.lower().endswith("/"):
-            continue
-        try:
-            child = Doc(member, password=password)
-        except DocError:
-            continue
-        if child.kind == "zip":
-            continue
-        child.name = name
-        docs.append(child)
-    if not docs:
-        raise DocError("empty_zip", "no readable statement inside the archive")
-    return docs
-
-
-def describe(data: bytes, *, password: str | None = None) -> dict[str, Any]:
-    """A short description for the import card, with no statement text."""
-    doc = Doc(data, password=password)
-    return {"kind": doc.kind, **doc.info()}
-
-
-__all__ = ["Doc", "DocError", "describe", "decode_text", "open_documents", "sniff"]
+__all__ = [
+    "MAX_DOC_PAGES",
+    "DocError",
+    "decode_text",
+    "image_media_type",
+    "in_pdf_worker",
+    "is_locked",
+    "pdf_pages",
+    "preview_text",
+    "render_pages",
+    "sniff",
+    "unlock",
+    "unwrap_zip",
+]

@@ -48,6 +48,8 @@ services:
       ARNO_AUTO_MIGRATE: "1"
       ARNO_PRE_MIGRATION_DIR: /app/pre-migration
       ARNO_SANDBOX_URL: http://sandbox:8001
+      # The sandbox-net subnet below. Requests from it are refused whatever identity they claim.
+      ARNO_SANDBOX_SUBNET: 10.89.250.0/24
       # Traces go to Phoenix over OTLP/HTTP via the stock OpenTelemetry SDK. The base URL is the
       # Phoenix address (the exporter appends /v1/traces); empty means tracing is off. This Compose
       # Phoenix requires authentication, so the headers carry its admin secret as the bearer
@@ -145,6 +147,9 @@ networks:
   default: {}
   sandbox-net:
     internal: true
+    ipam:
+      config:
+        - subnet: 10.89.250.0/24
 
 volumes:
   db-data:

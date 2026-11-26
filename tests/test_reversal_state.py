@@ -13,7 +13,7 @@ from arno.importers.baselines import recompute_baselines
 from arno.importers.categorize import _counts as categorize_counts
 from arno.importers.periods import ledger_opening
 from arno.importers.reconcile import insert_lines, reconcile
-from arno.importers.rules import apply_rules, check_payees, pending_payees
+from arno.importers.rules import apply_rules, pending_payees
 from arno.ledger.accounts import create_account
 from arno.ledger.audit import new_id, undo_group, write_group
 from arno.ledger.common import today
@@ -340,7 +340,7 @@ async def test_importers_and_categorize_use_reversal_state_across_undo_of_undo(l
         m_extra["id"]
     ]
 
-    # Categorize counts, rules._import_rows / pending_payees, check_payees, _refund_source.
+    # Categorize counts, rules._import_rows / pending_payees, _refund_source.
     m_debit = await record_expense(
         ledger,
         account_id=account["id"],
@@ -378,18 +378,13 @@ async def test_importers_and_categorize_use_reversal_state_across_undo_of_undo(l
     del_debit = await correct_movement(ledger, m_debit["id"], changes={"delete": True})
     assert await categorize_counts(ledger, import_id) == (0, 1)
     assert [g["key"] for g in await pending_payees(ledger, import_id)] == ["acme local shop"]
-    samples_rev, known_rev = await check_payees(ledger, import_id, 5)
-    assert samples_rev == [] and known_rev == {}
     # Reversed debit must NOT match as refund source.
     res_rev = await apply_rules(ledger, import_id)
     assert res_rev["labeled"] == 0
 
-    # Undo reversal of m_debit -> m_debit becomes effective again -> counts, check_payees, refund.
+    # Undo reversal of m_debit -> m_debit becomes effective again -> counts, refund.
     await undo_group(ledger, del_debit["undo_id"])
     assert await categorize_counts(ledger, import_id) == (1, 1)
-    samples_restored, known_restored = await check_payees(ledger, import_id, 5)
-    assert [s["key"] for s in samples_restored] == ["acme local shop"]
-    assert known_restored["acme local shop"] == "Food & Dining"
     res_restored = await apply_rules(ledger, import_id)
     assert res_restored["labeled"] == 1
 

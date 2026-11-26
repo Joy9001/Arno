@@ -76,14 +76,6 @@ def _int_env(name: str, default: int) -> int:
 
 def role_config(prefix: str) -> RoleConfig:
     """One role's endpoint, key, and model. `CHAT_FALLBACK` is its own role and inherits nothing."""
-    if prefix == "PARSE" and not os.environ.get("PARSE_BASE_URL"):
-        parent = role_config("CHAT")
-        return replace(
-            parent,
-            model=os.environ.get("PARSE_MODEL", "").strip() or parent.model,
-            api_key=os.environ.get("PARSE_API_KEY", "").strip() or parent.api_key,
-            provider=os.environ.get("PARSE_PROVIDER", "").strip() or parent.provider,
-        )
     base_url = os.environ.get(f"{prefix}_BASE_URL", "").strip() or CLOSED_URL
     return RoleConfig(
         base_url=base_url,
@@ -199,11 +191,6 @@ def vision_model() -> Model:
     return build_model(role_config("VISION"))
 
 
-def parse_model() -> Model:
-    """The parser subagent's model, or the chat model when `PARSE_*` is unset."""
-    return build_model(role_config("PARSE"))
-
-
 def backup_model() -> Model | None:
     if not os.environ.get("CHAT_FALLBACK_BASE_URL") and not os.environ.get("CHAT_FALLBACK_MODEL"):
         return None
@@ -218,7 +205,6 @@ __all__ = [
     "chat_config",
     "model_for",
     "opencode_session",
-    "parse_model",
     "primary_model",
     "role_config",
     "vision_model",

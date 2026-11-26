@@ -23,8 +23,6 @@ jobs:
       PG_DUMP: /usr/lib/postgresql/18/bin/pg_dump
       PSQL: /usr/lib/postgresql/18/bin/psql
       PG_RESTORE: /usr/lib/postgresql/18/bin/pg_restore
-      ARNO_RP_ID: localhost
-      ARNO_RP_ORIGIN: http://localhost:8000
       ARNO_COOKIE_SECURE: "0"
       # Model requests are blocked: every role points at a closed loopback port, and conftest
       # refuses non-loopback sockets and DNS lookups.

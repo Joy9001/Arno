@@ -155,7 +155,7 @@ The following table lists first checks for common operational failures.
 
 | Symptom | First checks |
 |---|---|
-| API unhealthy or unreachable | Check `docker compose ps`, `api` and `db` logs, and local `/api/health`. If local health works but a device fails, check `tailscale serve status`, `ARNO_RP_ID`, and `ARNO_RP_ORIGIN`. |
+| API unhealthy or unreachable | Check `docker compose ps`, `api` and `db` logs, and local `/api/health`. If local health works but a device fails, check `tailscale serve status` and that `ARNO_OWNER_EMAIL` matches your Tailscale login. |
 | Backup missing or stale | Check `api` logs, disk space, and repository credentials. After changing repositories, see [switch or test repositories](self-hosting.md#switch-or-test-repositories). |
 | Phoenix restart loop or missing traces | Tracing is off unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set and the `obs` profile runs. Check `phoenix` and `api` logs, required Phoenix secrets, and `OTEL_SDK_DISABLED`. |
 | Image build cannot reach a registry | Check builder DNS, proxy, VPN, and network connectivity before changing Dockerfiles. |

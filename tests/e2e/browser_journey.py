@@ -1,8 +1,8 @@
 """Real-browser journeys against a real Arno, driven by Playwright.
 
 The e2e driver proves the wire; this proves the screen. It starts the same server on a scratch
-database, enrolls a passkey through the real WebAuthn UI using Chromium's virtual authenticator,
-types in the composer, reads rendered cards, and walks Settings.
+database, signs in through the real passphrase form, types in the composer, reads rendered cards,
+and walks Settings.
 
     uv run --with playwright==1.64.0 python -m tests.e2e.browser_journey enroll --port 8131
 
@@ -24,20 +24,17 @@ import sys
 from datetime import date
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
-import httpx
 import playwright.async_api as pw  # pyrefly: ignore[missing-import]  # optional: --with playwright
 from dateutil.relativedelta import relativedelta
 
 from arno.india.recurrence import expand_rule
 from tests.e2e.driver import (
+    E2E_PASSPHRASE,
     LOG_FILE,
     _require_free_port,
     _utf8_console,
-    issue_setup_token,
     prepare_database,
-    reset_passkeys,
     server_env,
     start_server,
     state_dir,
@@ -161,31 +158,6 @@ class Step:
 # --- the browser ------------------------------------------------------------------------------
 
 
-async def _virtual_authenticator(context: pw.BrowserContext, page: pw.Page) -> Any:
-    """A CTAP2 authenticator with a resident key, so the setup button can register one."""
-    cdp = await context.new_cdp_session(page)
-    await cdp.send("WebAuthn.enable")
-    await cdp.send(
-        "WebAuthn.addVirtualAuthenticator",
-        {
-            "options": {
-                "protocol": "ctap2",
-                "transport": "internal",
-                "hasResidentKey": True,
-                "hasUserVerification": True,
-                "isUserVerified": True,
-            }
-        },
-    )
-    return cdp
-
-
-def _setup_token(base_url: str) -> str:
-    """A token the browser can use: first-run when setup is open, otherwise reopen it."""
-    state = httpx.get(f"{base_url}/api/auth/state", timeout=10.0).json()
-    return issue_setup_token() if state.get("setup_required") else reset_passkeys()
-
-
 def _cover_card_balances() -> None:
     """State each card's balance as its ledger already has it, so the demo forecast is ready.
 
@@ -225,7 +197,7 @@ def _seed_notification() -> None:
             )
             # An earlier run's row keeps the key, so it must be unread again for this walk.
             await conn.execute(
-                "UPDATE notifications SET read_at = NULL, resolved_at = NULL WHERE dedupe_key = $1",
+                "UPDATE notifications SET read_at = NULL WHERE dedupe_key = $1",
                 key,
             )
 
@@ -427,21 +399,12 @@ async def _onboarding_state(page: pw.Page, base_url: str, report: Report) -> Non
         )
 
 
-async def _enroll(page: pw.Page, base_url: str, token: str, report: Report) -> None:
-    """The first-run ceremony, from the enrollment link to the home the app expects."""
-    await page.goto(f"{base_url}/setup#t={quote(token)}")
-    await page.get_by_role("heading", name=re.compile(r"^(Set up Arno|Add this device)$")).wait_for(
-        timeout=30_000
-    )
-    field = page.get_by_label("Enrollment token")
-    prefilled = await field.input_value()
-    if len(prefilled) < 8:
-        raise JourneyFailure(report.current, "the enrollment link did not fill the token")
-    report.figure("token_prefilled_from_link", True)
-    await report.shot(page, "setup-link")
-
-    button = page.get_by_role("button", name=re.compile(r"^(Create passkey|Add this device)$"))
-    await button.click()
+async def _sign_in(page: pw.Page, base_url: str, report: Report) -> None:
+    """The passphrase form, then the home the app expects."""
+    await page.goto(base_url)
+    await page.get_by_label("Passphrase").fill(E2E_PASSPHRASE)
+    await report.shot(page, "sign-in")
+    await page.get_by_role("button", name="Sign in").click()
     composer = page.get_by_label("Message Arno")
     try:
         await composer.wait_for(timeout=90_000)
@@ -449,11 +412,10 @@ async def _enroll(page: pw.Page, base_url: str, token: str, report: Report) -> N
         alerts = await _visible_alerts(page)
         raise JourneyFailure(
             report.current,
-            "the passkey ceremony did not finish; "
-            + (" | ".join(alerts) if alerts else f"still at {page.url}"),
+            "sign-in did not finish; " + (" | ".join(alerts) if alerts else f"still at {page.url}"),
         ) from None
     if page.url.rstrip("/") != base_url.rstrip("/"):
-        raise JourneyFailure(report.current, f"setup left the browser at {page.url}")
+        raise JourneyFailure(report.current, f"sign-in left the browser at {page.url}")
     await page.get_by_role(
         "region", name=re.compile("What I noticed|Get started|Needs you")
     ).first.wait_for(timeout=60_000)
@@ -613,11 +575,10 @@ async def _drive(
     args: argparse.Namespace,
     page: pw.Page,
     base_url: str,
-    token: str,
     report: Report,
 ) -> None:
-    async with Step(report, page, "enroll a passkey through the setup UI"):
-        await _enroll(page, base_url, token, report)
+    async with Step(report, page, "sign in with the passphrase"):
+        await _sign_in(page, base_url, report)
 
     if args.journey == "walkthrough":
         await _walkthrough(page, report)
@@ -633,22 +594,20 @@ async def _drive(
 # --- start, run, stop -------------------------------------------------------------------------
 
 
-async def _browse(args: argparse.Namespace, base_url: str, token: str, report: Report) -> None:
+async def _browse(args: argparse.Namespace, base_url: str, report: Report) -> None:
     async with pw.async_playwright() as playwright:
         browser = await playwright.chromium.launch(headless=not args.headed)
         context = await browser.new_context(viewport={"width": 1440, "height": 1000})
         page = await context.new_page()
         _listen(page, report)
-        cdp = await _virtual_authenticator(context, page)
         try:
-            await _drive(args, page, base_url, token, report)
+            await _drive(args, page, base_url, report)
         except pw.Error as exc:
             raise JourneyFailure(report.current, str(exc).splitlines()[0]) from None
         finally:
             report.html = report.directory / f"{args.journey}.html"
             report.html.write_text(await page.content(), encoding="utf-8")
             await browser.close()
-            del cdp
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -685,8 +644,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     process = start_server(args.port, log_path)
     try:
         wait_for_health(base_url, args.timeout, process)
-        token = _setup_token(base_url)
-        asyncio.run(_browse(args, base_url, token, report))
+        asyncio.run(_browse(args, base_url, report))
     finally:
         stop_server(process.pid)
 

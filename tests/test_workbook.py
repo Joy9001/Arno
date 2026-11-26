@@ -127,7 +127,7 @@ async def test_workbook_route_requires_authentication_and_returns_xlsx(
         session_client.get("/api/projection/workbook", params={"changes": "{bad"}).status_code
         == 422
     )
-    client.cookies.clear()
+    del client.headers["Tailscale-User-Login"]
     assert client.get("/api/projection/workbook").status_code in (401, 403)
 
 

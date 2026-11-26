@@ -143,8 +143,12 @@ function NumberFlagsData({ data }: { data: { amounts: string[] } }) {
 function StatementData({
   data,
 }: {
-  data: { filename?: string; attachment_id?: string };
+  data: { filename?: string; attachment_id?: string; import_id?: string };
 }) {
+  // The upload opened an import; its card polls the status and asks for any password.
+  if (data.import_id) {
+    return <Card data={{ card: "import", import_id: data.import_id, filename: data.filename }} />;
+  }
   return (
     <span className="aui-statement-chip">
       <FileText size={14} strokeWidth={1.8} aria-hidden="true" />

@@ -1,4 +1,4 @@
-"""A statement attached in chat is stored with the message and never imported directly."""
+"""A statement attached in chat is imported by its upload, never by the chat turn."""
 
 from __future__ import annotations
 
@@ -23,7 +23,9 @@ def _upload(client) -> dict:
     return response.json()
 
 
-def _body(message_id: str, attachment_id: str, text: str | None = None) -> dict:
+def _body(
+    message_id: str, attachment_id: str, text: str | None = None, import_id: str | None = None
+) -> dict:
     parts: list[dict] = []
     if text is not None:
         parts.append({"type": "text", "text": text})
@@ -35,6 +37,7 @@ def _body(message_id: str, attachment_id: str, text: str | None = None) -> dict:
                 "filename": "sbi.csv",
                 "detected_kind": "text",
                 "password": "never-send-this",
+                **({"import_id": import_id} if import_id else {}),
             },
         }
     )
@@ -79,8 +82,7 @@ async def test_the_model_sees_the_file_count_and_no_attachment_id(session_client
     assert "".join(event["delta"] for event in events if event["type"] == "text-delta") == (
         "Noted."
     )
-    assert await ledger.fetchval("SELECT count(*) FROM imports") == 0
-    assert await ledger.fetchval("SELECT count(*) FROM jobs WHERE kind = 'import_statement'") == 0
+    assert await ledger.fetchval("SELECT count(*) FROM imports") == 1
     assert attachment["id"] not in str(seen)
 
     thread = session_client.get("/api/threads/thread_statement/messages").json()
@@ -89,7 +91,36 @@ async def test_the_model_sees_the_file_count_and_no_attachment_id(session_client
     assert any(part["type"] == "data-statement" for part in user["parts"])
 
 
-async def test_file_only_sends_a_prompt_and_starts_no_import(session_client, ledger):
+async def test_the_statement_part_carries_the_import_the_upload_opened(session_client, ledger):
+    attachment = _upload(session_client)
+    assert attachment["import_id"] == await ledger.fetchval("SELECT id FROM imports")
+    body = _body("client_statement_card", attachment["id"], "Here", attachment["import_id"])
+
+    with session_client.app.state.agent.override(model=_model([])):
+        response = session_client.post("/api/chat", json=body)
+
+    assert response.status_code == 200, response.text
+    thread = session_client.get("/api/threads/thread_statement/messages").json()
+    user = next(message for message in thread["messages"] if message["role"] == "user")
+    part = next(part for part in user["parts"] if part["type"] == "data-statement")
+    assert part["data"]["import_id"] == attachment["import_id"]
+
+
+async def test_a_forged_import_id_is_dropped(session_client):
+    attachment = _upload(session_client)
+    body = _body("client_statement_forged", attachment["id"], "Here", "imp_not_real")
+
+    with session_client.app.state.agent.override(model=_model([])):
+        response = session_client.post("/api/chat", json=body)
+
+    assert response.status_code == 200, response.text
+    thread = session_client.get("/api/threads/thread_statement/messages").json()
+    user = next(message for message in thread["messages"] if message["role"] == "user")
+    part = next(part for part in user["parts"] if part["type"] == "data-statement")
+    assert "import_id" not in part["data"]
+
+
+async def test_file_only_sends_a_prompt_and_starts_no_second_import(session_client, ledger):
     attachment = _upload(session_client)
     body = _body("client_statement_only", attachment["id"])
 
@@ -97,10 +128,10 @@ async def test_file_only_sends_a_prompt_and_starts_no_import(session_client, led
         response = session_client.post("/api/chat", json=body)
 
     assert response.status_code == 200, response.text
-    assert await ledger.fetchval("SELECT count(*) FROM imports") == 0
+    assert await ledger.fetchval("SELECT count(*) FROM imports") == 1
 
 
-async def test_replay_and_resend_start_no_import(session_client, ledger):
+async def test_replay_and_resend_start_no_second_import(session_client, ledger):
     attachment = _upload(session_client)
     body = _body("client_statement_replay", attachment["id"], "Review this statement")
 
@@ -110,24 +141,24 @@ async def test_replay_and_resend_start_no_import(session_client, ledger):
 
     assert first.status_code == 200
     assert replay.status_code == 200
-    assert await ledger.fetchval("SELECT count(*) FROM imports") == 0
+    assert await ledger.fetchval("SELECT count(*) FROM imports") == 1
 
     resent = _body("client_statement_resent", attachment["id"], "Try this again")
     with session_client.app.state.agent.override(model=_model([])):
         again = session_client.post("/api/chat", json=resent)
 
     assert again.status_code == 200
-    assert await ledger.fetchval("SELECT count(*) FROM imports") == 0
+    assert await ledger.fetchval("SELECT count(*) FROM imports") == 1
 
 
 async def test_an_unsupported_chat_statement_is_refused(session_client):
     response = session_client.post(
         "/api/attachments",
-        files={"file": ("receipt.png", b"\x89PNG\r\n\x1a\nnot-a-statement", "image/png")},
+        files={"file": ("page.html", b"<html><body>hello</body></html>", "text/html")},
         data={"purpose": "statement"},
     )
     assert response.status_code == 422
-    assert "PDF, CSV" in response.json()["detail"]
+    assert "PDF, image, CSV" in response.json()["detail"]
 
 
 async def test_a_stale_attachment_ref_is_refused_without_selecting_another(session_client, ledger):
@@ -140,7 +171,7 @@ async def test_a_stale_attachment_ref_is_refused_without_selecting_another(sessi
     assert await ledger.fetchval("SELECT count(*) FROM imports") == 0
 
 
-async def test_a_busy_chat_starts_no_import(session_client, ledger):
+async def test_a_busy_chat_starts_no_second_import(session_client, ledger):
     attachment = _upload(session_client)
     active = SimpleNamespace(done=SimpleNamespace(is_set=lambda: False))
     previous = session_client.app.state.turns.get
@@ -152,4 +183,4 @@ async def test_a_busy_chat_starts_no_import(session_client, ledger):
     finally:
         session_client.app.state.turns.get = previous
     assert response.status_code == 409
-    assert await ledger.fetchval("SELECT count(*) FROM imports") == 0
+    assert await ledger.fetchval("SELECT count(*) FROM imports") == 1

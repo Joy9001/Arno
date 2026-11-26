@@ -41,22 +41,24 @@ selecting what to compute.
 ![The agent loop runs for you and for your statements](diagrams/sd-agent-vs-workflow.png)
 
 _Figure: User chat and user-scheduled questions invoke agent loops, while statement import,
-built-in alerts, reminders, recaps, and briefings run as deterministic code
+built-in alerts and reminders run as deterministic code
 ([note](diagrams/sd-agent-vs-workflow.md))._
 
 ### Agent versus workflow paths
 
-- **Built-in jobs are workflows:** Due reminders, risk warnings, pattern checks, recaps, and weekly
-  briefings run as fixed code. At most one optional LLM call drafts briefing prose, with a template
-  fallback so monitoring continues when the LLM is unreachable.
+- **Built-in tasks are workflows:** Due reminders, risk warnings, and pattern checks run as fixed
+  code, so monitoring continues when the LLM is unreachable. The weekly briefing is a default
+  scheduled question, so it runs the agent read-only like any question you schedule.
 - **User-scheduled questions run the agent read-only:** Scheduled prompts execute with the read
   tools and a per-run request limit, delivering answers to the **Inbox**.
-- **Statement imports are code:** Code owns verification checks, regression replay,
-  reconciliation, review, and commit. Extraction is being rebuilt and has no agent today
-  ([`specs/import.md`](specs/import.md#extraction-status)).
-- **Categorization runs post-commit:** Deterministic merchant rules run first. A background
-  categorizer agent handles remaining payees in chunks, leaving low-trust matches uncategorized
-  with a hint.
+- **Statement imports are code around one extraction step:** An upload opens an import that
+  reads itself. Images and short PDFs go to one vision call; spreadsheets, text formats, and long
+  PDFs go to a model that answers with a script the host runs in the sandbox. Code owns the
+  decryption, verification checks, reconciliation, review, and commit
+  ([`specs/import.md`](specs/import.md#extraction)).
+- **Categorization runs post-commit:** Your rules and refunds run first. A background
+  call per chunk of remaining payees labels the ones it is sure of and leaves the rest
+  uncategorized with a hint.
 
 ### Control inside a chat turn
 
@@ -88,7 +90,7 @@ The following table sets what Arno can do without prompting:
 | Change setup (accounts, schedules, goals, floor) | You | Writes immediately with undo; archiving and settings ask first |
 | Import a bank or card statement | You | Stages only; writes nothing until you commit the review screen |
 | Run a scheduled question | Schedule | Reads and posts to the **Inbox**; zero write tools |
-| Send reminders, warnings, recaps, or briefings | Schedule | Informs only; tapping an item opens a seeded chat only when you choose |
+| Send reminders or warnings | Schedule | Informs only; tapping an item opens a seeded chat only when you choose |
 | Detect a recurring charge or price step | Schedule | Raises a proposal; never writes a schedule silently |
 | Move money or recommend investments | | Never |
 
@@ -111,8 +113,8 @@ request limit, model fallback, and the daily spend cap ([note](diagrams/sd-agent
 - **Tested engine math plus a sandbox:** Probabilistic projections run in tested Python modules
   (`src/arno/engine/`) behind `project`. For other arithmetic the agent writes a script
   (`run_python`) that runs in the isolated `sandbox` service and states only its output.
-- **Model roles:** Separate configuration slots exist for `CHAT`, `PARSE` (defaults to `CHAT`),
-  `VISION`, `STT`, and optional `CHAT_FALLBACK`. Every model ID is pinned to a dated
+- **Model roles:** Separate configuration slots exist for `CHAT`, `VISION`, `STT`, and
+  optional `CHAT_FALLBACK`. Every model ID is pinned to a dated
   version. Replies produced by a fallback model display a badge.
 
 For capabilities, prompt discipline, and history storage, see
@@ -255,8 +257,9 @@ repeating recent manual entries, and statement reconciliation deduplicates later
 - **Database connections:** The API process maintains a per-loop cache of up to eight idle
   `asyncpg` connections, opening direct connections immediately when empty so long chat streams
   never starve other requests ([`specs/platform.md`](specs/platform.md#database-connections-and-integrity)).
-- **Plain-table job loop:** A `jobs` table and single API loop replace external brokers. On boot,
-  interrupted `running` jobs reset cleanly, and period-keyed schedules prevent duplicate runs.
+- **Minute loop and spawned tasks:** One asyncio loop in the API process fires due scheduled
+  questions and the daily tasks, and `spawn` runs work after a write. State stays in Postgres, so
+  a restart resumes categorization from `imports.categorize` and claims each question once.
 
 ### Graceful degradation
 
@@ -265,7 +268,7 @@ The following table shows what remains available during component outages:
 | Outage | Available functionality | User-visible behavior |
 |---|---|---|
 | Primary LLM | Full functionality on configured backup model | Replies carry a fallback badge |
-| All LLMs | Panels, undo, reminders, risk checks, recaps, template briefings; uploads stay saved | Plain "couldn't answer" message |
+| All LLMs | Panels, undo, reminders, risk checks; uploads stay saved | Plain "couldn't answer" message |
 | Vision or STT | Uploaded file or recording is preserved | Retry card |
 | PostgreSQL | None | Plain "database unreachable" with zero LLM spend |
 | Host asleep | Pauses until wake | Missed scheduled jobs fire once on wake |
@@ -301,7 +304,7 @@ Phoenix traces observe live turns
 ![One way in, and only two ways out](diagrams/sd-deployment.png)
 
 _Figure: All traffic enters through `tailscale serve` to loopback; only configured LLM requests,
-encrypted off-site backups, and contentless push pings leave the host
+encrypted off-site backups, and optional webhook pings leave the host
 ([note](diagrams/sd-deployment.md))._
 
 - **Web interface:** Agent-first SPA with six primary destinations (**Ask**, **Chats**, **Money**,

@@ -218,9 +218,7 @@ class ToolErrorsToModel(AbstractCapability[AgentDeps]):
     ) -> Any:
         # A budget or accounting stop is not a tool hiccup: retrying it or describing it back to
         # the model would spend again on a call that already failed, so it ends the run.
-        from arno.jobs.runner import JobGaveUp
-
-        if isinstance(error, (JobGaveUp, *COST_STOP_ERRORS)):
+        if isinstance(error, COST_STOP_ERRORS):
             self._cost_stop = error
             raise error
         logger.error("tool %s failed (%s)", call.tool_name, type(error).__name__)

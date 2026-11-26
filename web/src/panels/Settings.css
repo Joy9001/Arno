@@ -928,18 +928,6 @@ button.stg-chip[aria-pressed="true"] .stg-chip-state {
   margin: 0;
 }
 
-/* PasskeysCard owns its own card; the section chrome supplies the outer one. */
-.stg-passkeys .settings-block {
-  padding: 0;
-  border: 0;
-  border-radius: 0;
-  background: transparent;
-}
-
-.stg-passkeys .settings-block > h3 {
-  display: none;
-}
-
 @container stg-panel (max-width: 700px) {
   .stg-layout {
     display: block;

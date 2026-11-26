@@ -167,6 +167,7 @@ async def record_user_message(
                 "data": {
                     "attachment_id": statement["attachment_id"],
                     "filename": statement["filename"],
+                    **({"import_id": statement["import_id"]} if "import_id" in statement else {}),
                 },
             }
         )

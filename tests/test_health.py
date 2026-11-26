@@ -6,9 +6,9 @@ import threading
 import httpx
 
 from arno.api.middleware import CONTENT_SECURITY_POLICY
-from arno.auth.sessions import COOKIE_NAME
 from arno.db.migrate import discover
 from arno.tools import projection as projection_tools
+from tests.conftest import OWNER_EMAIL
 
 
 def test_health_reports_database_and_schema_version(client):
@@ -39,7 +39,7 @@ async def test_health_responds_while_projection_is_computing(session_client, mon
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=session_client.app),
         base_url="http://testserver",
-        cookies={COOKIE_NAME: session_client.cookies[COOKIE_NAME]},
+        headers={"Tailscale-User-Login": OWNER_EMAIL},
     ) as client:
         pending = asyncio.create_task(client.get("/api/projection"))
         try:

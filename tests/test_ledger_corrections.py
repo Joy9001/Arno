@@ -8,7 +8,6 @@ exact paise, and every correction is followed by the whole-ledger invariants che
 from __future__ import annotations
 
 import io
-import json
 import zipfile
 from datetime import timedelta
 from decimal import Decimal
@@ -29,13 +28,6 @@ from tests.invariants import check_ledger
 
 SECRET_TABLES = {
     "model_credentials",
-    "users",
-    "sessions",
-    "webauthn_credentials",
-    "webauthn_challenges",
-    "setup_tokens",
-    "vapid_keys",
-    "push_subscriptions",
 }
 
 
@@ -423,22 +415,9 @@ async def test_an_own_account_transfer_does_not_pay_a_family_transfer_obligation
 
 
 async def _seed_secrets(conn) -> None:
-    await conn.execute("INSERT INTO users (webauthn_user_handle) VALUES (decode('00', 'hex'))")
     await conn.execute(
-        "INSERT INTO sessions (user_id, token_hash, expires_at) "
-        "SELECT id, decode('11', 'hex'), now() + interval '1 day' FROM users"
-    )
-    await conn.execute(
-        "INSERT INTO vapid_keys (public_key, private_key, subject) "
-        "VALUES ('public', 'PRIVATE-SECRET-KEY', 'mailto:demo@example.com')"
-    )
-    await conn.execute(
-        "INSERT INTO setup_tokens (token_hash, expires_at) "
-        "VALUES (decode('22', 'hex'), now() + interval '1 day')"
-    )
-    await conn.execute(
-        "INSERT INTO push_subscriptions (endpoint, p256dh, auth) "
-        "VALUES ('https://push.example/SUBSCRIPTION-SECRET', 'p256', 'AUTH-SECRET')"
+        "INSERT INTO model_credentials (provider, client_id, access_token, refresh_token) "
+        "VALUES ('openai-chatgpt', 'client', 'ACCESS-SECRET', 'REFRESH-SECRET')"
     )
 
 
@@ -451,20 +430,12 @@ async def test_no_credential_table_is_in_any_export(ledger):
 
     payload = await export_json(ledger)
     assert set(payload["tables"]) & SECRET_TABLES == set()
-    text = json.dumps(payload)
-    assert "PRIVATE-SECRET-KEY" not in text
-    assert "AUTH-SECRET" not in text
-    assert "SUBSCRIPTION-SECRET" not in text
 
     blob = await export_csv_zip(ledger)
     with zipfile.ZipFile(io.BytesIO(blob)) as archive:
         namelist = archive.namelist()
-        contents = b"\n".join(archive.read(name) for name in namelist)
     assert {f"{table}.csv" for table in SECRET_TABLES} & set(namelist) == set()
     assert b"audit_log.csv" in [name.encode() for name in namelist]
-    assert b"PRIVATE-SECRET-KEY" not in contents
-    assert b"AUTH-SECRET" not in contents
-    assert b"SUBSCRIPTION-SECRET" not in contents
 
 
 async def test_the_json_export_labels_its_money_unit(ledger):

@@ -44,8 +44,8 @@ probability, and every figure is cited back to ledger rows.
 
 - Docker Compose on hardware the owner controls (laptop, mini PC, VPS); reached over a private
   Tailscale network, never the public internet.
-- Passkey login; one user; sessions in secure cookies. Admin commands run on the host, not over
-  HTTP.
+- One user, signed in by Tailscale identity or an optional passphrase cookie. Admin commands run
+  on the host, not over HTTP.
 - PostgreSQL holds the ledger, plan, people, categorization, settings, and conversation records.
   Daily restic backups run inside the API and are restorable with `arno restore`.
 - Daily capture is chat, voice notes, and photos (receipts, UPI screenshots); monthly statement

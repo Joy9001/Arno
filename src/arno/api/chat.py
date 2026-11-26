@@ -97,6 +97,7 @@ def _last_user(messages: list[dict[str, Any]]) -> tuple[str, str, list[Any]] | N
 def _attachment_refs(parts: list[Any], part_type: str, kind: str) -> list[dict[str, str]]:
     """App-owned refs of one attachment kind from the last user turn, never file URLs."""
     found: dict[str, str] = {}
+    imports: dict[str, str] = {}
     for part in parts:
         data = part.get("data") if part.get("type") == part_type else None
         if not isinstance(data, dict):
@@ -104,7 +105,17 @@ def _attachment_refs(parts: list[Any], part_type: str, kind: str) -> list[dict[s
         attachment_id = data.get("attachment_id")
         if isinstance(attachment_id, str) and 0 < len(attachment_id) <= 100:
             found.setdefault(attachment_id, str(data.get("filename") or kind)[:255])
-    return [{"attachment_id": key, "filename": name} for key, name in found.items()]
+            import_id = data.get("import_id")
+            if isinstance(import_id, str) and 0 < len(import_id) <= 100:
+                imports.setdefault(attachment_id, import_id)
+    return [
+        {
+            "attachment_id": key,
+            "filename": name,
+            **({"import_id": imports[key]} if key in imports else {}),
+        }
+        for key, name in found.items()
+    ]
 
 
 async def _validated(
@@ -128,7 +139,20 @@ async def _validated(
             status_code=422,
             detail=f"A {kind} attachment is no longer available. Attach the file again.",
         )
-    return [{"attachment_id": key, "filename": found[key]} for key in ids]
+    # A statement's import card needs the import the upload opened; only a real one is kept.
+    wanted = [ref["import_id"] for ref in refs if ref.get("import_id")]
+    real = {
+        str(row["id"])
+        for row in await conn.fetch("SELECT id FROM imports WHERE id = ANY($1)", wanted)
+    }
+    return [
+        {
+            "attachment_id": ref["attachment_id"],
+            "filename": found[ref["attachment_id"]],
+            **({"import_id": ref["import_id"]} if ref.get("import_id") in real else {}),
+        }
+        for ref in refs
+    ]
 
 
 def _stream_response(iterator: Any, *, thread_id: str | None = None) -> StreamingResponse:
@@ -214,9 +238,9 @@ async def post_chat(
     if not text.strip():
         image_noun = "image" if len(photo_refs) == 1 else "images"
         if statement_refs and photo_refs:
-            text = f"Import the attached statement and see the attached {image_noun}."
+            text = f"I attached a statement and {'an image' if len(photo_refs) == 1 else 'images'}."
         elif statement_refs:
-            text = "Import the attached statement."
+            text = "I attached a statement."
         elif photo_refs:
             text = f"See the attached {image_noun}."
 
@@ -313,7 +337,7 @@ async def post_chat(
     deps = AgentDeps(
         conversation_id=thread_id,
         message_id=str(user_row["id"]) if user_row else None,
-        user_id=str(session["user_id"]),
+        user_id=session["login"],
         capture_kind=capture_kind,
         capture_ref=capture_ref,
         image_attachments=tuple(photo["attachment_id"] for photo in photos),

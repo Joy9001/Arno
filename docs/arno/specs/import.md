@@ -1,6 +1,6 @@
 # Statement import, photos, and voice
 
-This specification owns Arno's statement readers, import pipeline, verification checks,
+This specification owns Arno's statement readers, extraction, import pipeline, verification checks,
 reconciliation, own-account transfer and card-credit decisions, post-commit categorization, import
 undo, receipt photo extraction, voice transcription, and bank format findings; [`plan.md`](../plan.md)
 §2 owns product decisions, [`tools.md`](tools.md) owns the agent's tool contracts,
@@ -9,125 +9,130 @@ undo, receipt photo extraction, voice transcription, and bank format findings; [
 
 ## Architecture: readers, extraction, and verification
 
-Arno separates deterministic file decoding from bank-specific layout extraction and ledger
-verification. The following table assigns each responsibility:
+Arno separates file handling, extraction, and ledger verification. The following table assigns
+each responsibility:
 
 | Responsibility | Owner |
 |---|---|
-| Decode files into sheets, text lines, or positioned words | Host readers in `src/arno/importers/readers.py` |
-| Map cells or positioned words into transaction rows | Extraction, which is being rebuilt ([Extraction status](#extraction-status)) |
-| Verify totals, dates, headers, and reconcile against the ledger | Deterministic host code in `checks.py`, `gate.py`, `reconcile.py`, and `commit.py` |
+| Sniff the file kind, unlock it, count and render PDF pages, and preview its header text | Host readers in `src/arno/importers/readers.py` |
+| Turn a file into transaction rows | Extraction in `src/arno/agent/extractor.py`: a direct vision call or a sandbox script ([Extraction](#extraction)) |
+| Resolve the account and period, verify totals and dates, and reconcile against the ledger | Deterministic host code in `importers/extract.py`, `checks.py`, `reconcile.py`, and `commit.py` |
 
 The upload interface accepts any supported bank format rather than requiring CSV. Unsupported
 formats receive a plain explanation of what cannot be read.
 
-## Extraction status
+## Extraction
 
-Nothing extracts rows from a statement today. The chat agent has no import tool and no parser
-agent, and no code path opens an import from an upload. Attaching a statement in chat stores the
-file in `attachments` (`POST /api/attachments`) and nothing more. The simplification plan's
-[Phase 3](../planning/simplification-plan.md) replaces extraction. The rest of this page describes
-what stays: the readers, the import card with its password field, the verification gate
-(`submit_parser_code` in `src/arno/agent/parser.py`), reconciliation, review, commit, and undo.
+Every statement is read directly each time; Arno saves no parser. Extraction returns an
+`ExtractedStatement` (`src/arno/importers/extract.py`) and never writes the ledger:
+
+| Field | Meaning |
+|---|---|
+| `is_statement` | `false` for a payslip, a letter, or anything that is not a bank, card, or wallet statement |
+| `account` | `name`, `institution`, and `account_number` as printed; the host keeps only the last four digits |
+| `opening`, `closing` | The printed figures in ledger sign, or `null` when the file prints none |
+| `period_start`, `period_end` | The printed statement period, optional |
+| `rows` | Each row has an ISO `date`, `description`, non-negative `debit` and `credit` in paise, `balance` or `null`, `upi_ref`, and `counterparty` |
+| `empty_statement` | `true` when the statement says it had no transactions |
+
+The host picks one of two paths from the sniffed kind and the PDF's page count (`route` in
+`src/arno/agent/extractor.py`):
+
+| Path | Files | How it reads |
+|---|---|---|
+| **A: vision** | Statement images (PNG, JPEG, WebP), PDFs of 5 pages or fewer, and PDFs with no text layer | One PydanticAI call with `output_type=ExtractedStatement` on the `VISION` role. A PDF's pages are rendered to PNG (scale 2) and sent with the prompt |
+| **B: script** | Spreadsheets, CSV and other text formats, and digital PDFs of more than 5 pages | A plain PydanticAI run on the `CHAT` role with up to 25 requests (`UsageLimits(request_limit=25)`) |
+
+A PDF over 150 pages (`MAX_DOC_PAGES`) is refused with advice to download shorter date ranges. A
+scanned PDF is capped at 12 pages (`MAX_SCANNED_PAGES`) because the vision model reads it page by
+page. A ZIP holding one file is unwrapped; a ZIP holding several is refused so each statement gets
+its own review. Legacy `.doc` and unknown OLE2 containers are refused.
+
+**Path A retry.** If the host's checks fail, the model gets the reason (a chain break or a totals
+mismatch, for example) with its own previous answer and tries once more. A second failure fails
+the import with that reason.
+
+**Path B.** The model gets a `run_python` tool that runs in the `sandbox` service with the
+statement file in the working directory (`pdfplumber`, `python-calamine`, `python-docx`,
+`pypdfium2`, and `numpy` are installed). It inspects the headers wherever they sit, then answers
+with a **script**, not rows. The output function runs that script in the sandbox, reads the
+`result.json` it writes as an `ExtractedStatement`, and runs the checks. A failure raises
+`ModelRetry` with the reason, which is the targeted retry. The thousand-plus rows come from the
+script's output and never from model tokens. The sandbox call is `tools/sandbox.run_python`, the
+same client the chat agent's `run_python` tool uses.
+
+Both paths treat statement text as data, never instructions, and set `instrument = False` so page
+images and statement text never reach traces. Each model request checks the shared daily cap
+before it runs and logs its usage after it (`usage_hooks("vision")` and `usage_hooks("parse")`).
+The import card's progress line is host-made text only. A model error, a step limit, or the daily
+cap ends the import as `failed` with a plain reason, and **Retry** (`POST /api/imports/{id}/retry`)
+reads the stored file again.
+
+Extraction runs as a background task (`spawn` in `src/arno/jobs/background.py`) backed by
+`imports.status`. Boot recovery (`recover` in `src/arno/jobs/loop.py`) respawns every import still
+in `parsing`.
 
 ## Import pipeline
 
 ![An import passes the gate before review](../diagrams/sd-import-pipeline.png)
 
-_Figure: Extracted rows pass a code gate that verifies them against the current file and every
-stored committed statement for that bank. Reconciliation and the review screen follow, and commit
-saves the result ([diagram notes](../diagrams/sd-import-pipeline.md))._
+_Figure: Extracted rows pass the host's checks before review. Reconciliation and the review screen
+follow ([diagram notes](../diagrams/sd-import-pipeline.md))._
 
-Readers, checks, the verification gate, and commits are deterministic code. Each import moves
-through these stages:
+Readers, checks, and commits are deterministic code. Each import moves through these stages:
 
-1. **Open:** `create_import()` creates the `imports` row so the import card appears, and each
-   file's format is sniffed from magic bytes. PDFs exceeding 150 pages (`MAX_DOC_PAGES = 150`) are
-   refused with instructions to split downloads into shorter date ranges. Multi-file ZIP archives
-   are refused (`_archive_refusal`) so each statement receives its own review. If a file is
-   encrypted, the import card renders a password field. Passwords travel over
-   `POST /api/imports/{id}/password`, stay in memory only for that unlock, are never persisted, and
-   never enter chat or any model.
-2. **Verification gate:** `submit_parser_code` runs the extraction script through
-   `src/arno/importers/gate.py` in a fresh Monty sandbox (`src/arno/importers/monty.py`) with the
-   helper prelude prepended, runs all verification checks, and replays the script against every
-   stored committed statement from the same bank. A failure returns its reason and the import stays
-   in `parsing`; only a passing gate moves the import to `review`.
-3. **Deduplicate:** Matches rows against existing `committed` or `review` lines for the same
+1. **Open:** `POST /api/attachments` stores the file and calls `create_import()`, which creates
+   the `imports` row so the import card appears, and returns its `import_id`. A file already
+   importing keeps its existing import. A locked PDF or Office file goes to `needs_password`;
+   anything else goes to `parsing` and starts extraction.
+2. **Unlock:** The card sends the password to `POST /api/imports/{id}/password`. The host opens
+   the file synchronously: a PDF through `pypdfium2` saved with `FPDF_REMOVE_SECURITY`, an Office
+   file through `msoffcrypto-tool`. It stores the unlocked bytes in `attachments` (`unlocked_at`
+   marks them), keeps the password only for that call, and never persists it, logs it, or sends it
+   to chat or any model. A wrong password returns `422` and the import stays in
+   `needs_password`. Then extraction starts.
+3. **Extract and check:** [Extraction](#extraction) returns an `ExtractedStatement`.
+   `finalize_extracted` scrubs the account number to its last four digits, resolves the account,
+   derives the period, runs the checks, and moves the import to `review`. A statement whose opening
+   only you can give waits in `needs_input` with its rows kept, any other failed check fails the
+   import with its reason, and a document that is not a statement ends as `not_a_statement`.
+4. **Deduplicate:** Matches rows against existing `committed` or `review` lines for the same
    account by `content_hash`.
-4. **Reconcile:** Matches remaining lines against effective movements already logged through chat,
+5. **Reconcile:** Matches remaining lines against effective movements already logged through chat,
    photo, or voice.
-5. **Review:** The **Imports** screen shows new lines, matched lines, ambiguous candidates,
+6. **Review:** The **Imports** screen shows new lines, matched lines, ambiguous candidates,
    suggested own-account transfers, required credit-card credit classifications, and any closing
    balance adjustment. Categories are omitted until after commit.
-6. **Commit:** Re-reconciles `new` lines against current ledger movements so items logged while the
+7. **Commit:** Re-reconciles `new` lines against current ledger movements so items logged while the
    import waited in review merge instead of duplicating. Inside one database transaction, commit
    books the evidenced opening balance at `period_start`, supersedes balance adjustments explained
    by the statement period, re-places the opening of any later statement whose first day the new
    rows now explain, preserves any stated balance dated after `period_end`, writes movements
-   and `statement_line` captures, records any confirmed closing adjustment, recomputes baselines,
-   and saves the passing script as a new active parser version.
-7. **Categorize:** Commit enqueues a background `categorize_import` job that applies rules first
-   and labels remaining payees with the categorizer agent.
+   and `statement_line` captures, records any confirmed closing adjustment, and recomputes
+   baselines.
+8. **Categorize:** Commit queues categorization (`imports.categorize = queued`) and spawns it after
+   the transaction. It applies rules first and labels remaining payees with the categorizer agent.
 
-Files that are not statements (such as payslips or loan letters) import nothing. Parser versions
-are saved only on commit; rejected or gate-failed scripts are never saved.
-
-### Monty sandbox limits and determinism
-
-`src/arno/importers/monty.py` executes every submitted and replayed script in an isolated
-`AsyncMonty` session with strict resource and determinism bounds. Phase 3 removes it:
-
-- **Resource limits:** 256 MiB memory (`max_memory`), 30 seconds per feed
-  (`max_feed_duration_secs`), 5,000 suspensions (`max_suspensions`), and 1 second total sleep
-  (`max_total_sleep_secs`).
-- **Frozen OS policy:** `datetime` is pinned to `2026-01-01T12:00:00Z`, `random` starts from seed
-  `0`, and `sleep` is zeroed so replays are deterministic.
-- **Cost-stop propagation:** If `transcribe_page` raises any exception in `COST_STOP_ERRORS`,
-  `run_script` records it and re-raises it in `finally` even if the script catches the error,
-  preventing a script from looping into additional paid vision calls.
-
-Statement-page vision calls (`src/arno/importers/vision.py`) set `agent.instrument = False` so page
-images never reach traces.
-
-### Parser versions and replay regression set
-
-`parser_versions` rows are append-only per `statement_layouts` entry, with at most one active
-version enforced by a partial unique index on `parser_versions (layout_id) WHERE is_active`.
-Activating a new version or rolling back (`POST /api/layouts/{id}/rollback`) flips flags inside one
-transaction.
-
-An unlocked copy of each statement is stored once opened (using `FPDF_REMOVE_SECURITY` for PDFs or
-decrypted bytes for Office files) because passwords are never stored. You can purge a stored file
-(`DELETE /api/attachments/{id}`), which removes it from the replay set. The replay set contains
-every stored, non-purged statement for that bank whose import is committed and not undone; a new
-parser version must reproduce each stored statement's saved `statement_lines` (dates, amounts,
-balances, and descriptions) identically.
+Files that are not statements (such as payslips or loan letters) import nothing.
 
 ## File readers
 
-`src/arno/importers/readers.py` selects a reader solely from magic bytes and content inspection
-(`sniff`), never from filename extensions. The following table lists every supported format and its
-reader behavior:
+`src/arno/importers/readers.py` selects a kind solely from magic bytes and content inspection
+(`sniff`), never from filename extensions. The host does five things with a file: sniff its kind,
+unlock it, count a PDF's pages and its text-layer pages, render PDF pages to PNG, and read a short
+text preview of its header (the first two PDF pages, or the first 40 rows) so the period and the
+account can be found. Everything else about a format is the extraction path's job:
 
-| Format | Reader and behavior |
+| Format | Path |
 |---|---|
-| PDF with text layer (locked or unlocked) | `pypdfium2` extracts positioned words with automatic reading-rotation detection |
-| Scanned PDF or statement image | `pypdfium2` renders pages to PNG (scale 2) and sends them to the isolated `VISION` role (`transcribe_page`) |
-| `.xlsx`, `.xls`, `.ods`, `.xlsb` | `python-calamine` reads workbook sheets into trimmed cell grids |
-| Password-protected `.xlsx` (`encrypted_ooxml`) | `msoffcrypto-tool` decrypts in memory, then re-sniffs and reads with `python-calamine` |
-| HTML and HTML-in-`.xls` | Standard-library `HTMLParser` extracts `<table>` grids |
-| CSV, TSV, TXT | Host decodes UTF-8, UTF-16, or cp1252 and selects the modal consistent delimiter (`\t`, `;`, `\|`, `,`) across rows |
-| `.docx` | `python-docx` extracts tables and non-empty paragraphs as sheets |
-| RTF | `striprtf` converts cell and row markers to text lines |
-| OFX, MT940, JSON | Host decodes text lines into single-column cell rows |
-| CAMT.053 and XML | Host flattens XML elements into `path: text` lines |
-| Single-file ZIP archive | `zipfile` rejects paths with `..` or leading slashes, limits to 50 members and 200 MB uncompressed, and unpacks a single readable statement; multi-file archives are refused by `_archive_refusal` |
-| Legacy `.doc` and `ole_other` | Detected by `sniff()` (`WordDocument` or unknown OLE2 container), left unpopulated, and raises `DocError` (`no_sheets` / `no_words`) when read; raw bytes are never sent to the model |
-
-The helper prelude (`src/arno/importers/helpers.py`) supplies `money`, `money_float`, `to_iso`,
-`date_any`, `serial_to_iso`, `lines_of`, `join`, `line_text`, and `find_col` to submitted scripts
-and stamps each saved parser version with `HELPER_VERSION`.
+| PDF with a text layer | A for 5 pages or fewer, B for more |
+| Scanned PDF (no text layer) | A |
+| PNG, JPEG, WebP image | A |
+| `.xlsx`, `.xls`, `.ods`, `.xlsb`, CSV, TSV, TXT | B (`python-calamine` or the standard library in the sandbox) |
+| Password-protected `.xlsx` (`encrypted_ooxml`) | Unlocked on the host with `msoffcrypto-tool`, then B |
+| `.docx`, HTML, RTF, OFX, MT940, CAMT, XML, JSON | B |
+| Single-file ZIP archive | Unwrapped (members with `..` or a leading slash are refused, with at most 50 members and 200 MB uncompressed), then routed by its content |
+| Legacy `.doc` and unknown OLE2 containers | Refused with a plain reason |
 
 ## Verification checks
 
@@ -141,15 +146,12 @@ opening_balance + credits - debits == closing_balance
 Where the statement prints a running balance, every row's balance must also chain from the previous
 row. The result is `VERIFIED`, `DISCREPANCY`, or `FAILED`, and commit accepts only `VERIFIED`.
 
-Because totals alone can miss swapped day/month dates or shifted narration columns, the gate
-enforces six additional checks:
+Because totals alone can miss swapped day/month dates, the host enforces four additional checks:
 
 | Check | Failure prevented |
 |---|---|
-| Every row date falls inside the host-derived statement period (from the header or the ledger's last date) | Day/month date swaps |
-| Normalized column headers match a known layout variant | A new bank column polluting narrations |
-| New parser versions reproduce saved `statement_lines` across every stored committed statement for the bank | Overfitting a parser to one month |
-| At least one row exists unless the script sets `empty_statement: true` with `opening == closing` | Silently dropping every row when opening equals closing |
+| Every row date falls inside the host-derived statement period (from the file's header text, else the period the statement printed, else the day after the ledger's last date) | Day/month date swaps |
+| At least one row exists unless the extraction sets `empty_statement: true` with `opening == closing` | Silently dropping every row when opening equals closing |
 | The statement period ends on or before today in `Asia/Kolkata` | Corrupt or mistyped future dates pinning bogus balances |
 | The opening balance is evidenced by the statement's printed opening, a trusted ledger balance, or a manual entry on the review card (`POST /api/imports/{id}/opening`) | Silently defaulting a missing opening to zero or hiding a gap between statements |
 
@@ -162,19 +164,26 @@ diverge from the bank statement.
 All figures below the raw statement text use **ledger sign**: `opening`, `closing`, running
 balances, check verdicts, and stored account statement balances. Bank accounts already print in
 ledger sign. Credit cards print amounts owed as positive numbers while ledger liabilities are
-negative, so card parsers negate printed balances (₹4,450 owed is `-445000`, and an overpaid card
+negative, so extraction negates printed balances (₹4,450 owed is `-445000`, and an overpaid card
 in credit is positive). Row `debit` and `credit` fields are always non-negative (`debit` leaves the
 account, `credit` arrives).
 
-When a statement omits its opening balance, `submit_parser_code` keeps its sound rows, parks the
-import in `needs_input`, and answers `needs_opening` (a finished file, not a failure); other files
-in the same submit still run. The review screen asks for the printed
-figure and converts it once by account kind (`stated_opening_to_ledger` in
+When a statement omits its opening balance, `finalize_extracted` keeps its sound rows and parks
+the import in `needs_input` with the reason `opening balance not found in the file or the ledger`
+(a finished file, not a failure, so extraction does not retry). The review screen asks for the
+printed figure and converts it once by account kind (`stated_opening_to_ledger` in
 `src/arno/importers/checks.py`).
 Commit books the evidenced opening at `period_start`, supersedes adjustments inside the statement
 period, and surfaces any remaining closing discrepancy—or any conflict with a balance you manually
 stated for a date inside the statement period—for explicit confirmation (`adjustment_confirmed`)
 before booking.
+
+The review's forecast and the commit's booking are one function, `plan_balances` in
+`src/arno/importers/balance_plan.py`: it reads one window, then either returns the forecast the
+review screen states or, with `book=True` under the commit's locks, books it, so the two can't
+disagree. The opening and the stated-balance re-anchor it books carry the import's id in
+`movements.import_id`, and later commits find them by that id, never by their description. The
+closing adjustment carries none.
 
 Statements can be committed in any order. When an older statement lands after a newer one, its
 rows already carry the balance to the newer statement's first day, so commit shrinks that later
@@ -186,7 +195,9 @@ older import restores the newer one's opening exactly.
 
 Reconciliation (`src/arno/importers/reconcile.py`) prevents double-counting between statements and
 movements already logged by chat, photo, or voice. Every line is matched against effective
-movements on the same account within ±3 days and the same debit/credit direction.
+movements on the same account within ±3 days and the same debit/credit direction. The matcher
+reads the account's imported content hashes and its candidate movements once per import, in two
+bulk queries, and matches in Python, so the query count doesn't grow with the line count.
 
 The following table defines the match outcomes:
 
@@ -210,12 +221,12 @@ merges automatically; any newly ambiguous match blocks commit and returns the li
 ## Own-account transfers and card credits
 
 Moving money between your own accounts (credit-card bill payments, ATM withdrawals to cash, or
-self-transfers) is not spending. Extraction inspects your active accounts and calls
-`suggest_transfers` (`src/arno/agent/parser.py`) for lines whose own text names the destination account: its name or
-institution, its last four digits, or a card-payment phrase (`CC PAYMENT`, `ccrepayment`) when you
-have exactly one card. A payment to your own name alone is not evidence (it may go to a wallet or
-an account the ledger lacks), and the host refuses a suggestion whose line does not name its
-account (`names_account`). Commit refuses to proceed until you confirm or reject every suggested transfer
+self-transfers) is not spending. After extraction, the host
+(`suggest_transfers` in `src/arno/importers/extract.py`) marks every line whose own text names
+exactly one other active account of yours: its name, its last four digits, or a card-payment phrase
+(`CC PAYMENT`, `ccrepayment`) when you have exactly one card (`names_account`). A bank code alone
+is not evidence, and neither is a payment to your own name (it may go to a wallet or an account the
+ledger lacks). Commit refuses to proceed until you confirm or reject every suggested transfer
 on the review screen (`PATCH /api/imports/{id}/lines/{line_id}`). When the counterpart account's
 statement arrives later, its line merges into the transfer rather than booking twice.
 
@@ -233,32 +244,36 @@ classify it on the review screen as:
 ![Rules label most rows, and the model labels the rest](../diagrams/sd-categorize.png)
 
 _Figure: After commit, deterministic rules label every matching row. The background categorizer
-agent sends remaining payees to the model, checks calibration agreement,
-saves trusted answers as rules, and leaves unsure rows uncategorized with a hint
+sends remaining payees to the model in parallel chunks, saves high-confidence answers as rules,
+and leaves unsure rows uncategorized with a hint
 ([diagram notes](../diagrams/sd-categorize.md))._
 
-Categorization runs asynchronously in a background `categorize_import` job (`src/arno/importers/categorize.py`
-and `src/arno/agent/categorizer.py`) and never starts a chat conversation.
+Categorization runs asynchronously in a spawned task (`src/arno/importers/categorize.py`) and never
+starts a chat conversation. The task records `running`, then `done`, `partial`, or `failed` with
+its counts or error on `imports.categorize`; boot recovery respawns a `queued` or `running` import,
+and `POST /api/imports/{id}/categorize` retries a `failed` one.
 
-- **Rules first:** User rules take priority over `llm` rules, which take priority over seed rules.
-  Indian payment-rail prefixes (`UPI/DR`, `NEFT`, `IMPS`, `POS`, `NACH`, `WDL TFR`) are stripped
-  before pattern matching (`equals`, `contains`, or `regex`).
-- **Seed merchant list:** `src/arno/importers/seed_rules.py` ships **163** Indian merchant rules
-  inserted idempotently at boot. Eight payment aggregators in `PAYMENT_APPS` (`one97`, `paytm`,
-  `phonepe`, `google pay`, `gpay`, `cred`, `amazon pay`, and `razorpay`) are excluded from
-  name-only matching so their rows go to the model with amount and narration context.
-- **Direct execution:** The categorizer agent (`CATEGORIZE_USAGE_LIMITS`: 40 requests, 80 tool
-  calls) groups payees into chunks of 12 (`CHUNK_PAYEES = 12`) and calls `categorize_now` (up to 8
-  concurrent chunks with thinking disabled). There is no provider Batch API path, so categorizing
-  always runs through the `CHAT` role.
-- **Empirical calibration:** The host injects up to 5 already-ruled payees (`CHECK_PAYEES = 5`)
-  without their labels and measures the model's agreement rate instead of trusting self-reported
-  confidence. Low agreement causes the agent to distrust more keys.
-- **Never default to "Other":** Unsure payees, distrusted keys, and `"Other"` guesses stay
-  uncategorized with `category_hint` preserved for the **Uncategorized** queue, grouped by payee
-  so UPI payments to people are answered once and saved as rules.
-- **Single undoable write group:** `save_categories` writes all trusted labels and `llm` rules in
-  one audit write group and links its ID to `imports.categorize_groups`.
+- **Rules first:** User rules take priority over `llm` rules. Indian payment-rail prefixes
+  (`UPI/DR`, `NEFT`, `IMPS`, `POS`, `NACH`, `WDL TFR`) are stripped before pattern matching
+  (`equals`, `contains`, or `regex`). There is no shipped merchant list.
+- **Refunds:** A credit that reverses a debit from the same payee within 60 days takes that
+  purchase's category.
+- **One call per chunk:** The remaining payees go out in chunks of 35 (`CHUNK_PAYEES`), at most 8
+  at the same time, each as one structured-output call on the `CHAT` role with thinking disabled.
+  The input is the payee key, a sample narration, the total amount, and the direction. The output
+  is a list of `{key, category, confidence}` where `confidence` is `high` or `low`. Payee names and
+  narrations are data, never instructions. Each call checks the daily budget first and records its
+  usage after.
+- **Confidence decides:** A `high` answer naming an active category labels its rows and is saved
+  as an `llm` rule. A `low` answer, `"Other"`, or an unknown category stays uncategorized with
+  `category_hint` for the **Uncategorized** queue, grouped by payee so UPI payments to people are
+  answered once and saved as rules. Payment aggregators in `PAYMENT_APPS` (`paytm`, `phonepe`,
+  `gpay`, `cred`, `razorpay`, and so on) never become name-only rules, because one name fronts
+  any merchant.
+- **Failure:** A chunk whose call fails leaves its payees uncategorized and makes the run
+  `partial`. A spend stop fails the run, and the entry point records `failed`.
+- **Single undoable write group:** The model's labels, rules, and hints are one audit write group
+  linked to `imports.categorize_groups`, as is the rules-and-refunds phase before it.
 
 ## Undoing an import
 
@@ -276,8 +291,8 @@ To prevent deadlocks among concurrent commits, undos, and background categorizer
 2. Import row (`imports FOR UPDATE`).
 3. Referenced payees in ascending ID order (`payees ORDER BY id FOR UPDATE`).
 
-`save_categories` acquires the import row lock before reading pending rows, so a save racing with
-an undo waits and exits cleanly with nothing left to label.
+The categorizer's save acquires the import row lock before reading pending rows, so a save racing
+with an undo waits and exits cleanly with nothing left to label.
 
 ## Photos and voice
 
@@ -318,14 +333,14 @@ Desktop dictation tools that paste text directly into the composer bypass `STT_*
 
 ## Bank format findings
 
-Real-statement testing validated the reader and model-written parser design against Indian bank exports and
+Real-statement testing validated model-written parsing against Indian bank exports and
 evaluated third-party parser libraries. The following table summarizes the bank findings:
 
-| Bank | Download format | Password | Parser status | Format quirks and notes |
+| Bank | Download format | Password | Result | Format quirks and notes |
 |---|---|---|---|---|
-| SBI | 12-month PDF or `.xlsx` (encrypted OLE2) | Required | Verified (939 rows; saved parser) | Both formats emit identical rows matching the statement's debit and credit counts; `.xlsx` parses faster than PDF |
-| Slice credit card | Monthly unlocked PDFs | None | Verified (5 cycles, 80 rows; saved parser) | Billing cycle runs 25th–24th; header prints yearless `DD MON - DD MON` while rows use `DD Mon 'YY`; exports omit several repayments shown in the app and occasionally shift a repayment date by one day, making own-account confirmation and visible closing adjustments essential |
-| Union Bank of India | PDF | Required | Open | No real statement tested; no layout is saved |
+| SBI | 12-month PDF or `.xlsx` (encrypted OLE2) | Required | Verified (939 rows) | Both formats emit identical rows matching the statement's debit and credit counts; `.xlsx` parses faster than PDF |
+| Slice credit card | Monthly unlocked PDFs | None | Verified (5 cycles, 80 rows) | Billing cycle runs 25th–24th; header prints yearless `DD MON - DD MON` while rows use `DD Mon 'YY`; exports omit several repayments shown in the app and occasionally shift a repayment date by one day, making own-account confirmation and visible closing adjustments essential |
+| Union Bank of India | PDF | Required | Open | No real statement tested |
 
 Third-party parser libraries and standalone OCR were not adopted:
 

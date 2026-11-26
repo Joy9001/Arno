@@ -20,9 +20,8 @@ uv run python -m tests.e2e.driver down
 
 `up` refuses any database whose name does not end in `_test`. It runs the migrations, seeds the
 synthetic persona when asked, starts `uv run arno serve` on `127.0.0.1:<port>` with jobs on
-and the passkey origin at `http://localhost:<port>`, waits for `/api/health`, then enrolls a
-software passkey through the real setup token and WebAuthn ceremony. `--empty` drops the schema
-first instead of seeding.
+and a fixed scratch passphrase, waits for `/api/health`, then signs in through
+`/api/auth/login`. `--empty` drops the schema first instead of seeding.
 
 The session, base URL, current thread, and the last turn's confirm cards live under `$E2E_STATE`
 (default `<tempdir>/arno-e2e-<database>`), as `state.json` plus `server.log`. So separate
@@ -44,7 +43,7 @@ uv run python -m tests.e2e.driver up --port 8125 --keep
 
 | Command | What it does |
 | --- | --- |
-| `up --port N [--seed demo] [--empty] [--keep]` | migrate, start the server, enroll a passkey |
+| `up --port N [--seed demo] [--empty] [--keep]` | migrate, start the server, sign in with the passphrase |
 | `down` | stop the server it started |
 | `chat "text" [--file PATH]... [--thread ID] [--new] [--json]` | one user turn, as the composer sends it |
 | `approve TOOL_CALL_ID... yes\|no [--thread ID]` | answer the last turn's confirm cards; a two-card turn needs both ids (the server refuses a partial answer; the web never sends one) |
@@ -180,7 +179,7 @@ after the journeys above.
 ## The smoke test
 
 `tests/test_e2e_driver.py` runs in normal `pytest` with models blocked. It drives a real
-enrollment and upload against an in-process app, validates both request bodies against the server's
+sign-in and upload against an in-process app, validates both request bodies against the server's
 own schema, and checks that a canned stream becomes tool calls, cards, confirm cards, and a
 number-check note.
 
@@ -191,9 +190,8 @@ uv run pytest tests/test_e2e_driver.py -q -n 0
 ## Browser journeys
 
 `tests/e2e/browser_journey.py` reuses the driver's scratch-database guard, migrations, server
-start, setup token, health wait, state directory, and stop path, then drives the running app with
-Playwright. The browser enrolls its own passkey through the real WebAuthn ceremony, using
-Chromium's CDP virtual authenticator, so no software authenticator stands in for the screen.
+start, health wait, state directory, and stop path, then drives the running app with
+Playwright. The browser signs in through the real passphrase form.
 
 Playwright `1.64.0` is the release whose bundled Chromium revision, `1248`, is already in the
 local browser cache. It is not a project dependency; `--with` installs it only for the journey
@@ -215,14 +213,13 @@ the real journeys, where `enroll` completes onboarding and asks its first questi
 shows the window.
 
 Every run resets its database (`--empty` for `enroll`, the demo persona otherwise), starts
-`uv run arno serve` on `127.0.0.1:<port>` with the passkey origin at `http://localhost:<port>`,
+`uv run arno serve` on `127.0.0.1:<port>` with a scratch passphrase,
 and stops it at the end. Screenshots after each step, a full-page HTML dump, and
 `summary-<journey>.json` land under `$E2E_STATE/browser/<journey>/`. The same summary is printed
 as JSON: journey, passed steps, figures seen, screenshot paths, and the thread id. A failure names
 the step it stopped at and exits non-zero.
 
-- `enroll` (C01 box 4): empty database, the enrollment link (`/setup#t=…`), the passkey buttons,
-  the first-run message with the account and salary, any confirm card clicked in the UI, then
+- `enroll` (C01 box 4): empty database, the passphrase form, the first-run message with the account and salary, any confirm card clicked in the UI, then
   "How much can I safely spend before my next salary?" It reads the account balance and salary
   schedule back through the API, then asserts no error banner, a rupee figure in the answer, and
   the home figure equal to the chat card's when both are rendered.

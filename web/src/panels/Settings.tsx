@@ -4,8 +4,6 @@ import { AlertDialog, Button, Skeleton } from "@radix-ui/themes";
 import {
   Activity,
   Bell,
-  BellOff,
-  BellRing,
   Brain,
   CalendarClock,
   ChevronLeft,
@@ -18,7 +16,6 @@ import {
   Download,
   FileJson,
   FileSpreadsheet,
-  KeyRound,
   LogOut,
   Pause,
   Pencil,
@@ -38,25 +35,13 @@ import {
 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { api, errorMessage } from "../api";
-import { ensureFreshPasskey } from "../auth";
 import { NAVIGATE_EVENT } from "../nav";
 import { RuntimeInfo } from "./RuntimeInfo";
 import type { Preference, PreferenceList } from "../chat/types";
-import { formatMoment, formatMomentShort, formatRelative } from "../format";
+import { formatMoment } from "../format";
 import { MemoryPrevious } from "./MemoryPrevious";
-import {
-  jobKindTitle,
-  jobOutcome,
-  jobStatusLabel,
-  jobStatusText,
-  kickActivity,
-  useJobs,
-  useNow,
-} from "../jobs";
 import { Busy } from "../Loading";
 import { Orb } from "../Orb";
-import { disablePush, enablePush, pushPermission, pushSupported } from "../push";
-import { PushStatus } from "./PushStatus";
 import { ExportScope } from "./ExportScope";
 import { DeletionPreviewNote, DeletionScope } from "./DeletionScope";
 import { HistoryPanel } from "./History";
@@ -65,15 +50,12 @@ import type {
   Category,
   CategoryTree,
   DeletionPreview,
-  JobStatus,
-  JobView,
   ScheduledQuestion,
   ScheduledQuestionList,
   Settings as SettingsPayload,
 } from "../types";
 import { useApi } from "../useApi";
 import type { ApiState } from "../useApi";
-import { PasskeysCard } from "./Passkeys";
 import "./Settings.css";
 
 const SECTION_GROUPS: Array<{
@@ -86,7 +68,6 @@ const SECTION_GROUPS: Array<{
       { id: "profile", label: "Profile & floor", Icon: UserRound },
       { id: "categories", label: "Categories", Icon: Tags },
       { id: "notifications", label: "Notifications", Icon: Bell },
-      { id: "passkeys", label: "Passkeys", Icon: KeyRound },
       { id: "questions", label: "Scheduled questions", Icon: CalendarClock },
       { id: "memory", label: "Agent memory", Icon: Brain },
       { id: "history", label: "History", Icon: RotateCcw },
@@ -95,7 +76,7 @@ const SECTION_GROUPS: Array<{
   {
     label: "Advanced",
     items: [
-      { id: "jobs", label: "Background work", Icon: Activity },
+      { id: "diagnostics", label: "Diagnostics", Icon: Activity },
       { id: "backups", label: "Backups", Icon: DatabaseBackup },
       { id: "export", label: "Export", Icon: Download },
       { id: "deletion", label: "Delete everything", Icon: Trash2 },
@@ -1186,7 +1167,7 @@ function NotificationsSection({ settings }: { settings: ApiState<SettingsPayload
     <SettingsSection
       id="notifications"
       title="Notifications"
-      description="Choose when reminders arrive and whether this browser may show a push notice."
+      description="Choose when reminders arrive."
     >
       <div className="stg-columns">
         <Loadable
@@ -1196,7 +1177,6 @@ function NotificationsSection({ settings }: { settings: ApiState<SettingsPayload
         >
           {(data) => <NotificationsCard settings={data} onSaved={settings.reload} />}
         </Loadable>
-        <PushCard />
       </div>
     </SettingsSection>
   );
@@ -1307,100 +1287,6 @@ function NotificationsCard({
       </form>
       <Feedback error={error} message={message} />
     </div>
-  );
-}
-
-function PushCard() {
-  const [supported] = useState(() => pushSupported());
-  const [permission, setPermission] = useState<NotificationPermission | "unsupported">(
-    "default",
-  );
-  const [subscribed, setSubscribed] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!supported) return;
-    void pushPermission().then(setPermission);
-    navigator.serviceWorker
-      .getRegistration()
-      .then((registration) => registration?.pushManager.getSubscription())
-      .then((subscription) => setSubscribed(Boolean(subscription)))
-      .catch(() => setSubscribed(false));
-  }, [supported]);
-
-  async function toggle() {
-    setBusy(true);
-    setError(null);
-    try {
-      if (subscribed) {
-        await disablePush();
-        setSubscribed(false);
-      } else {
-        const result = await enablePush();
-        setPermission(result);
-        setSubscribed(result === "granted");
-      }
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="stg-card">
-      <h3>Web push</h3>
-      <p className="stg-hint">
-        Push only says that something is ready, such as “Your weekly briefing is ready”. No amount,
-        merchant, or balance is sent through the browser vendor's push service; the full item stays
-        in the inbox.
-      </p>
-      {!supported ? (
-        <div className="stg-empty">
-          <p>This browser does not support web push.</p>
-        </div>
-      ) : (
-        <>
-          <PushStatus permission={permission} subscribed={subscribed} />
-          <div className="stg-actions">
-            <button type="button" className="ghost" disabled={busy} onClick={() => void toggle()}>
-              {busy ? (
-                <>
-                  <Busy />
-                  Working…
-                </>
-              ) : subscribed ? (
-                <>
-                  <BellOff size={15} strokeWidth={1.8} aria-hidden="true" />
-                  Disable push notifications
-                </>
-              ) : (
-                <>
-                  <BellRing size={15} strokeWidth={1.8} aria-hidden="true" />
-                  Enable push notifications
-                </>
-              )}
-            </button>
-          </div>
-        </>
-      )}
-      <Feedback error={error} message={null} />
-    </div>
-  );
-}
-
-function PasskeysSection() {
-  return (
-    <SettingsSection
-      id="passkeys"
-      title="Passkeys"
-      description="Signing in and the devices that can unlock this instance. Every sensitive change asks for a fresh passkey check."
-    >
-      <div className="stg-card stg-passkeys">
-        <PasskeysCard />
-      </div>
-    </SettingsSection>
   );
 }
 
@@ -1717,268 +1603,18 @@ function ScheduledQuestionsCard({
   );
 }
 
-function jobTone(job: JobView): "good" | "danger" | "warn" | "muted" {
-  if (job.status === "failed") return "danger";
-  if (job.status === "done") return "good";
-  if (job.status === "running" || job.attempts > 0) return "warn";
-  return "muted";
-}
-
-function jobWhen(job: JobView): string {
-  if (job.status === "pending") return job.run_at;
-  if (job.status === "running") return job.started_at ?? job.run_at;
-  return job.finished_at ?? job.run_at;
-}
-
-function JobStatusCell({ job }: { job: JobView }) {
-  const now = useNow(job.status === "running" || job.status === "pending");
-  return (
-    <>
-      <span className={`badge ${jobTone(job)}`}>{jobStatusLabel(job)}</span>
-      <span className="fine stg-table-sub">{jobStatusText(job, now)}</span>
-    </>
-  );
-}
-
-function RunningJobRow({ job }: { job: JobView }) {
-  const now = useNow(job.status === "running" || job.status === "pending");
-  const title = jobKindTitle(job.kind);
-  return (
-    <li className="stg-running-row">
-      <div className="stg-running-head">
-        <div>
-          <strong>{title}</strong>
-          {job.subject && <span className="fine stg-table-sub">{job.subject}</span>}
-        </div>
-        <span className="fine">{jobStatusText(job, now)}</span>
-      </div>
-      <div className="stg-progress" role="progressbar" aria-label={`${title} in progress`}>
-        <span />
-      </div>
-    </li>
-  );
-}
-
-function JobsSection() {
-  const jobs = useApi<JobStatus>("/api/jobs");
-  const active = useJobs((state) => state.active);
-  const version = useJobs((state) => state.version);
-  const reload = jobs.reload;
-  const seenVersion = useRef(version);
-
-  // A finished job changes what the recent list should say; the first fetch is already fresh.
-  useEffect(() => {
-    if (version === seenVersion.current) return;
-    seenVersion.current = version;
-    reload();
-  }, [version, reload]);
-
-  useEffect(() => {
-    if (!active.length) return;
-    const timer = window.setInterval(reload, 5_000);
-    return () => window.clearInterval(timer);
-  }, [active.length, reload]);
-
+function DiagnosticsSection() {
   return (
     <SettingsSection
-      id="jobs"
-      title="Background work"
-      description="What Arno does on its own, and when each task next runs. A missed run starts once when the machine wakes."
+      id="diagnostics"
+      title="Diagnostics"
+      description="The models Arno is configured to use and how they are doing."
     >
-      <Loadable
-        state={jobs}
-        label="background work"
-        skeleton={<SettingsSkeleton label="Loading background work…" rows={5} />}
-      >
-        {(data) => <JobsCard data={data} active={active} reload={reload} />}
-      </Loadable>
       <div className="stg-card">
         <h4>Models and diagnostics</h4>
         <RuntimeInfo />
       </div>
     </SettingsSection>
-  );
-}
-
-function JobsCard({
-  data,
-  active,
-  reload,
-}: {
-  data: JobStatus;
-  active: JobView[];
-  reload: () => void;
-}) {
-  const [retrying, setRetrying] = useState<string | null>(null);
-  const [retryError, setRetryError] = useState<string | null>(null);
-  const now = useNow(active.length > 0, 10_000);
-  // From the runs on screen: the all-time counts would keep an old failure in the summary forever.
-  const count = (statuses: JobView["status"][]) =>
-    data.recent.filter((job) => statuses.includes(job.status)).length;
-  const running = count(["running", "pending"]);
-  const failed = count(["failed"]);
-  const done = count(["done"]);
-  const summary = [
-    running > 0 ? `${running} running` : null,
-    failed > 0 ? `${failed} failed` : null,
-    done > 0 ? `${done} done` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
-  async function retry(job: JobView) {
-    setRetrying(job.id);
-    setRetryError(null);
-    try {
-      await api(`/api/jobs/${job.id}/retry`, { method: "POST" });
-      reload();
-      kickActivity();
-    } catch (caught) {
-      setRetryError(errorMessage(caught));
-    } finally {
-      setRetrying(null);
-    }
-  }
-
-  return (
-    <div className="stg-card">
-      <p className={summary ? "stg-status-line" : "stg-status-line stg-hint"}>
-        {summary || "Nothing has run yet"}
-      </p>
-
-      <div className="stg-subhead">
-        <h4>Running now</h4>
-        {active.length > 0 && <span className="stg-hint">{active.length} active</span>}
-      </div>
-      {active.length === 0 ? (
-        <p className="stg-hint stg-nothing-running">Nothing running.</p>
-      ) : (
-        <ul className="stg-running">
-          {active.map((job) => (
-            <RunningJobRow key={job.id} job={job} />
-          ))}
-        </ul>
-      )}
-
-      <div className="stg-subhead">
-        <h4>Schedules</h4>
-        <span className="stg-hint">{data.schedules.length} configured</span>
-      </div>
-      {data.schedules.length === 0 ? (
-        <div className="stg-empty">
-          <p>No schedules are configured.</p>
-        </div>
-      ) : (
-        <>
-          <p className="stg-scroll-hint">Scroll the table sideways to see every column.</p>
-          <TableRegion label="Scheduled background work">
-            <table>
-              <thead>
-                <tr>
-                  <th>Schedule</th>
-                  <th>Status</th>
-                  <th>Next</th>
-                  <th>Last</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.schedules.map((schedule) => (
-                  <tr key={schedule.id} className={schedule.active ? "" : "muted-row"}>
-                    <td>
-                      {schedule.label}
-                      <span className="fine stg-table-sub">{schedule.rule}</span>
-                    </td>
-                    <td>
-                      <span className={`badge ${schedule.active ? "good" : "muted"}`}>
-                        {schedule.active ? "Active" : "Paused"}
-                      </span>
-                    </td>
-                    <td>
-                      {formatRelative(schedule.next_run_at, now)} ·{" "}
-                      {formatMomentShort(schedule.next_run_at)}
-                    </td>
-                    <td>{formatMoment(schedule.last_run_at)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </TableRegion>
-        </>
-      )}
-
-      <div className="stg-subhead">
-        <h4>Recent runs</h4>
-        <span className="stg-hint">{data.recent.length} shown</span>
-      </div>
-      {retryError && (
-        <p className="error" role="alert">
-          {retryError}
-        </p>
-      )}
-      {data.recent.length === 0 ? (
-        <div className="stg-empty">
-          <p>No background work has run yet.</p>
-        </div>
-      ) : (
-        <>
-          <p className="stg-scroll-hint">Scroll the table sideways to see every column.</p>
-          <TableRegion label="Recent background work">
-            <table>
-              <thead>
-                <tr>
-                  <th>Task</th>
-                  <th>Status</th>
-                  <th>Result</th>
-                  <th>When</th>
-                </tr>
-              </thead>
-              <tbody>
-                {data.recent.map((job) => (
-                  <tr key={job.id}>
-                    <td>
-                      <strong>{jobKindTitle(job.kind)}</strong>
-                      {job.subject && <span className="fine stg-table-sub">{job.subject}</span>}
-                    </td>
-                    <td>
-                      <JobStatusCell job={job} />
-                    </td>
-                    <td>
-                      {jobOutcome(job) ?? (job.status === "failed" ? "" : "—")}
-                      {job.status === "failed" && (
-                        <>
-                          {job.last_error && (
-                            <details className="stg-job-error">
-                              <summary>What went wrong</summary>
-                              <p>{job.last_error}</p>
-                            </details>
-                          )}
-                          <button
-                            type="button"
-                            className="ghost small stg-job-retry"
-                            disabled={retrying !== null}
-                            onClick={() => void retry(job)}
-                          >
-                            {retrying === job.id ? (
-                              <>
-                                <Busy />
-                                Retrying…
-                              </>
-                            ) : (
-                              "Retry"
-                            )}
-                          </button>
-                        </>
-                      )}
-                    </td>
-                    <td>{formatRelative(jobWhen(job), now)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </TableRegion>
-        </>
-      )}
-    </div>
   );
 }
 
@@ -2107,7 +1743,6 @@ function ExportSection() {
     setBusy(format.id);
     setError(null);
     try {
-      await ensureFreshPasskey();
       const response = await fetch(format.path, { credentials: "same-origin" });
       if (!response.ok) {
         const problem = (await response.json().catch(() => null)) as { detail?: string } | null;
@@ -2130,7 +1765,7 @@ function ExportSection() {
     <SettingsSection
       id="export"
       title="Export"
-      description="Download your data in the form that fits the job. Every export asks for a fresh passkey check."
+      description="Download your data in the form that fits the job."
     >
       <div className="stg-card">
         <div className="stg-export-list">
@@ -2192,14 +1827,13 @@ function DeletionSection() {
     setError(null);
     setMessage(null);
     try {
-      await ensureFreshPasskey();
       const result = await api<{ total: number }>("/api/deletion/everything", {
         method: "POST",
         body: JSON.stringify({ confirm: phrase.trim() }),
       });
       setPhrase("");
       setMessage(
-        `Deleted ${result.total} records. Your passkey, sign-in, and instance settings still work.`,
+        `Deleted ${result.total} records. Your sign-in and instance settings still work.`,
       );
       preview.reload();
     } catch (caught) {
@@ -2601,12 +2235,10 @@ export function SettingsPanel({ onSignOut }: { onSignOut: () => void }) {
         return <CategoriesSection tree={tree} />;
       case "notifications":
         return <NotificationsSection settings={settings} />;
-      case "passkeys":
-        return <PasskeysSection />;
       case "questions":
         return <ScheduledQuestionsSection />;
-      case "jobs":
-        return <JobsSection />;
+      case "diagnostics":
+        return <DiagnosticsSection />;
       case "backups":
         return <BackupsSection backup={backup} />;
       case "export":

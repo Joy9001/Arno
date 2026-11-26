@@ -72,8 +72,8 @@ daily capture missed.
    acts as a share target.
 4. **Statement imports:** PDF, spreadsheet, or text statements (including password-protected files)
    uploaded to the import card, which reconciles rows against the ledger and commits only after user
-   review. Statement extraction is being rebuilt
-   ([`specs/import.md`](specs/import.md#extraction-status)).
+   review. Each upload extracts itself, by a vision call or a sandbox script
+   ([`specs/import.md`](specs/import.md#extraction)).
 5. **Web interface:** File uploads, import review, and settings are editable screens; financial
    panels are read-only so edits flow through chat with undo.
 
@@ -111,8 +111,9 @@ enough for answers and affordability verdicts on day one.
   to the ledger rows that sum to it ([`specs/data-and-engine.md`](specs/data-and-engine.md#recaps)).
 - **Citations:** Every answer figure links to the ledger rows, schedules, or tool outputs behind it.
 - **Proactive monitoring:** Fixed-code jobs generate bill, EMI, and card-due reminders, projection
-  risk warnings, weekly briefings, and recurring-charge or price-change proposals into the inbox
-  and web push. Because these run as code, they work even when the LLM is unavailable.
+  risk warnings, and recurring-charge or price-change proposals into the inbox and an optional
+  webhook, and a default weekly briefing question runs the agent. The code-run alerts work even
+  when the LLM is unavailable.
 - **User-scheduled questions:** Read-only prompts run on your schedule with a per-run request limit
   and deliver answers to the inbox.
 - **Write discipline:** Everyday chat writes, photos, and memory saves land immediately with an
@@ -152,8 +153,8 @@ The following table states the non-functional targets:
 | Latency | Backend trace targets are about 2 s to first streamed output, about 5 s for a single-lookup answer, and about 15 s for a multistep what-if on a cloud model (current measured eval median is 23.4 s; tracked in [`completion-checklist.md`](completion-checklist.md)) |
 | Portability | `docker compose up` on any x86-64 Linux host, Docker Desktop, or VPS |
 | Durability | Daily encrypted `pg_dump` through restic, run inside the API, with off-site targets and a verified `arno restore` drill |
-| Security | Private Tailscale network only, WebAuthn passkey login, encrypted host disk, encrypted off-site backups, environment variables for deployment secrets, and an isolated `sandbox` service for model-written Python |
-| Privacy | Per-role provider switch; only configured inference requests, encrypted backups, and contentless push pings leave the host |
+| Security | Private Tailscale network only, Tailscale identity or passphrase login, encrypted host disk, encrypted off-site backups, environment variables for deployment secrets, and an isolated `sandbox` service for model-written Python |
+| Privacy | Per-role provider switch; only configured inference requests, encrypted backups, and the optional notification webhook leave the host |
 | Honesty | Tools distinguish zero from unknown and report data age, coverage gaps, and source IDs |
 | Measured quality | The agent eval suite with `pass^3` grading ([success measures](architecture.md#success-measures)) |
 | Autonomy | The agent starts no write on its own except saving visible, undoable memories, and never moves money |
@@ -184,10 +185,9 @@ The following table records the build-versus-buy decision for each component:
 |---|---|---|
 | Agent loop, tool calling, streaming | Buy: PydanticAI | Plain `Agent` with a few capabilities, native tool approval, Vercel AI protocol adapter, and provider switching ([`specs/harness.md`](specs/harness.md)) |
 | Statement file readers | Buy: `pypdfium2`, `python-calamine`, `python-docx`, `striprtf`, `msoffcrypto-tool` | One reader library for each format ([`specs/import.md`](specs/import.md)) |
-| Statement layout parsing | Under rebuild | Extraction is replaced in the simplification plan's Phase 3; the checks, reconciliation, and review stay ([`specs/import.md`](specs/import.md#extraction-status)) |
+| Statement layout parsing | Direct extraction, no saved parsers | Images and PDFs of 5 pages or fewer go to one `VISION` call; spreadsheets, text, and longer PDFs go to a `CHAT` run that answers with a sandbox script. The host checks every result before review ([`specs/import.md`](specs/import.md#extraction)) |
 | Speech-to-text | Buy: OpenAI-compatible STT endpoint | Cloud API, or any self-hosted OpenAI-compatible server you run yourself (`STT_BASE_URL`); no bundled server |
 | Textless-page PDF vision | Buy: OpenAI-compatible vision model | Isolated `VISION_*` role for scanned PDF pages during statement imports |
-| Passkeys and web push | Buy: `py_webauthn`, `pywebpush` | Standard cryptographic and WebAuthn protocols |
 | Private HTTPS access | Buy: Tailscale (`tailscale serve`) | End-to-end encrypted tailnet access with zero public exposure |
 | Off-site backups | Buy: restic (with rclone) | Encrypted, deduplicated backups to S3-compatible or cloud targets |
 | Agent evaluations | Buy: `pydantic_evals` | Runs the production agent directly against cloned test databases |
@@ -212,14 +212,14 @@ The following table records the stack for each layer:
 | Migrations | Numbered `.sql` files + `schema_version` table | Plain transactional SQL with recorded checksums |
 | Type checking | Pyrefly (`strict` preset, zero warnings) | Native Pydantic understanding and per-path strictness ([`operations/typing.md`](operations/typing.md)) |
 | Engine arithmetic | NumPy (integer arrays) | Vectorized 16,384-scenario integer kernel; BSD-3-Clause |
-| Background jobs | Plain `jobs` table + single API-process loop | Zero broker overhead; jobs persist in every `pg_dump` |
+| Background work | Minute loop and `spawn` in the API process; state on the rows the work touches | Zero broker overhead; state persists in every `pg_dump` |
 | Web interface | Vite, React, `@assistant-ui/*`, `@radix-ui/themes`, Radix Primitives, `motion`, `Recharts`, `zustand` | Static build served by FastAPI under a strict content security policy ([`specs/web-interface.md`](specs/web-interface.md), [`DESIGN.md`](../../DESIGN.md)) |
 | Deployment | Docker Compose (`db`, `api`; optional `local-llm` and `obs`) | Single host deployment; loopback-only ports behind Tailscale |
 | License | MIT (application code) | Stock Phoenix (`obs` profile) carries Elastic License 2.0 outside the Arno image; direct dependencies are checked by hand against the permissive-only rule |
 
 ### Provider switch and inference accounting
 
-Every model role (`CHAT`, `PARSE`, `VISION`, `STT`, and optional `CHAT_FALLBACK`) uses environment
+Every model role (`CHAT`, `VISION`, `STT`, and optional `CHAT_FALLBACK`) uses environment
 variables for endpoint, model ID, and provider. The ChatGPT-plan provider and the provider Batch API
 categorizer are removed; categorizing always runs through the `CHAT` role. Exact dated model IDs are
 pinned rather than floating aliases, and model changes re-run the eval suite.
@@ -243,7 +243,7 @@ API. For the full architecture, control model, and diagrams, see
 Browser / PWA ──┐                          [API process] ────────────> LLM endpoints (chat, vision, STT)
 CLI (on host) ──┴── HTTPS over tailnet ──>   FastAPI: static web, auth, REST, chat stream
                                              PydanticAI agent -> plain-Python tools -> ledger / engine
-                                             job loop: briefings, reminders, patterns, risk, recaps, replay
+                                             minute loop: questions, reminders, patterns, risk, backup
                                                    │  └── native OTLP spans ──> [Phoenix]
                                                    v
                                              [Postgres 18] <── pg_dump | restic (daily job in API) ──> off-site
@@ -266,7 +266,7 @@ Code must never violate these four rules:
 3. **Tools are plain Python over the database, free of PydanticAI types.** The agent, REST API, and
    any future MCP server wrap the same functions in `src/arno/tools/` and `src/arno/ledger/`.
    Framework adapters belong strictly in `src/arno/agent/`.
-4. **The database is the whole state.** Attachments, ledger entries, schedules, memories, jobs, and
+4. **The database is the whole state.** Attachments, ledger entries, schedules, memories, and
    the model-usage log live in PostgreSQL so `pg_dump` produces a complete backup and export.
 
 ---
@@ -285,8 +285,8 @@ owner-setup, and human ship gates are tracked in
 3. Vendored `pgledger` core with `THIRD_PARTY_NOTICES.md` and integer-paise schema.
 4. Static web shell and `/api/health` served behind `tailscale serve` under a strict content
    security policy.
-5. Passkey authentication: first-run enrollment link and terminal QR code, WebAuthn sessions,
-   device management in Settings, and host-CLI passkey reset.
+5. Authentication: the `Tailscale-User-Login` header matched to `ARNO_OWNER_EMAIL`, or an optional
+   `ARNO_PASSPHRASE` that sets a signed cookie.
 6. CI pipeline: Ruff, Pyrefly, pytest against Postgres with model requests blocked,
    web lint/typecheck/build, and answer-contract tests.
 
@@ -316,15 +316,15 @@ owner-setup, and human ship gates are tracked in
 18. Agent-managed typed memories (`preference`, `fact`, `rule`) with inline undo cards and Settings
     management.
 19. Agent-led setup conversation for accounts, income, obligations, goals, floor, and baselines.
-20. Host CLI (`arno`) for migrations, setup, exports, restore, passkeys, and demo seeding.
+20. Host CLI (`arno`) for migrations, exports, restore, and demo seeding.
 
 ### L3: Import and recaps
 
 21. Real-statement parser spike confirming model-written parsers on real bank statements without
     OCR or third-party scrapers (Union Bank remains open pending statements).
-22. Statement import pipeline: upload, verification checks, regression gate against stored
-    statements, reconciliation, review screen, and atomic commit/undo. Extraction is being rebuilt
-    ([`specs/import.md`](specs/import.md#extraction-status)).
+22. Statement import pipeline: upload, direct extraction, verification checks,
+    reconciliation, review screen, and atomic commit/undo
+    ([`specs/import.md`](specs/import.md#extraction)).
 23. 150-page PDF limit and server-computed daily, weekly, and monthly recaps (`tools/recaps.py`)
     shared across the web app and inbox.
 24. Twelve-month real-statement backfill committed through the review screen with recomputed
@@ -345,10 +345,9 @@ owner-setup, and human ship gates are tracked in
 
 ### L6: Watch
 
-32. Built-in job schedules, notification inbox, web push notifications, and 48-hour stale-backup
-    alerts.
-33. Weekly briefings, bill/EMI/card-due reminders (3-day lead), projection risk episodes, and
-    user-scheduled read-only questions with a per-run request limit.
+32. Minute loop, notification inbox with an optional webhook, and 48-hour stale-backup alerts.
+33. A default weekly briefing question, bill/EMI/card-due reminders (3-day lead), projection risk
+    warnings, and user-scheduled read-only questions with a per-run request limit.
 34. Calendar-rule recurring-charge detection (new, missed, and price-change proposals).
 
 ### L7: Capture
@@ -374,7 +373,7 @@ owner-setup, and human ship gates are tracked in
 44. Recurring-charge price-change alerts at the first payment exceeding a 2% step.
 45. Debt cost analysis: loan amortization with fees and APR, card payoff at stored or stated card
     rates, and offer comparison, computed by the agent in `run_python`.
-46. Tier-0 acceptance additions: payment-evidence alert resolution, Settings **History** and
+46. Tier-0 acceptance additions: Settings **History** and
     **Delete everything**, XlsxWriter projection workbook export, `(kind, subject)` memory
     replacement, vision trace suppression, parse retry, and
     priority-ordered goal deferral.
@@ -406,8 +405,8 @@ specifications under [`specs/`](specs/) and [`operations/`](operations/).
   and should the 5 s / 15 s latency targets be revised against measured cloud-model latency?
 - **Local chat models (L2/L4):** Which local Ollama models pass the eval suite on practical
   hardware?
-- **Union Bank statements (L3):** What file format and layout does Union Bank export, and can the
-  rebuilt extraction handle it cleanly?
+- **Union Bank statements (L3):** What file format and layout does Union Bank export, and can
+  extraction handle it cleanly?
 - **Hinglish speech recognition (L7):** How does a self-hosted Whisper-class server compare against cloud STT (or
   Qwen3-ASR) on real owner Hinglish audio, and does `STT_PAYEE_CONTEXT=1` measurably improve
   merchant recognition?

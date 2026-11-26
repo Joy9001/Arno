@@ -171,8 +171,9 @@ non-liquid `goal` account holding real fenced ledger savings), `contribution_sch
 `status` (`active`, `achieved`, `paused`, `abandoned`).
 
 **`scheduled_questions`:** Stores user-scheduled read-only prompts: `prompt`, `rule` (iCalendar
-RRULE), `last_run_at`, and `active`. Answers land
-in the notification inbox.
+RRULE), `next_run_at` (the minute loop advances it when it claims a run), `last_run_at`, and
+`active`. Answers land in the notification inbox. The weekly briefing is the default question with
+id `sq_weekly_briefing`.
 
 **Schedule payment evidence (`schedule_occurrences` and `schedule_payments`):** Following
 [plan.md](../plan.md) §3, a schedule rule is an expectation and a ledger movement is evidence. On
@@ -228,7 +229,7 @@ no category stay uncategorized (never silently bucketed into "Other") and may ca
 | Table | Contents |
 |---|---|
 | `categories` | Editable spending categories (seeded with Indian defaults), `reducible` flag for affordability cuts, and `active` flag. Categories are labels on legs, not ledger accounts |
-| `category_rules` | Payee-to-category rules: `match` (`equals`, `contains`, `regex`), `pattern`, `priority`, `source` (`user`, `llm`, `seed`), and hit counts. Rules always win over the model (`user` beats `llm`, which beats `seed`). About 150 Indian merchant `seed` rules ship with Arno; generic payment-app fronts (Paytm, PhonePe, Google Pay, CRED, Amazon Pay) never match by name ([import.md](import.md)) |
+| `category_rules` | Payee-to-category rules: `match` (`equals`, `contains`, `regex`), `pattern`, `priority`, `source` (`user`, `llm`), and hit counts. Rules always win over the model (`user` beats `llm`). Payment-app fronts (Paytm, PhonePe, Google Pay, CRED, Razorpay) never become name rules ([import.md](import.md)) |
 | `baselines` | Typical daily spend per category: `amount_per_day_paise`, `source` (`estimated` at setup or `computed` nightly from real ledger rows), `window_days`, and `updated_at`. Keeping `source` explicit prevents presenting setup estimates as historical fact |
 
 ### Memory, conversations, imports, and operational tables
@@ -242,9 +243,8 @@ tables:
 | `preferences` | Typed memories: `body`, `kind` (`preference`, `fact`, or `rule`), optional normalized `subject`, `created_by` (`agent` or `user`), `source_message_id`, `active`, and `updated_at`. Never stores numbers owned by the ledger. Forgetting sets `active = false`; permanent deletion is Settings-only ([tools.md](tools.md#update_setup)) |
 | `conversations`, `messages` | One `conversations` row per thread with `model_history` (`jsonb`, the `ModelMessage` list the agent reads), `snapshot_at` and `outside_text_at` (unused), and `run_started_at` (set during active turns so crash recovery detects interrupted runs). `messages` is append-only with unique `client_id`, `trace_id`, `flagged_at`, and a generated `search` `tsvector` GIN index using PostgreSQL's `simple` config so Hinglish terms are not mangled |
 | `audit_log` | Every write: `actor`, `message_id`, `group_id`, `table_name`, `row_id`, `before` and `after` JSON, and `undone_at`. One undo reverts an entire `group_id` atomically |
-| `imports` | Statement import lifecycle: `attachment_id`, `file_hash`, `institution`, `fingerprint`, `account_id`, `period_start`, `period_end`, opening and closing balances, `check_status` (`VERIFIED`, `DISCREPANCY`, `FAILED`), `counts`, `review`, `reason`, `task_id`, `undone_at`, and `status` (`parsing`, `needs_password`, `needs_input`, `review`, `committed`, `rejected`, `failed`, or `not_a_statement`) |
-| `statement_layouts`, `parser_versions` | Known bank header variants per layout and append-only parser scripts (`layout_id`, `version`, `is_active` with partial unique index, `parser`, `helper_version`, `source_import_id`, `created_at`) saved only after commit ([import.md](import.md)) |
-| `attachments` | Receipt photos, UPI screenshots, audio notes, and unlocked statement copies as `bytea`. Passwords are never persisted; kept unlocked copies enable parser replay, and rows survive purging with `data` cleared |
+| `imports` | Statement import lifecycle: `attachment_id`, `file_hash`, `institution`, `account_id`, `period_start`, `period_end`, opening and closing balances, `check_status` (`VERIFIED`, `DISCREPANCY`, `FAILED`), `counts`, `review`, `reason`, `undone_at`, `categorize` (the categorize state: `queued`, `running`, `done`, `partial`, or `failed`, with its counts or error), and `status` (`parsing`, `needs_password`, `needs_input`, `review`, `committed`, `rejected`, `failed`, or `not_a_statement`) |
+| `attachments` | Receipt photos, UPI screenshots, audio notes, and unlocked statement copies as `bytea`. Passwords are never persisted; a statement's unlocked copy lets a failed import retry without the password, and rows survive purging with `data` cleared |
 
 Operational and auxiliary tables complete the schema and keep all instance state inside `pg_dump`.
 The following table lists each operational table:
@@ -252,13 +252,9 @@ The following table lists each operational table:
 | Table | Contents |
 |---|---|
 | `schema_version` | Applied migration numbers, names, SHA-256 checksums, and timestamps |
-| `users`, `webauthn_credentials`, `webauthn_challenges`, `setup_tokens`, `sessions` | Single-user WebAuthn passkey authentication, enrollment links, challenges, and active sessions ([platform.md](platform.md)) |
 | `backup_runs` | History of backup executions and verification status |
-| `notifications`, `push_subscriptions`, `vapid_keys` | In-app inbox items, web-push subscriptions, and VAPID signing keys |
-| `jobs`, `job_schedules` | Persistent job queue (`key`, `kind`, `payload`, `status`, `run_at`, `attempts`, `last_error`) and recurring job schedules (`scheduled_question_id`, `rule`, `next_run_at`, `dtstart`). Never hold statement passwords and stay hidden from `agent_ro` |
-| `risk_state` | Active floor-crossing risk episode tracking and `last_checked_at` timestamp |
+| `notifications` | In-app inbox items |
 | `recap_views` | Period IDs opened by the owner to drive the **New** badge on recaps |
-| `categorize_runs` | Post-commit categorization runs and rule-agreement metrics |
 | `series_detections` | Nightly and post-import recurring spend and income detections (rewritten atomically per run, `agent_ro`-readable) |
 | `llm_usage` | One row per model response (role, model, tokens, USD) that drives the shared daily spend cap; no `agent_ro` grant ([cost-tracking.md](cost-tracking.md)) |
 | `spend_counters`, `spend_dedup`, `llm_calls`, `model_credentials` | Legacy tables that no code reads or writes; the next schema squash drops them. `scheduled_questions.spend_limit_cents` is unused the same way |
@@ -577,9 +573,9 @@ The following table lists the proactive proposals and alerts generated by the pa
 | New income | Income series with `confidence >= 0.9` and `alive >= 0.5`; carries the winning RRULE and never enters the projection until confirmed |
 | Missed recurring | Confirmed schedule occurrence 3 or more days overdue with no matching payment (within a 90-day lookback) |
 | Price change | Detected spend series or confirmed schedule stepping to a new amount level within the last 90 days; carries old and new levels, step date, and movement IDs |
-| Risk warning | Rerun of the 90-day default projection after writes and nightly; warns once per episode when floor probability drops below threshold (against floor or zero) or first crossing moves earlier, recording `last_checked_at` even without verified balances; never warns while a setup gap (no liquid account, no confirmed income schedule) makes the projection meaningless |
+| Risk warning | Rerun of the 90-day default projection nightly; warns when floor probability drops below threshold (against floor or zero), at most once per ISO week; never warns without a verified liquid balance, or while a setup gap (no liquid account, no confirmed income schedule) makes the projection meaningless |
 
-The pattern job rewrites `series_detections` atomically in one transaction with each detection's
+The pattern task rewrites `series_detections` atomically in one transaction with each detection's
 rule, confidence, survival probability, skip rate, jitter, amount summary, and matched movement IDs.
 Marking a movement `one_off` (via chat correction or the movement dialog, both undoable) removes it
 from spend history and pattern detection. Large-transaction and category-spike alerts remain out of
@@ -631,10 +627,10 @@ are capped at `MAX_PAISE` and tenures at 600 months.
 ## Recaps
 
 A recap presents the story of one day, week, or month as templated cards computed on demand from
-ledger rows. The Recaps page and the daily `recaps` notification job
-all read `src/arno/tools/recaps.py` so every surface reports identical figures. Only opened status
-is persisted in `recap_views`; every amount recalculates fresh after imports or corrections and
-opens the underlying movements summing to that figure.
+ledger rows. The Recaps page reads `src/arno/tools/recaps.py`, as does the agent, so every surface
+reports identical figures. Only opened status is persisted in `recap_views`; every amount
+recalculates fresh after imports or corrections and opens the underlying movements summing to that
+figure.
 
 ### Periods
 
@@ -689,9 +685,7 @@ The following table lists the recap REST endpoints (`src/arno/api/recaps.py`):
 | `GET /api/recaps/{period_id}/rows?story=&key=` | Underlying movements behind one story figure and their `sum`, which equals the figure |
 | `POST /api/recaps/{period_id}/seen` | Records `period_id` in `recap_views` |
 
-A daily `recaps` job runs at `notification_time` and ensures the latest complete week and month with
-positive spend each have one deduplicated inbox item (`kind = recap`); monthly recaps also send a
-web push, while weekly recaps stay inbox-only. In chat, the agent reads the same figures with `run_query`.
+In chat, the agent reads the same figures with `run_query`.
 
 ---
 

@@ -40,7 +40,7 @@ Technical design and contracts for each subsystem.
 | [`arno/specs/data-and-engine.md`](arno/specs/data-and-engine.md) | Database schema, trust boundaries and write tiers, projection and affordability engine, pattern detection, money calculators, recaps, and financial invariants |
 | [`arno/specs/tools.md`](arno/specs/tools.md) | Contracts for the 3 read tools (`run_query`, `project`, `run_python`), 4 write tools, and web search |
 | [`arno/specs/harness.md`](arno/specs/harness.md) | The plain PydanticAI agent, its capabilities, prompt discipline, history storage, and eval harness |
-| [`arno/specs/import.md`](arno/specs/import.md) | Statement readers, extraction status, verification checks, reconciliation, transfer and card-credit decisions, post-commit categorization, photos, and voice |
+| [`arno/specs/import.md`](arno/specs/import.md) | Statement readers, extraction, verification checks, reconciliation, transfer and card-credit decisions, post-commit categorization, photos, and voice |
 | [`arno/specs/cost-tracking.md`](arno/specs/cost-tracking.md) | The `llm_usage` log, the shared daily spend cap, and unpriced-model handling |
 | [`arno/specs/platform.md`](arno/specs/platform.md) | Repository layout, API surface, authentication and enrollment, scheduler and jobs, database connections and integrity, threat model, and India-specific code |
 | [`arno/specs/web-interface.md`](arno/specs/web-interface.md) | Web navigation, hash routes, page specifications, and frontend stack (visual tokens live in [`DESIGN.md`](../DESIGN.md)) |

@@ -182,7 +182,7 @@ export function runEnding(task: ImportTask): {
       body: "",
     };
   }
-  if (task.run.stop === "budget" || task.imports.some((item) => item.status === "paused")) {
+  if (task.run.stop === "budget") {
     return {
       tone: "paused",
       line: "Paused · out of steps",

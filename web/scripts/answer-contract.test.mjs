@@ -43,8 +43,6 @@ const { PriceChangeRows, PriceChange } = await server.ssrLoadModule("/src/PriceC
 const { NeedRow } = await server.ssrLoadModule("/src/panels/Inbox.tsx");
 const { CategorizeStatus, ParseRecovery } = await server.ssrLoadModule("/src/panels/Imports.tsx");
 const { AccountRow } = await server.ssrLoadModule("/src/panels/Accounts.tsx");
-const { copyFor } = await server.ssrLoadModule("/src/components/job-toasts.tsx");
-const { PushStatus } = await server.ssrLoadModule("/src/panels/PushStatus.tsx");
 const { ExportScope } = await server.ssrLoadModule("/src/panels/ExportScope.tsx");
 const { DeletionScope } = await server.ssrLoadModule("/src/panels/DeletionScope.tsx");
 const { EvidencePanel } = await server.ssrLoadModule("/src/EvidencePanel.tsx");
@@ -77,7 +75,6 @@ test("export scope renders the server exclusion list and destination", () => {
     excludedTables: scope.excluded_tables,
   }));
   for (const table of scope.excluded_tables) assert.ok(html.includes(table));
-  assert.ok(scope.excluded_tables.includes("sessions"));
   assert.ok(scope.excluded_tables.includes("model_credentials"));
   assert.match(html, /dump includes credentials and secrets/);
   assert.match(html, /projection inputs and result/);
@@ -642,11 +639,8 @@ test("price changes show the amounts and cited payment rows", () => {
   for (const text of [/05 Jun 2026/, /Cloud/, /Bank/, /₹599/, /mov_1/]) assert.match(rendered, text);
 });
 
-test("failed jobs and import categorization offer retry and missed schedules open in chat", () => {
-  const copy = copyFor({ kind: "scheduled_question", status: "failed", last_error: "Model unavailable" });
-  assert.match(copy.title, /failed/i);
-  assert.ok(copy.actions.some((action) => action.label === "Retry" && action.retry));
-  const failed = renderToStaticMarkup(React.createElement(CategorizeStatus, { state: { state: "failed", job_id: "job_1", error: "Model unavailable" }, onRefresh: () => {} }));
+test("failed import categorization offers retry and missed schedules open in chat", () => {
+  const failed = renderToStaticMarkup(React.createElement(CategorizeStatus, { importId: "imp_1", state: { state: "failed", error: "Model unavailable" }, onRefresh: () => {} }));
   assert.match(failed, /Categorizing stopped/);
   assert.match(failed, /Retry/);
   const item = { id: "n", kind: "missed_recurring", title: "Missed payment", body: "No payment found", data: {}, read_at: null, created_at: "2026-11-06T00:00:00Z" };
@@ -656,18 +650,17 @@ test("failed jobs and import categorization offer retry and missed schedules ope
 });
 
 test("a failed parse offers retry only while its stored file is still here", () => {
-  const failed = { import_id: "imp_1", status: "failed", reason: "The parser stopped.", recovery_action: "reupload", can_retry_parse: true };
-  const idle = renderToStaticMarkup(React.createElement(ParseRecovery, { detail: failed, threadId: "cnv_retry", onRetry: () => {}, onOpenThread: () => {} }));
+  const failed = { import_id: "imp_1", status: "failed", reason: "The model could not read this statement.", recovery_action: "reupload", can_retry_parse: true };
+  const idle = renderToStaticMarkup(React.createElement(ParseRecovery, { detail: failed, onRetry: () => {} }));
   assert.match(idle, /Retry parse/);
-  assert.match(idle, /Open the retry in chat/);
   assert.doesNotMatch(idle, /Upload it again/);
 
   const running = renderToStaticMarkup(React.createElement(ParseRecovery, { detail: failed, busy: "retry" }));
   assert.match(running, /Retrying…/);
   assert.match(running, /disabled=""/);
 
-  const refused = renderToStaticMarkup(React.createElement(ParseRecovery, { detail: failed, error: "The parser is not running." }));
-  assert.match(refused, /The parser is not running\./);
+  const refused = renderToStaticMarkup(React.createElement(ParseRecovery, { detail: failed, error: "The stored statement file is gone." }));
+  assert.match(refused, /The stored statement file is gone\./);
 
   const gone = renderToStaticMarkup(React.createElement(ParseRecovery, { detail: { ...failed, can_retry_parse: false } }));
   assert.doesNotMatch(gone, /Retry parse/);
@@ -725,13 +718,6 @@ test("the last statement date and age remain visible without a reconciliation cl
   assert.match(html, /01 Sept? 2026/);
   assert.match(html, /66 days old/);
   assert.doesNotMatch(html, /reconciled/i);
-});
-
-test("blocked push and an opted-out subscription explain recovery", () => {
-  const html = renderToStaticMarkup(React.createElement(PushStatus, { permission: "denied", subscribed: false }));
-  assert.match(html, /Blocked in this browser/);
-  assert.match(html, /Not subscribed/);
-  assert.match(html, /browser settings, then try again/);
 });
 
 test("amortize cards render fees and APR when present and stay unchanged when absent", () => {

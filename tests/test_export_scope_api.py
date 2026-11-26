@@ -8,24 +8,17 @@ import pytest
 from arno.ledger import export
 from arno.ledger.errors import UnavailableLedgerError
 
-# The public contract: these tables are credential, session, or link material and never appear
+# The public contract: these tables are credential or key material and never appear
 # in a data export. Kept literal so dropping one from the source makes this test fail.
 EXCLUDED_TABLES = [
     "model_credentials",
-    "push_subscriptions",
-    "sessions",
-    "setup_tokens",
-    "users",
-    "vapid_keys",
-    "webauthn_challenges",
-    "webauthn_credentials",
 ]
 
 DATABASE_URL = "postgresql://app:secret@db.example:5433/arno"
 
 
-def test_export_scope_reports_the_public_exclusion_list(authed_client):
-    response = authed_client.get("/api/export/scope")
+def test_export_scope_reports_the_public_exclusion_list(session_client):
+    response = session_client.get("/api/export/scope")
 
     assert response.status_code == 200
     assert response.json() == {"excluded_tables": EXCLUDED_TABLES}
@@ -90,13 +83,13 @@ def test_pg_dump_timeout_is_a_ledger_error(monkeypatch):
         export.export_pg_dump(DATABASE_URL)
 
 
-def test_the_dump_route_reports_an_unavailable_pg_dump(authed_client, monkeypatch):
+def test_the_dump_route_reports_an_unavailable_pg_dump(session_client, monkeypatch):
     def unavailable(_url: str) -> bytes:
         raise UnavailableLedgerError("pg_dump is not installed in this environment.")
 
     monkeypatch.setattr(export, "export_pg_dump", unavailable)
 
-    response = authed_client.get("/api/export/pg_dump")
+    response = session_client.get("/api/export/pg_dump")
 
     assert response.status_code == 503
     assert response.headers["content-type"].startswith("application/problem+json")

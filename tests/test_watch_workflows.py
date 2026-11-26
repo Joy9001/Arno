@@ -1,4 +1,4 @@
-"""Built-in workflows: briefing fallback, reminders, risk episodes, proposals, and questions."""
+"""Built-in workflows: reminders, risk warnings, proposals, and questions."""
 
 from __future__ import annotations
 
@@ -7,156 +7,23 @@ from typing import Any
 
 from pydantic_ai.exceptions import UsageLimitExceeded
 from pydantic_ai.messages import ModelResponse, TextPart
-from pydantic_ai.models.function import AgentInfo, FunctionModel
+from pydantic_ai.models.function import FunctionModel
 
 from arno.agent.builder import build_agent
-from arno.jobs.briefing import compose_briefing, render_template, send_weekly_briefing
 from arno.jobs.questions import run_scheduled_question
 from arno.jobs.reminders import send_reminders
 from arno.jobs.risk import risk_warning
 from arno.ledger.accounts import create_account
 from arno.ledger.common import today as ledger_today
-from arno.ledger.movements import record_expense, record_refund
+from arno.ledger.movements import record_expense
 from arno.scheduled_questions import create_question
 from arno.tools.patterns import detect, detect_missed
-from arno.tools.recaps import summarize_spending
 from tests.agent_helpers import streaming_model
 
 
 def _prose_model(text: str) -> FunctionModel:
     # Streamed only: the briefing and scheduled-question runs pass an event stream handler.
     return streaming_model(lambda messages, info: ModelResponse(parts=[TextPart(text)]))
-
-
-async def test_briefing_numbers_and_template_use_the_ledger_and_project(ledger):
-    from arno.ledger import goals as goals_mod
-
-    await goals_mod.create_goal(
-        ledger, name="Trip", target_paise=5000000, deadline=date(2027, 3, 1)
-    )
-    payload = await compose_briefing(ledger, as_of=date(2026, 11, 1))
-    assert payload["numbers"]["week"]["from"] == "2026-10-26"
-    assert "Your week" in payload["template"]
-    assert "90-day chance" in payload["template"] or "goes below your floor" in payload["template"]
-    assert render_template(payload["numbers"]) == payload["template"]
-    import json
-
-    json.dumps(payload["numbers"])
-
-    sent = await send_weekly_briefing(
-        ledger,
-        as_of=date(2026, 11, 1),
-        period="goal-test",
-        model=_prose_model("A goal-aware brief."),
-    )
-    assert sent is not None
-    assert sent["data"]["numbers"]["goals"][0]["deadline"] == "2027-03-01"
-
-
-async def test_briefing_does_not_report_an_unknown_liquid_balance_as_zero(ledger):
-    from arno.ledger.accounts import create_account
-
-    await create_account(ledger, kind="bank", name="SBI Savings")
-
-    payload = await compose_briefing(ledger, as_of=date(2026, 11, 1))
-
-    assert payload["numbers"]["liquid"]["paise"] is None
-    assert "Liquid balance: unknown" in payload["template"]
-
-
-async def test_briefing_keeps_a_movement_only_account_unknown(ledger):
-    from arno.ledger.accounts import create_account
-    from arno.ledger.movements import record_expense
-
-    account = await create_account(ledger, kind="bank", name="SBI Savings")
-    await record_expense(ledger, account_id=account["id"], amount_paise=25_000, description="Lunch")
-
-    payload = await compose_briefing(ledger, as_of=date(2026, 11, 1))
-
-    assert payload["numbers"]["liquid"]["paise"] is None
-    assert "Liquid balance: unknown" in payload["template"]
-
-
-async def test_briefing_does_not_report_an_unknown_card_owed_as_zero(ledger):
-    from arno.ledger.accounts import create_account
-
-    await create_account(
-        ledger,
-        kind="card",
-        name="Slice card",
-        credit_limit_paise=500_000,
-        statement_day=5,
-        due_day=25,
-    )
-
-    payload = await compose_briefing(ledger, as_of=date(2026, 11, 1))
-
-    assert payload["numbers"]["liquid"]["card_owed_paise"] is None
-    assert payload["numbers"]["liquid"]["card_owed"] is None
-    assert "Your week" in payload["template"]
-
-
-async def test_briefing_uses_one_model_call_and_falls_back_to_the_template(db):
-    good = await send_weekly_briefing(
-        db,
-        as_of=date(2026, 11, 1),
-        period="2099-W01",
-        model=_prose_model("A short brief written from the numbers."),
-    )
-    assert good is not None
-    assert good["body"] == "A short brief written from the numbers."
-    assert good["data"]["prose"] == "model"
-
-    async def down(messages: list, info: AgentInfo):
-        del messages, info
-        raise RuntimeError("endpoint down")
-        yield ""  # pragma: no cover
-
-    fallback = await send_weekly_briefing(
-        db,
-        as_of=date(2026, 11, 1),
-        period="2099-W02",
-        model=FunctionModel(stream_function=down),
-    )
-    assert fallback is not None
-    assert fallback["data"]["prose"] == "template"
-    assert fallback["body"] == fallback["data"]["template"]
-    assert "Your week" in fallback["body"]
-
-
-async def test_briefing_prose_is_capped_and_a_token_limit_falls_back(db):
-    seen: dict[str, Any] = {}
-
-    def record(messages: list, info: AgentInfo):
-        del messages
-        seen.update(info.model_settings or {})
-        return ModelResponse(parts=[TextPart("A short brief written from the numbers.")])
-
-    sent = await send_weekly_briefing(
-        db,
-        as_of=date(2026, 11, 1),
-        period="2099-W03",
-        model=streaming_model(record),
-    )
-    assert sent is not None
-    assert seen["max_tokens"] == 600
-
-    from pydantic_ai.exceptions import UnexpectedModelBehavior
-
-    async def capped(messages: list, info: AgentInfo):
-        del messages, info
-        raise UnexpectedModelBehavior("Model token limit (600) exceeded")
-        yield ""  # pragma: no cover
-
-    fallback = await send_weekly_briefing(
-        db,
-        as_of=date(2026, 11, 1),
-        period="2099-W04",
-        model=FunctionModel(stream_function=capped),
-    )
-    assert fallback is not None
-    assert fallback["data"]["prose"] == "template"
-    assert fallback["body"] == fallback["data"]["template"]
 
 
 async def test_reminders_are_created_once_inside_the_lead_window(db):
@@ -179,7 +46,7 @@ async def test_reminders_are_created_once_inside_the_lead_window(db):
     assert await db.fetchval("SELECT count(*) FROM notifications WHERE kind = 'reminder'") == 1
 
 
-async def test_risk_warns_once_then_rearms_after_recovery(db, monkeypatch):
+async def test_risk_warns_once_a_week(db, monkeypatch):
     state: dict[str, Any] = {
         "floor_paise": 100000,
         "floor_probability": 0.55,
@@ -195,23 +62,18 @@ async def test_risk_warns_once_then_rearms_after_recovery(db, monkeypatch):
         return dict(state)
 
     monkeypatch.setattr("arno.tools.projection.project", fake_project)
-    first = await risk_warning(db)
+    monday = date(2026, 11, 2)
+    first = await risk_warning(db, as_of=monday)
     assert first is not None
     assert first["kind"] == "risk_warning"
-
-    assert await risk_warning(db) is None
+    assert await risk_warning(db, as_of=monday + timedelta(days=3)) is None
 
     state["floor_probability"] = 0.95
-    state["first_floor_crossing"] = None
-    assert await risk_warning(db) is None
+    assert await risk_warning(db, as_of=monday + timedelta(days=7)) is None
 
     state["floor_probability"] = 0.5
-    state["first_floor_crossing"] = "2026-11-18"
-    third = await risk_warning(db)
-    assert third is not None
-
-    rows = await db.fetch("SELECT * FROM notifications WHERE kind = 'risk_warning'")
-    assert len(rows) == 2
+    assert await risk_warning(db, as_of=monday + timedelta(days=7)) is not None
+    assert await db.fetchval("SELECT count(*) FROM notifications WHERE kind = 'risk_warning'") == 2
 
 
 async def test_risk_stays_quiet_while_setup_makes_the_projection_meaningless(db, monkeypatch):
@@ -233,8 +95,6 @@ async def test_risk_stays_quiet_while_setup_makes_the_projection_meaningless(db,
 
     assert await risk_warning(db) is None
     assert await db.fetchval("SELECT count(*) FROM notifications WHERE kind = 'risk_warning'") == 0
-    checked = await db.fetchval("SELECT last_checked_at FROM risk_state WHERE id = 1")
-    assert checked is not None
 
     # Once the income schedule exists the same projection is a real warning.
     state["data_quality"]["setup_gaps"] = []
@@ -243,8 +103,6 @@ async def test_risk_stays_quiet_while_setup_makes_the_projection_meaningless(db,
 
 
 async def test_recurring_detection_proposes_a_new_charge_and_keeps_outside_text(ledger):
-    from arno.ledger.accounts import create_account
-    from arno.ledger.movements import record_expense
     from arno.ledger.payees import create_payee
     from arno.ledger.schedules import create_schedule
 
@@ -310,8 +168,6 @@ async def test_recurring_detection_proposes_a_new_charge_and_keeps_outside_text(
 async def test_a_recurring_notice_names_the_payee_not_the_statement_narration(ledger):
     """A bank's narration token is not the merchant's name; the payee's display name is."""
     from arno.jobs.patterns import run_pattern_detection
-    from arno.ledger.accounts import create_account
-    from arno.ledger.movements import record_expense
     from arno.ledger.payees import create_payee
 
     bank = await create_account(ledger, kind="bank", name="SBI", opening_balance_paise=10_000_000)
@@ -342,8 +198,6 @@ async def test_a_recurring_notice_names_the_payee_not_the_statement_narration(le
 
 async def test_a_price_step_notifies_once_and_rearms_on_the_next_step(ledger):
     from arno.jobs.patterns import run_pattern_detection
-    from arno.ledger.accounts import create_account
-    from arno.ledger.movements import record_expense
     from arno.ledger.payees import create_payee
 
     bank = await create_account(ledger, kind="bank", name="SBI", opening_balance_paise=10_000_000)
@@ -410,8 +264,6 @@ async def test_a_price_step_notifies_once_and_rearms_on_the_next_step(ledger):
 
 
 async def test_a_price_step_alerts_only_inside_the_alert_window(ledger):
-    from arno.ledger.accounts import create_account
-    from arno.ledger.movements import record_expense
     from arno.ledger.payees import create_payee
 
     bank = await create_account(ledger, kind="bank", name="SBI", opening_balance_paise=10_000_000)
@@ -444,7 +296,6 @@ async def test_a_price_step_alerts_only_inside_the_alert_window(ledger):
 
 async def test_an_income_price_step_never_raises_a_price_change(ledger):
     from arno.jobs.patterns import run_pattern_detection
-    from arno.ledger.accounts import create_account
     from arno.ledger.movements import record_income
     from arno.ledger.payees import create_payee
 
@@ -472,8 +323,6 @@ async def test_an_income_price_step_never_raises_a_price_change(ledger):
 
 
 async def test_a_linked_schedule_with_another_name_and_no_category_is_not_reported_twice(ledger):
-    from arno.ledger.accounts import create_account
-    from arno.ledger.movements import record_expense
     from arno.ledger.payees import create_payee
     from arno.ledger.schedule_payments import link_payment
     from arno.ledger.schedules import create_schedule
@@ -539,8 +388,7 @@ async def test_a_linked_schedule_with_another_name_and_no_category_is_not_report
 
 
 async def test_a_reversed_schedule_payment_is_not_counted_as_a_price_change(ledger):
-    from arno.ledger.accounts import create_account
-    from arno.ledger.movements import correct_movement, record_expense
+    from arno.ledger.movements import correct_movement
     from arno.ledger.payees import create_payee
     from arno.ledger.schedule_payments import link_payment
     from arno.ledger.schedules import create_schedule
@@ -593,8 +441,6 @@ async def test_a_reversed_schedule_payment_is_not_counted_as_a_price_change(ledg
 
 async def test_a_schedule_price_step_notifies_once_and_dismissing_writes_nothing(ledger):
     from arno.jobs.patterns import run_pattern_detection
-    from arno.ledger.accounts import create_account
-    from arno.ledger.movements import record_expense
     from arno.ledger.payees import create_payee
     from arno.ledger.schedule_payments import link_payment
     from arno.ledger.schedules import create_schedule
@@ -663,8 +509,6 @@ async def test_a_schedule_price_step_notifies_once_and_dismissing_writes_nothing
 
 
 async def test_a_schedule_price_step_alerts_only_inside_the_alert_window(ledger):
-    from arno.ledger.accounts import create_account
-    from arno.ledger.movements import record_expense
     from arno.ledger.payees import create_payee
     from arno.ledger.schedule_payments import link_payment
     from arno.ledger.schedules import create_schedule
@@ -714,40 +558,7 @@ async def test_a_schedule_price_step_alerts_only_inside_the_alert_window(ledger)
     assert not [p for p in outside if p["kind"] == "price_change"]
 
 
-async def test_a_price_change_pushes_a_contentless_ping(ledger, monkeypatch):
-    from arno.jobs import patterns as jobs_patterns
-
-    async def fake_detect(conn, *, as_of=None, write=True):
-        del conn, as_of, write
-        return [
-            {
-                "kind": "price_change",
-                "payee_id": "pay_1",
-                "merchant": "Netflix",
-                "outside_text": False,
-                "old_paise": 64_900,
-                "new_paise": 79_900,
-                "step_date": "2026-11-01",
-                "movement_ids": ["mov_1"],
-            }
-        ]
-
-    pushed: list[str] = []
-
-    async def record(conn, kind):
-        del conn
-        pushed.append(kind)
-
-    monkeypatch.setattr(jobs_patterns.patterns, "detect", fake_detect)
-    monkeypatch.setattr(jobs_patterns, "send_push_for_kind", record)
-    result = await jobs_patterns.handle_pattern_detection({})
-    assert result["created"] == 1
-    assert pushed == ["price_change"]
-
-
 async def test_a_series_that_has_stopped_is_not_proposed(ledger):
-    from arno.ledger.accounts import create_account
-    from arno.ledger.movements import record_expense
     from arno.ledger.payees import create_payee
 
     bank = await create_account(ledger, kind="bank", name="SBI", opening_balance_paise=10_000_000)
@@ -819,14 +630,14 @@ async def test_handle_scheduled_question_builds_a_read_only_agent_that_logs_its_
     monkeypatch.setattr(builder_mod, "primary_model", lambda: model)
     monkeypatch.setattr(builder_mod, "backup_model", lambda: None)
 
-    result = await handle_scheduled_question(
-        {"scheduled_question_id": question["id"], "period": "impl-2026-11-22"}
-    )
+    await handle_scheduled_question(question["id"], "impl-2026-11-22")
 
-    assert result["notification_id"]
     assert seen_tools, "the model must see the read toolset"
     assert seen_tools & WRITE_TOOLS == set()
-    row = await db.fetchrow("SELECT * FROM notifications WHERE id = $1", result["notification_id"])
+    row = await db.fetchrow(
+        "SELECT * FROM notifications WHERE dedupe_key = $1",
+        f"scheduled_question:{question['id']}:impl-2026-11-22",
+    )
     assert row["kind"] == "scheduled_question"
     assert row["title"] == question["prompt"]
     assert "small amount" in row["body"]
@@ -841,124 +652,6 @@ def test_question_budget_defaults_and_ceiling_constants():
     from arno.jobs.questions import REQUEST_LIMIT
 
     assert REQUEST_LIMIT == 20
-
-
-async def test_briefing_does_not_invent_a_floor_or_hide_setup_gaps(ledger):
-    payload = await compose_briefing(ledger, as_of=date(2026, 11, 1))
-    numbers = payload["numbers"]
-    assert numbers["floor"]["set"] is False
-    assert numbers["floor"]["paise"] is None
-    assert numbers["floor"]["probability"] is None
-    assert "No floor is set" in payload["template"]
-    assert "100%" not in payload["template"]
-    assert any("no floor set" in gap for gap in numbers["floor"]["data_quality"])
-    assert "No data-quality gaps" not in payload["template"]
-
-
-async def test_briefing_numbers_match_the_ledger_and_the_template(ledger):
-    account = await create_account(ledger, kind="bank", name="Briefing Bank")
-    await record_expense(
-        ledger,
-        account_id=account["id"],
-        amount_paise=120_050,
-        description="Groceries",
-        date=date(2026, 10, 28),
-    )
-    await record_expense(
-        ledger,
-        account_id=account["id"],
-        amount_paise=60_000,
-        description="Groceries",
-        date=date(2026, 10, 20),
-    )
-    await ledger.execute(
-        """
-        INSERT INTO schedules (kind, subtype, name, amount_paise, rule, starts)
-        VALUES ('obligation', 'rent', 'Rent', 2500000, 'FREQ=MONTHLY;BYMONTHDAY=3', $1)
-        """,
-        date(2026, 9, 3),
-    )
-
-    payload = await compose_briefing(ledger, as_of=date(2026, 11, 1))
-    numbers = payload["numbers"]
-    assert numbers["spent"]["paise"] == 120_050
-    assert numbers["spent"]["entries"] == 1
-    assert numbers["spent"]["previous_paise"] == 60_000
-    assert numbers["spent"]["change_percent"] == 100.1
-    assert numbers["top_categories"][0]["amount_paise"] == 120_050
-    assert numbers["bills"]["count"] == 1
-    assert numbers["bills"]["total_paise"] == 2_500_000
-
-    direct = await summarize_spending(ledger, group_by="none", period="2026-10-26..2026-11-01")
-    assert direct["total"]["paise"] == numbers["spent"]["paise"]
-    assert "₹1,200.50" in payload["template"]
-    assert "₹25,000" in payload["template"]
-
-
-async def test_briefing_does_not_compare_against_a_net_refund_week(ledger):
-    account = await create_account(ledger, kind="bank", name="Briefing Bank")
-    await record_refund(
-        ledger,
-        account_id=account["id"],
-        amount_paise=5_000,
-        description="Refund",
-        date=date(2026, 10, 20),
-    )
-    await record_expense(
-        ledger,
-        account_id=account["id"],
-        amount_paise=1_000,
-        description="Chai",
-        date=date(2026, 10, 28),
-    )
-    payload = await compose_briefing(ledger, as_of=date(2026, 11, 1))
-    numbers = payload["numbers"]
-    assert numbers["spent"]["previous_paise"] == -5_000
-    assert numbers["spent"]["change_percent"] is None
-    assert "That is down" not in payload["template"]
-    assert "That is up" not in payload["template"]
-
-
-async def test_briefing_says_the_spend_total_is_incomplete_without_a_statement(ledger):
-    account = await create_account(ledger, kind="bank", name="Coverage Bank")
-    await record_expense(
-        ledger,
-        account_id=account["id"],
-        amount_paise=120_050,
-        description="Groceries",
-        date=date(2026, 10, 28),
-    )
-    payload = await compose_briefing(ledger, as_of=date(2026, 11, 1))
-    spent = payload["numbers"]["spent"]
-    assert spent["coverage"]["complete"] is False
-    assert spent["coverage"]["note"]
-    assert spent["coverage"]["note"] in payload["template"]
-    assert "₹1,200.50" in payload["template"]
-
-
-async def test_briefing_carries_complete_statement_coverage(ledger):
-    account = await create_account(ledger, kind="bank", name="Coverage Bank")
-    await ledger.execute(
-        """
-        INSERT INTO imports (file_hash, status, account_id, period_start, period_end)
-        VALUES ('coverage-hash', 'committed', $1, $2, $3)
-        """,
-        account["id"],
-        date(2026, 10, 1),
-        date(2026, 10, 31),
-    )
-    await record_expense(
-        ledger,
-        account_id=account["id"],
-        amount_paise=120_050,
-        description="Groceries",
-        date=date(2026, 10, 16),
-    )
-    payload = await compose_briefing(ledger, as_of=date(2026, 10, 20))
-    spent = payload["numbers"]["spent"]
-    assert spent["coverage"]["complete"] is True
-    assert spent["coverage"]["note"] is None
-    assert "Statement coverage is incomplete" not in payload["template"]
 
 
 async def test_a_scheduled_question_ceiling_is_plain_and_marked(ledger):

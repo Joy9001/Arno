@@ -1,8 +1,8 @@
 """Bill, EMI, and card-due reminders, N lead days ahead.
 
-The job runs at the notification time and asks the ledger's own `upcoming()` for the next N days.
-Each due event becomes one inbox item keyed by its source and due date, so a retry or a later run
-inside the lead window does not repeat it.
+The daily task runs at the notification time and asks the ledger's own `upcoming()` for the
+next N days. Each due event becomes one inbox item keyed by its source and due date, so a
+retry or a later run inside the lead window does not repeat it.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from arno.db.conn import Connection, connect
 from arno.india.formatting import format_paise
 from arno.ledger import schedules as schedules_mod
 from arno.ledger.common import today as ledger_today
-from arno.notifications import create_notification, send_push_for_kind
+from arno.notifications import create_notification
 
 logger = logging.getLogger("arno.jobs.reminders")
 
@@ -88,13 +88,9 @@ async def send_reminders(
     return created
 
 
-async def handle_reminders(payload: dict[str, Any]) -> dict[str, Any]:
-    del payload
+async def handle_reminders() -> None:
     async with connect() as conn:
-        rows = await send_reminders(conn)
-        if rows:
-            await send_push_for_kind(conn, "reminder")
-        return {"created": len(rows), "ids": [row["id"] for row in rows]}
+        await send_reminders(conn)
 
 
 __all__ = ["handle_reminders", "send_reminders"]

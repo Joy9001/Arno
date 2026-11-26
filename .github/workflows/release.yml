@@ -38,8 +38,6 @@ jobs:
       PGPASSWORD: postgres
       APP_PASSWORD: app
       APP_DB: arno_test
-      ARNO_RP_ID: localhost
-      ARNO_RP_ORIGIN: http://localhost:8000
       ARNO_COOKIE_SECURE: "0"
       CHAT_BASE_URL: http://127.0.0.1:9/v1
       CHAT_MODEL: blocked-in-ci

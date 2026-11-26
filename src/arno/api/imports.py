@@ -1,4 +1,4 @@
-"""The imports REST surface: upload, password, review, commit, reject, undo, retry."""
+"""The imports REST surface: upload, password, retry, review, commit, reject, undo."""
 
 from __future__ import annotations
 
@@ -16,26 +16,30 @@ from fastapi import (
     UploadFile,
     status,
 )
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from arno.agent.extractor import begin_extraction, unlock_import
 from arno.api.deps import Database, current_session
+from arno.importers.categorize import handle_categorize_import
 from arno.importers.commit import commit_import, reject_import, undo_import
 from arno.importers.pipeline import (
+    create_import,
     import_list_item,
     import_payload,
     list_imports,
-    retry_with_password,
     set_manual_opening,
 )
-from arno.importers.readers import DocError, sniff
+from arno.importers.readers import DocError, image_media_type, sniff
+from arno.jobs.background import spawn
 from arno.ledger.audit import new_id
 from arno.ledger.errors import ConflictLedgerError, InvalidLedgerError
 
 router = APIRouter(prefix="/api", tags=["imports"], dependencies=[Depends(current_session)])
 
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
-CHAT_STATEMENT_KINDS = frozenset({"pdf", "text", "xlsx", "xls", "xlsb", "ods", "encrypted_ooxml"})
+CHAT_STATEMENT_KINDS = frozenset(
+    {"pdf", "text", "xlsx", "xls", "xlsb", "ods", "encrypted_ooxml", "image"}
+)
 
 
 class ApiModel(BaseModel):
@@ -73,8 +77,6 @@ async def upload_attachment(
     file: Annotated[UploadFile, File()],
     purpose: Annotated[str | None, Form()] = None,
 ) -> dict[str, Any]:
-    from arno.api.capture import image_media_type
-
     data = await file.read(MAX_UPLOAD_BYTES + 1)
     if len(data) > MAX_UPLOAD_BYTES:
         raise HTTPException(
@@ -102,7 +104,7 @@ async def upload_attachment(
         if purpose is not None and kind not in CHAT_STATEMENT_KINDS:
             raise HTTPException(
                 status_code=422,
-                detail="Choose a PDF, CSV, or spreadsheet statement (XLSX, XLSB, ODS, XLS).",
+                detail="Choose a PDF, image, CSV, or spreadsheet statement (XLSX, XLSB, ODS, XLS).",
             )
         stored_kind = "statement"
         content_type = file.content_type or "application/octet-stream"
@@ -128,12 +130,18 @@ async def upload_attachment(
     payload = dict(row)
     payload["detected_kind"] = kind
     payload["created_at"] = row["created_at"].isoformat()
+    if selected == "statement":
+        opened = await create_import(conn, attachment_id=attachment_id)
+        payload["import_id"] = opened["id"]
+        # A file already importing keeps its own import; only a new one starts extraction.
+        if opened["attachment_id"] == attachment_id:
+            await begin_extraction(conn, opened["id"])
     return payload
 
 
 @router.delete("/attachments/{attachment_id}")
 async def delete_attachment(attachment_id: str, conn: Database) -> dict[str, Any]:
-    """Purge a stored statement file; the replay set drops it. The password is already gone."""
+    """Purge a stored statement file. The password is already gone."""
     row = await conn.fetchrow("SELECT id, kind FROM attachments WHERE id = $1", attachment_id)
     if row is None:
         raise HTTPException(status_code=404, detail="No such attachment")
@@ -208,15 +216,36 @@ async def import_detail(import_id: str, conn: Database) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.post("/imports/{import_id}/password", status_code=status.HTTP_202_ACCEPTED)
-async def import_password(import_id: str, body: PasswordIn, conn: Database) -> JSONResponse:
+@router.post("/imports/{import_id}/password")
+async def import_password(import_id: str, body: PasswordIn, conn: Database) -> dict[str, Any]:
+    """Open the locked file now. The password is used for that and kept nowhere."""
     row = await conn.fetchrow("SELECT status FROM imports WHERE id = $1", import_id)
     if row is None:
         raise HTTPException(status_code=404, detail="No such import")
-    if row["status"] not in ("needs_password", "needs_input", "failed"):
+    if row["status"] != "needs_password":
         raise HTTPException(status_code=409, detail=f"That import is {row['status']}")
-    await retry_with_password(conn, import_id=import_id, password=body.password)
-    return JSONResponse(status_code=202, content=await import_payload(conn, import_id))
+    try:
+        await unlock_import(conn, import_id, body.password)
+    except DocError as exc:
+        raise HTTPException(status_code=422, detail="That password did not open the file.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return await import_payload(conn, import_id)
+
+
+@router.post("/imports/{import_id}/retry")
+async def import_retry(import_id: str, conn: Database) -> dict[str, Any]:
+    """Read a failed import's stored file again."""
+    row = await conn.fetchrow("SELECT status FROM imports WHERE id = $1", import_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="No such import")
+    if row["status"] != "failed":
+        raise HTTPException(status_code=409, detail=f"That import is {row['status']}")
+    try:
+        await begin_extraction(conn, import_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return await import_payload(conn, import_id)
 
 
 @router.post("/imports/{import_id}/opening")
@@ -250,6 +279,24 @@ async def import_commit(
     payload = await import_payload(conn, import_id)
     payload["commit"] = result
     return payload
+
+
+@router.post("/imports/{import_id}/categorize")
+async def import_categorize(import_id: str, conn: Database) -> dict[str, Any]:
+    """Run a failed categorization again."""
+    row = await conn.fetchrow(
+        """
+        UPDATE imports SET categorize = $1
+        WHERE id = $2 AND status = 'committed' AND categorize ->> 'state' = 'failed'
+        RETURNING id
+        """,
+        {"state": "queued"},
+        import_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=409, detail="Only a failed categorization can be retried.")
+    spawn(handle_categorize_import(import_id), name=f"categorize-{import_id}")
+    return await import_payload(conn, import_id)
 
 
 @router.post("/imports/{import_id}/reject")

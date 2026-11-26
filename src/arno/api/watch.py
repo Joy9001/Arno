@@ -1,10 +1,9 @@
-"""L6 surfaces: the inbox, push subscriptions, scheduled questions, and job status."""
+"""L6 surfaces: the inbox and scheduled questions."""
 
 from __future__ import annotations
 
 import logging
 import uuid
-from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -17,24 +16,9 @@ from arno.agent import history as history_mod
 from arno.agent.deps import AgentDeps
 from arno.agent.turns import PreparationBusy, TurnBusy
 from arno.api.deps import Database, Session, current_session
-from arno.api.notification_query import list_page as list_notification_page
-from arno.jobs.schedules import (
-    ensure_builtin_schedules,
-    job_status,
-    job_views,
-    sync_scheduled_questions,
-)
 from arno.ledger.audit import new_id
 from arno.ledger.common import today as ledger_today
-from arno.notifications import (
-    mark_all_read,
-    mark_read,
-    public_push_key,
-    push_status,
-    seed_chat_text,
-    subscribe,
-    unsubscribe,
-)
+from arno.notifications import list_page, mark_all_read, mark_read, seed_chat_text
 
 logger = logging.getLogger("arno.watch")
 
@@ -47,22 +31,6 @@ router = APIRouter(
 
 class ApiModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
-
-
-class PushKeys(ApiModel):
-    p256dh: str = Field(min_length=1)
-    auth: str = Field(min_length=1)
-
-
-class PushSubscribe(ApiModel):
-    model_config = ConfigDict(extra="ignore")
-
-    endpoint: str = Field(min_length=1, max_length=2048)
-    keys: PushKeys
-
-
-class PushUnsubscribe(ApiModel):
-    endpoint: str = Field(min_length=1, max_length=2048)
 
 
 class QuestionCreate(ApiModel):
@@ -81,12 +49,9 @@ async def get_notifications(
     conn: Database,
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = None,
-    include_resolved: bool = Query(default=False),
 ) -> dict[str, Any]:
     try:
-        return await list_notification_page(
-            conn, limit=limit, cursor=cursor, include_resolved=include_resolved
-        )
+        return await list_page(conn, limit=limit, cursor=cursor)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
@@ -194,7 +159,7 @@ async def post_notification_chat(
                 deps=AgentDeps(
                     conversation_id=str(thread["id"]),
                     message_id=str(message["id"]),
-                    user_id=str(session["user_id"]),
+                    user_id=session["login"],
                 ),
                 prompt=(client_id, text),
             )
@@ -210,36 +175,6 @@ async def post_notification_chat(
         "message": text,
         "started": started,
     }
-
-
-@router.get("/push/key")
-async def get_push_key(conn: Database) -> dict[str, Any]:
-    return await public_push_key(conn)
-
-
-@router.get("/push/status")
-async def get_push_status(conn: Database) -> dict[str, Any]:
-    return await push_status(conn)
-
-
-@router.post("/push/subscribe", status_code=201)
-async def post_push_subscribe(body: PushSubscribe, conn: Database) -> dict[str, Any]:
-    try:
-        row = await subscribe(
-            conn,
-            endpoint=body.endpoint,
-            p256dh=body.keys.p256dh,
-            auth=body.keys.auth,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"subscribed": True, "subscription": row}
-
-
-@router.delete("/push/subscribe")
-async def delete_push_subscribe(body: PushUnsubscribe, conn: Database) -> dict[str, Any]:
-    removed = await unsubscribe(conn, endpoint=body.endpoint)
-    return {"subscribed": False, "removed": removed}
 
 
 @router.get("/scheduled-questions")
@@ -277,89 +212,6 @@ async def patch_scheduled_question(
 @router.delete("/scheduled-questions/{question_id}")
 async def delete_scheduled_question(question_id: str, conn: Database) -> dict[str, Any]:
     return await questions_mod.archive_question(conn, question_id)
-
-
-@router.get("/jobs")
-async def get_jobs(conn: Database, limit: int = Query(default=20, ge=1, le=100)) -> dict[str, Any]:
-    await ensure_builtin_schedules(conn)
-    await sync_scheduled_questions(conn)
-    return await job_status(conn, limit=limit)
-
-
-@router.get("/jobs/activity")
-async def get_job_activity(conn: Database, since: datetime | None = None) -> dict[str, Any]:
-    """A pure read the app polls: what is running, and what finished after `since`.
-
-    The cursor is read first and runs a little behind, so a job that finishes during this read
-    or commits late is reported on the next poll, never lost. The app dedupes the overlap.
-    """
-    now = (await conn.fetchrow_required("SELECT now() - interval '2 seconds' AS now"))["now"]
-    active_rows = await conn.fetch(
-        """
-        SELECT * FROM jobs
-        WHERE status IN ('pending', 'running')
-        ORDER BY (status = 'running') DESC, run_at, id
-        """
-    )
-    if since is not None and since.tzinfo is None:
-        since = since.replace(tzinfo=UTC)
-    # Every finish after the cursor, not a capped page: the cursor moves to `now` below, so a
-    # row dropped here would never be reported. The client polls often, so this stays small.
-    finished_rows = (
-        await conn.fetch(
-            """
-            SELECT * FROM jobs
-            WHERE status IN ('done', 'failed') AND finished_at > $1
-            ORDER BY finished_at, id
-            """,
-            since,
-        )
-        if since is not None
-        else []
-    )
-    views = await job_views(conn, [*active_rows, *finished_rows])
-    split = len(active_rows)
-    return {
-        "active": views[:split],
-        "finished": views[split:],
-        "now": now.isoformat(),
-    }
-
-
-@router.post("/jobs/{job_id}/retry")
-async def post_job_retry(job_id: str, conn: Database) -> dict[str, Any]:
-    """Run a failed job again on the same row, and clear the alert the user acted on.
-
-    The old alert gives up its dedupe key, so failing again raises a fresh one.
-    """
-    row = await conn.fetchrow(
-        """
-        UPDATE jobs
-        SET status = 'pending', attempts = 0, run_at = now(), started_at = NULL,
-            finished_at = NULL, last_error = NULL, timed_out_at = NULL, result = NULL,
-            updated_at = now()
-        WHERE id = $1 AND status = 'failed'
-        RETURNING *
-        """,
-        job_id,
-    )
-    if row is None:
-        if await conn.fetchval("SELECT 1 FROM jobs WHERE id = $1", job_id) is None:
-            raise HTTPException(status_code=404, detail="That job does not exist.")
-        raise HTTPException(status_code=409, detail="Only a failed job can be retried.")
-    await conn.execute(
-        """
-        UPDATE notifications
-        SET read_at = coalesce(read_at, now()),
-            resolved_at = coalesce(resolved_at, now()),
-            resolved_by = coalesce(resolved_by, 'job_retry'),
-            dedupe_key = NULL
-        WHERE dedupe_key = $1
-        """,
-        f"job_failed:{job_id}",
-    )
-    views = await job_views(conn, [row])
-    return views[0]
 
 
 __all__ = ["router"]

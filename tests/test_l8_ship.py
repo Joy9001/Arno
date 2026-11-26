@@ -5,6 +5,7 @@ import shutil
 from pathlib import Path
 
 import pytest
+from fastapi.testclient import TestClient
 
 from arno.api.capture import MAX_CAPTURE_BYTES
 from arno.api.imports import MAX_UPLOAD_BYTES
@@ -17,8 +18,6 @@ from arno.db.pre_migration import dump_before_migrating
 from arno.demo.template import database_dsn, drop_database
 from arno.jobs.backup import run_backup
 from tests.conftest import cluster_lock, scratch_name
-from tests.fixtures.passkeys import complete_setup
-from tests.software_authenticator import SoftwareAuthenticator
 
 REQUIRED_POLICY = (
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
@@ -47,32 +46,10 @@ def test_both_upload_paths_share_the_25_mb_cap():
     assert MAX_CAPTURE_BYTES == MAX_UPLOAD_BYTES
 
 
-async def test_export_and_passkey_changes_need_a_fresh_passkey(client, setup_token, settings, db):
-    authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
-    assert complete_setup(client, setup_token, authenticator).status_code == 200
-
-    blocked = client.get("/api/export/json")
-    assert blocked.status_code == 403
-    assert blocked.headers["x-arno-step-up"] == "passkey"
-
-    begin = client.post("/api/auth/reverify/begin")
-    assert begin.status_code == 200, begin.text
-    credential = authenticator.authentication_credential(begin.json()["options"])
-    verified = client.post(
-        "/api/auth/reverify/verify",
-        json={"challenge_id": begin.json()["challenge_id"], "credential": credential},
-    )
-    assert verified.status_code == 200, verified.text
-
-    assert client.get("/api/export/json").status_code == 200
-    assert client.post("/api/auth/enrollments").status_code == 200
-
-    passkey_id = (await db.fetchrow("SELECT id FROM webauthn_credentials"))["id"]
-    renamed = client.patch(f"/api/auth/passkeys/{passkey_id}", json={"name": "Laptop"})
-    assert renamed.status_code == 200, renamed.text
-
-    await db.execute("UPDATE sessions SET reverified_at = now() - interval '6 minutes'")
-    assert client.get("/api/export/json").status_code == 403
+def test_export_needs_the_owner_and_no_step_up(client, session_client):
+    anonymous = TestClient(client.app)
+    assert anonymous.get("/api/export/json").status_code == 401
+    assert session_client.get("/api/export/json").status_code == 200
 
 
 async def test_pre_migration_dump_runs_only_when_a_migration_is_pending(db, settings, tmp_path):
@@ -190,15 +167,12 @@ async def test_restore_drill_brings_back_every_area(demo_ledger, tmp_path: Path,
             ] > 0
             assert (await restored.fetchrow_required("SELECT count(*) AS n FROM goals"))["n"] > 0
             # The dump carries the migrations' table grants, so a restored instance can answer and
-            # back up again. `agent_ro` still cannot read the auth tables.
+            # back up again.
             assert await restored.fetchval(
                 "SELECT has_table_privilege('agent_ro', 'v_accounts', 'SELECT')"
             )
             assert not await restored.fetchval(
                 "SELECT has_table_privilege('agent_ro', 'accounts', 'SELECT')"
-            )
-            assert not await restored.fetchval(
-                "SELECT has_table_privilege('agent_ro', 'users', 'SELECT')"
             )
             assert await restored.fetchval(
                 "SELECT has_table_privilege('backup', 'accounts', 'SELECT')"

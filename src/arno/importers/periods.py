@@ -1,4 +1,4 @@
-"""The statement period comes from outside the parser.
+"""The statement period comes from outside the extraction.
 
 A day/month swap keeps the sums right, so the dates are checked against a period read from
 the header (a date range or a month name) or, failing that, from where the ledger ends.
@@ -11,8 +11,6 @@ import re
 from typing import Any
 
 from arno.db.conn import Connection
-from arno.importers.layout_detect import line_text, text_lines
-from arno.importers.readers import Doc
 
 _MONTHS = {
     "jan": 1,
@@ -79,33 +77,15 @@ def _one_date(day: str, month: str, year: str) -> dt.date | None:
         return None
 
 
-def _document_text(doc: Doc) -> str:
-    chunks: list[str] = []
-    try:
-        if doc.kind == "pdf":
-            for page in range(min(doc.page_count(), 2)):
-                for line in text_lines(doc.words(page)):
-                    chunks.append(line_text(line))
-        elif doc.kind in ("xlsx", "xls", "xlsb", "ods", "docx", "html", "rtf", "text", "ofx"):
-            rows = doc.cells(0)
-            for row in rows[:40]:
-                chunks.append(" ".join(str(cell) for cell in row if cell is not None))
-        elif doc.kind in ("json", "camt", "xml", "mt940"):
-            rows = doc.cells(0)
-            for row in rows[:60]:
-                chunks.append(" ".join(str(cell) for cell in row if cell is not None))
-    except Exception:  # noqa: BLE001 - a period is best effort; the checks say when it is missing
-        pass
-    return "\n".join(chunks)
-
-
 def derive_period(
-    doc: Doc,
+    text: str,
     *,
+    printed: dict[str, Any] | None = None,
     ledger_last: dt.date | None = None,
     today: dt.date | None = None,
 ) -> dict[str, Any] | None:
-    text = _document_text(doc)
+    """The period from the file's own header text, else the one the statement printed, else the
+    day after the ledger ends. `printed` is the extraction's `{start, end}`, trusted last."""
     # An ISO range first: the day-first pattern would read "2026-04-01" as a 26 April 2001.
     iso = _ISO_RANGE.search(text)
     if iso:
@@ -151,6 +131,8 @@ def derive_period(
         else:
             end = dt.date(year_number, month_number + 1, 1) - dt.timedelta(days=1)
         return {"start": start.isoformat(), "end": end.isoformat(), "source": "month-name"}
+    if printed:
+        return {**printed, "source": "printed"}
     if ledger_last is not None:
         day = today or dt.date.today()
         start = ledger_last + dt.timedelta(days=1)

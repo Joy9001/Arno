@@ -51,12 +51,11 @@ function attachmentPrompt(messages: ChatMessage[]): ChatMessage[] {
   const photoCount = last.parts.filter((part) => part.type === "data-photo").length;
   const hasText = last.parts.some((part) => part.type === "text" && part.text.trim());
   if ((!hasStatement && photoCount === 0) || hasText) return messages;
-  const imagePhrase = photoCount === 1 ? "the attached image" : "the attached images";
   const text =
     hasStatement && photoCount > 0
-      ? `Import the attached statement and examine ${imagePhrase}.`
+      ? `I attached a statement and ${photoCount === 1 ? "an image" : "images"}.`
       : hasStatement
-        ? "Import the attached statement."
+        ? "I attached a statement."
         : photoCount === 1
           ? "See the attached image."
           : "See the attached images.";

@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 from arno.importers.balance_plan import (
     BalanceReviewSnapshot,
+    book_adjustment,
     plan_balances,
     resolve_balance_window,
 )
@@ -333,6 +335,40 @@ async def test_an_older_statement_committed_after_a_newer_one_keeps_every_day_ri
     assert await check_ledger(ledger) == []
 
 
+async def test_a_reanchor_of_an_import_without_a_printed_period_is_recomputed_not_stacked(ledger):
+    account = await _stated_bank(ledger, balance_paise=295_000)
+    newer = await _review(
+        ledger,
+        account,
+        BANK_ROWS[1:],
+        start=date(2026, 6, 1),
+        end=date(2026, 10, 31),
+        opening=300_000,
+        closing=BANK_CLOSING,
+    )
+    # A statement that prints no period ends on its last line.
+    await ledger.execute(
+        "UPDATE imports SET period_start = NULL, period_end = NULL WHERE id = $1", newer
+    )
+    await commit_import(ledger, newer)
+    assert await _balance_on(ledger, account, BANK_END) == 295_000
+
+    older = await _review(
+        ledger,
+        account,
+        BANK_ROWS[:1],
+        start=BANK_START,
+        end=date(2026, 5, 31),
+        opening=BANK_OPENING,
+        closing=300_000,
+    )
+    await commit_import(ledger, older)
+
+    assert await _balance_on(ledger, account, BANK_END) == 295_000
+    assert await _live_adjustments_named(ledger, "Stated balance re-anchor") <= 1
+    assert await check_ledger(ledger) == []
+
+
 async def test_a_balance_stated_after_the_import_is_still_an_adjustment_at_its_day(ledger):
     created = await create_account(
         ledger, kind="bank", name="SBI savings", institution="SBI", last4="6789"
@@ -513,3 +549,83 @@ async def test_plan_uses_one_closing_and_period_end_for_review_and_commit(ledger
     assert plan.period_end == date(2026, 1, 15)
     assert plan.closing_adjustment_paise == 10_000
     assert plan.stated_balance is None
+
+
+async def test_adjustments_are_found_by_their_import_not_by_their_label(ledger):
+    created = await create_account(ledger, kind="bank", name="SBI main", institution="SBI")
+    account = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", created["id"])
+    newer = await _review(
+        ledger,
+        account,
+        [_row("2026-05-10", "UPI/DR/1/RENT", debit=40_000, balance=110_000)],
+        start=date(2026, 4, 1),
+        end=date(2026, 11, 1),
+        opening=150_000,
+        closing=110_000,
+    )
+    await commit_import(ledger, newer)
+    opening_id = await ledger.fetchval(
+        "SELECT id FROM movements WHERE kind = 'adjustment' AND import_id = $1", newer
+    )
+    assert opening_id is not None
+
+    # Renaming the account changes every label it will ever book. A look-alike label on the same
+    # day, booked by nobody's import, is not an import's opening either.
+    await ledger.execute("UPDATE accounts SET name = 'Salary account' WHERE id = $1", account["id"])
+    account = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
+    await book_adjustment(
+        ledger,
+        account,
+        amount=1_000,
+        day=date(2026, 4, 1),
+        description="Opening balance for SBI main statement",
+    )
+    decoy_id = await ledger.fetchval(
+        "SELECT id FROM movements WHERE import_id IS NULL AND kind = 'adjustment'"
+    )
+    older = await _review(
+        ledger,
+        account,
+        [_row("2025-06-10", "NEFT CR/SALARY", credit=50_000, balance=150_000)],
+        start=date(2025, 4, 1),
+        end=date(2026, 3, 31),
+        opening=100_000,
+        closing=150_000,
+    )
+    await commit_import(ledger, older)
+
+    async def live(movement_id: str) -> bool:
+        return bool(
+            await ledger.fetchval(
+                "SELECT is_effective FROM v_movement_state WHERE movement_id = $1", movement_id
+            )
+        )
+
+    assert not await live(opening_id)  # the older rows explain it, so it was found and reversed
+    assert await live(decoy_id)  # a label is no longer a claim on a movement
+
+
+async def test_the_migration_backfill_tags_openings_from_the_commit_groups(ledger):
+    created = await create_account(ledger, kind="bank", name="SBI main", institution="SBI")
+    account = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", created["id"])
+    import_id = await _review(
+        ledger,
+        account,
+        [_row("2026-05-10", "UPI/DR/1/RENT", debit=40_000, balance=110_000)],
+        start=date(2026, 4, 1),
+        end=date(2026, 11, 1),
+        opening=150_000,
+        closing=110_000,
+    )
+    await commit_import(ledger, import_id)
+    await ledger.execute("UPDATE movements SET import_id = NULL")
+
+    migration = Path("src/arno/db/migrations/0050_import_adjustments.sql").read_text("utf-8")
+    await ledger.execute(migration[migration.index("-- Backfill") :])
+
+    tagged = await ledger.fetch(
+        "SELECT description, import_id FROM movements WHERE import_id IS NOT NULL"
+    )
+    assert [(row["description"], row["import_id"]) for row in tagged] == [
+        ("Opening balance for SBI main statement", import_id)
+    ]

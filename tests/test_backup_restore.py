@@ -253,7 +253,7 @@ async def test_an_unexpected_backup_error_is_recorded_generically_and_the_alert_
     monkeypatch.setattr(backup_job, "_ship", explode)
     monkeypatch.setattr(backup_job, "backup_alert", spy)
 
-    await backup_job.handle_backup_check({})
+    await backup_job.handle_backup_check()
 
     run = await ledger.fetchrow_required("SELECT * FROM backup_runs ORDER BY created_at DESC")
     assert (run["status"], run["error"]) == ("failed", "backup failed: KeyError")
@@ -298,13 +298,7 @@ async def test_a_restored_dump_keeps_the_agents_read_boundary(ledger, tmp_path: 
                     "pgledger_transfers_view",
                     "pgledger_entries_view",
                     "pgledger_idempotency_keys_view",
-                    "users",
-                    "sessions",
-                    "setup_tokens",
-                    "webauthn_credentials",
-                    "vapid_keys",
                     "audit_log",
-                    "jobs",
                     "backup_runs",
                     "attachments",
                 )
@@ -317,9 +311,6 @@ async def test_a_restored_dump_keeps_the_agents_read_boundary(ledger, tmp_path: 
             # The dumper reads everything for `pg_dump` and writes only its own status row.
             assert await restored.fetchval(
                 "SELECT has_table_privilege('backup', 'accounts', 'SELECT')"
-            )
-            assert await restored.fetchval(
-                "SELECT has_table_privilege('backup', 'users', 'SELECT')"
             )
             assert await restored.fetchval(
                 "SELECT has_table_privilege('backup', 'backup_runs', 'INSERT')"

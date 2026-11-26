@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -33,8 +34,6 @@ from arno.api import (
 )
 from arno.api.middleware import SecurityHeadersMiddleware
 from arno.api.problems import problem
-from arno.auth.enrollment import enrollment_message
-from arno.auth.setup import ensure_setup_token, setup_required
 from arno.config import Settings, get_settings
 from arno.db.bootstrap import set_agent_ro_password, set_backup_password, warn_if_superuser
 from arno.db.conn import (
@@ -45,15 +44,14 @@ from arno.db.conn import (
 )
 from arno.db.migrate import run_migrations
 from arno.db.pre_migration import dump_before_migrating
-from arno.importers.seed_rules import ensure_seed_rules
-from arno.jobs.runner import JobRunner, recover_interrupted_jobs
-from arno.jobs.schedules import ensure_builtin_schedules, sync_scheduled_questions
+from arno.jobs import loop as job_loop
+from arno.jobs.background import drain
 from arno.ledger.accounts import ensure_system_accounts
 from arno.ledger.categories import ensure_default_categories
 from arno.ledger.errors import CommitOutcomeUnknownError, LedgerError
 from arno.logging_utils import configure_logging
-from arno.notifications import ensure_vapid_keys
 from arno.observability import bootstrap_observability, shutdown_observability
+from arno.scheduled_questions import ensure_default_question
 
 logger = logging.getLogger("arno")
 
@@ -70,29 +68,10 @@ async def _bootstrap(settings: Settings) -> list[int]:
         await set_agent_ro_password(conn, settings.agent_ro_password)
         await set_backup_password(conn, settings.backup_password)
         await ensure_default_categories(conn)
-        await ensure_seed_rules(conn)
         await ensure_system_accounts(conn)
-        await ensure_vapid_keys(conn, subject=settings.vapid_subject)
-        await ensure_builtin_schedules(conn)
-        await sync_scheduled_questions(conn)
-        if await setup_required(conn):
-            token = await ensure_setup_token(conn, ttl_hours=settings.setup_token_ttl_hours)
-            if token:
-                logger.warning(
-                    "%s",
-                    enrollment_message(
-                        settings.rp_origin,
-                        token,
-                        title="First-run setup is open.",
-                    ),
-                    # The link embeds a one-time enrollment secret. It belongs on the operator's
-                    # local console; standard logs stay on the host.
-                    extra={"console_only": True},
-                )
-            else:
-                logger.warning(
-                    "First-run setup is open. Run `arno setup` for a fresh enrollment link."
-                )
+        await ensure_default_question(conn)
+        if not settings.owner_email and not settings.passphrase:
+            logger.warning("No sign-in is configured: set ARNO_OWNER_EMAIL or ARNO_PASSPHRASE.")
     return applied
 
 
@@ -104,23 +83,24 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         recovered = await recover_crashed_runs(conn)
         if recovered:
             logger.warning("recovered %d interrupted chat turn(s)", len(recovered))
-        interrupted = await recover_interrupted_jobs(conn)
-        if interrupted:
-            logger.warning("requeued %d interrupted job(s)", interrupted)
     db_cache = bind_connection_cache(app.state.settings.database_url)
     try:
         app.state.agent = build_agent()
         app.state.turns = TurnManager(app.state.agent)
-        app.state.jobs = JobRunner()
         if app.state.settings.jobs_enabled:
-            app.state.jobs.start()
+            app.state.minute_loop = asyncio.create_task(job_loop.run(), name="arno-minute-loop")
+            resumed = await job_loop.recover()
+            if resumed:
+                logger.warning("resumed %d interrupted task(s)", resumed)
 
         yield
     finally:
         try:
-            jobs = getattr(app.state, "jobs", None)
-            if jobs is not None:
-                await jobs.stop()
+            minute_loop = getattr(app.state, "minute_loop", None)
+            if minute_loop is not None:
+                minute_loop.cancel()
+                await asyncio.gather(minute_loop, return_exceptions=True)
+            await drain(10)
             turns = getattr(app.state, "turns", None)
             if turns is not None:
                 await turns.drain()

@@ -45,19 +45,6 @@ router = APIRouter(
 MAX_CAPTURE_BYTES = 25 * 1024 * 1024
 
 
-def image_media_type(data: bytes) -> str | None:
-    """Only still images a multimodal model accepts. The header comes from the bytes."""
-    if data.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if data.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return "image/webp"
-    if data.startswith((b"GIF87a", b"GIF89a")):
-        return "image/gif"
-    return None
-
-
 def _audio_media_type(data: bytes, declared: str | None) -> str:
     if data.startswith(b"\x1aE\xdf\xa3"):
         return "audio/webm"
@@ -317,4 +304,4 @@ async def get_attachment(conn: Database, attachment_id: str) -> Response:
     )
 
 
-__all__ = ["MAX_CAPTURE_BYTES", "image_media_type", "router"]
+__all__ = ["MAX_CAPTURE_BYTES", "router"]

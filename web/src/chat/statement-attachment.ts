@@ -7,9 +7,12 @@ import { generateId } from "ai";
 import { api, errorMessage } from "../api";
 
 const MAX_BYTES = 25 * 1024 * 1024;
-const EXTENSIONS = [".pdf", ".csv", ".tsv", ".xlsx", ".xls", ".xlsb", ".ods"];
+const EXTENSIONS = [".pdf", ".png", ".jpg", ".jpeg", ".webp", ".csv", ".tsv", ".xlsx", ".xls", ".xlsb", ".ods"];
 const MIME_TYPES = new Set([
   "application/pdf",
+  "image/png",
+  "image/jpeg",
+  "image/webp",
   "text/csv",
   "text/tab-separated-values",
   "application/vnd.ms-excel",
@@ -17,7 +20,7 @@ const MIME_TYPES = new Set([
   "application/vnd.ms-excel.sheet.binary.macroEnabled.12",
   "application/vnd.oasis.opendocument.spreadsheet",
 ]);
-const KINDS = new Set(["pdf", "text", "xlsx", "xls", "xlsb", "ods", "encrypted_ooxml"]);
+const KINDS = new Set(["pdf", "image", "text", "xlsx", "xls", "xlsb", "ods", "encrypted_ooxml"]);
 
 export const STATEMENT_ACCEPT = [
   ...EXTENSIONS,
@@ -28,6 +31,7 @@ type Uploaded = {
   id: string;
   filename: string;
   detected_kind: string;
+  import_id: string;
 };
 
 function validationError(file: File): string | null {
@@ -37,7 +41,7 @@ function validationError(file: File): string | null {
   const supported =
     EXTENSIONS.some((extension) => name.endsWith(extension)) ||
     MIME_TYPES.has(file.type.split(";", 1)[0].trim().toLowerCase());
-  if (!supported) return "Choose a PDF, CSV, or spreadsheet statement (XLSX, XLSB, ODS, XLS).";
+  if (!supported) return "Choose a PDF, image, CSV, or spreadsheet statement (XLSX, XLSB, ODS, XLS).";
   return null;
 }
 
@@ -83,7 +87,7 @@ export const statementAttachmentAdapter: AttachmentAdapter = {
       throw new Error(errorMessage(caught));
     }
     if (!KINDS.has(uploaded.detected_kind)) {
-      throw new Error("That file is not a readable PDF, CSV, or spreadsheet statement.");
+      throw new Error("That file is not a readable PDF, image, CSV, or spreadsheet statement.");
     }
     return {
       ...attachment,
@@ -96,6 +100,7 @@ export const statementAttachmentAdapter: AttachmentAdapter = {
             attachment_id: uploaded.id,
             filename: uploaded.filename,
             detected_kind: uploaded.detected_kind,
+            import_id: uploaded.import_id,
           },
         },
       ],

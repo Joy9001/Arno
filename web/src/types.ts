@@ -168,7 +168,7 @@ export type Settings = {
   notification_time: string;
   weekly_briefing_dow: number;
   reminder_lead_days: number;
-  profile: { user_id: string | null; display_name: string | null };
+  profile: { display_name: string | null };
   last_model_error_type: string | null;
   last_model_error_at: string | null;
   updated_at: string | null;
@@ -187,7 +187,7 @@ export type Rule = {
   pattern: string;
   category_id: string;
   category_name: string;
-  source: "user" | "llm" | "seed";
+  source: "user" | "llm";
   priority: number;
   hits: number;
 };
@@ -252,22 +252,7 @@ export type BackupStatus = {
 };
 
 export type User = {
-  id: string;
   display_name: string;
-};
-
-export type Passkey = {
-  id: string;
-  name: string;
-  created_at: string;
-  last_used_at: string | null;
-};
-
-export type Enrollment = {
-  id: string;
-  link: string;
-  expires_at: string;
-  kind: "add_device";
 };
 
 export type ImportCounts = {
@@ -317,7 +302,6 @@ export type ImportRecord = {
     | "review"
     | "not_a_statement"
     | "failed"
-    | "paused"
     | "committed"
     | "rejected";
   attachment: {
@@ -362,7 +346,6 @@ export type ImportRecord = {
   recovery_action?: "reupload" | null;
   /** A failed import whose stored file is still here can run the parser again. */
   can_retry_parse?: boolean;
-  parser_saved: boolean;
   /** Null until the import is committed, or when no categorization job exists. */
   categorize?: CategorizeState | null;
   created_at: string | null;
@@ -430,69 +413,14 @@ export type ScheduledQuestionList = {
   as_of: string;
 };
 
-export type JobScheduleStatus = {
-  id: string;
-  kind: string;
-  scheduled_question_id: string | null;
-  payload: Record<string, unknown>;
-  label: string;
-  rule: string;
-  next_run_at: string;
-  last_run_at: string | null;
-  active: boolean;
-};
-
-export type JobView = {
-  id: string;
-  key: string;
-  kind: string;
-  status: "pending" | "running" | "done" | "failed";
-  /** Failed attempts so far: 0 while the first attempt runs. */
-  attempts: number;
-  /** The 1-based attempt now running, or the last one that ran. */
-  attempt: number;
-  max_attempts: number;
-  /** For pending jobs, when the next attempt starts. */
-  run_at: string;
-  created_at: string;
-  started_at: string | null;
-  finished_at: string | null;
-  last_error: string | null;
-  result: Record<string, unknown> | null;
-  subject: string | null;
-  import_id: string | null;
-};
-
-export type JobActivity = {
-  active: JobView[];
-  finished: JobView[];
-  now: string;
-};
-
 export type CategorizeState = {
-  state: "queued" | "running" | "retrying" | "waiting_on_batch" | "done" | "partial" | "failed";
+  state: "queued" | "running" | "done" | "partial" | "failed";
   labeled: number | null;
   uncategorized: number | null;
   failed_payees: number | null;
   error: string | null;
-  attempt: number;
-  max_attempts: number;
-  next_run_at: string | null;
   started_at: string | null;
   finished_at: string | null;
-  job_id: string | null;
-};
-
-export type JobStatus = {
-  schedules: JobScheduleStatus[];
-  recent: JobView[];
-  counts: Record<string, number>;
-  as_of: string;
-};
-
-export type PushKey = {
-  public_key: string;
-  subject: string;
 };
 
 export type ImportTaskReport = {
@@ -613,26 +541,6 @@ export type RunView = {
   used: number;
   limit: number;
   stop: "budget" | "error" | null;
-};
-
-export type ParserVersion = {
-  version: number;
-  created_at: string;
-  helper_version: string | null;
-  active: boolean;
-};
-
-export type StatementLayout = {
-  id: string;
-  institution: string;
-  kind: string;
-  variants: string[];
-  active_version: number | null;
-  versions: ParserVersion[];
-};
-
-export type LayoutList = {
-  items: StatementLayout[];
 };
 
 export type RecapMoney = {

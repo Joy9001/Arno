@@ -4,28 +4,17 @@ from __future__ import annotations
 
 import json
 
+from arno.db.conn import connect
 from arno.ledger import deletion
-from tests.fixtures.passkeys import complete_setup
+from tests.conftest import _dsn
 from tests.invariants import check_ledger
-from tests.software_authenticator import SoftwareAuthenticator
 
 
 def _counts(payload: dict) -> dict[str, int]:
     return {row["table"]: row["count"] for row in payload["removes"]}
 
 
-async def _finish_jobs(conn) -> None:
-    """Do the work the runner would have done, so an erase is not blocked by the queue."""
-    await conn.execute(
-        """
-        UPDATE jobs SET status = 'done', finished_at = now()
-        WHERE status IN ('pending', 'running')
-        """
-    )
-
-
 async def test_the_everything_preview_counts_exactly_what_the_erase_removes(demo_ledger):
-    await _finish_jobs(demo_ledger)
     preview = await deletion.preview(demo_ledger, "everything")
 
     result = await deletion.erase_everything(demo_ledger)
@@ -40,7 +29,6 @@ async def test_the_everything_preview_counts_exactly_what_the_erase_removes(demo
 
 
 async def test_after_the_erase_nothing_remains_to_preview_and_the_ledger_still_checks(demo_ledger):
-    await _finish_jobs(demo_ledger)
     await deletion.erase_everything(demo_ledger)
 
     after = await deletion.preview(demo_ledger, "everything")
@@ -52,78 +40,44 @@ async def test_after_the_erase_nothing_remains_to_preview_and_the_ledger_still_c
     assert await demo_ledger.fetchval("SELECT count(*) FROM conversations") == 0
 
 
-async def test_the_erase_keeps_the_passkey_and_session_so_the_owner_still_gets_in(
-    authed_client, demo_ledger
-):
-    await _finish_jobs(demo_ledger)
-    erased = authed_client.post("/api/deletion/everything", json={"confirm": "delete everything"})
+async def test_the_erase_keeps_the_owner_signed_in_without_a_step_up(session_client, demo_ledger):
+    erased = session_client.post("/api/deletion/everything", json={"confirm": "delete everything"})
     assert erased.status_code == 200, erased.text
     assert erased.json()["total"] > 0
 
-    assert authed_client.get("/api/accounts").status_code == 200
-    assert authed_client.get("/api/settings").status_code == 200
-    assert await demo_ledger.fetchval("SELECT count(*) FROM users") == 1
-    assert await demo_ledger.fetchval("SELECT count(*) FROM webauthn_credentials") >= 1
-    assert await demo_ledger.fetchval("SELECT count(*) FROM sessions") >= 1
+    assert session_client.get("/api/accounts").status_code == 200
+    assert session_client.get("/api/settings").status_code == 200
     assert await check_ledger(demo_ledger) == []
 
 
-async def test_a_running_job_blocks_the_erase_until_it_finishes(authed_client, db):
+async def test_a_running_task_blocks_the_erase_until_it_finishes(session_client, db):
     await db.execute(
         "INSERT INTO preferences (body, created_by) VALUES ('Takes the 7:10 train', 'user')"
     )
-    await db.execute(
-        "INSERT INTO jobs (key, kind, status) VALUES ('deletion-test:running', 'risk_check', "
-        "'running')"
-    )
     before = _counts(await deletion.preview(db, "everything"))
 
-    refused = authed_client.post("/api/deletion/everything", json={"confirm": "delete everything"})
+    # A spawned background task holds this lock shared while it runs.
+    async with connect(_dsn()) as task:
+        await task.execute("SELECT pg_advisory_lock_shared($1)", deletion.ERASE_LOCK_KEY)
+        refused = session_client.post(
+            "/api/deletion/everything", json={"confirm": "delete everything"}
+        )
 
-    assert refused.status_code == 409, refused.text
-    assert "running" in refused.json()["detail"]
-    assert _counts(await deletion.preview(db, "everything")) == before
+        assert refused.status_code == 409, refused.text
+        assert "running" in refused.json()["detail"]
+        assert _counts(await deletion.preview(db, "everything")) == before
 
-    await _finish_jobs(db)
-
-    erased = authed_client.post("/api/deletion/everything", json={"confirm": "delete everything"})
+    erased = session_client.post("/api/deletion/everything", json={"confirm": "delete everything"})
     assert erased.status_code == 200, erased.text
-    assert await db.fetchval("SELECT count(*) FROM jobs") == 0
     assert await db.fetchval("SELECT count(*) FROM preferences") == 0
 
 
-async def test_a_queued_job_does_not_block_the_erase_and_is_erased_with_the_rest(authed_client, db):
-    await db.execute(
-        "INSERT INTO jobs (key, kind, status) VALUES ('deletion-test:queued', 'risk_check', "
-        "'pending')"
-    )
-
-    erased = authed_client.post("/api/deletion/everything", json={"confirm": "delete everything"})
-
-    assert erased.status_code == 200, erased.text
-    assert await db.fetchval("SELECT count(*) FROM jobs WHERE key = 'deletion-test:queued'") == 0
-
-
-async def test_a_stale_passkey_session_is_refused_like_an_export_and_deletes_nothing(
-    client, setup_token, settings, demo_ledger
-):
-    authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
-    assert complete_setup(client, setup_token, authenticator).status_code == 200
-    before = _counts(await deletion.preview(demo_ledger, "everything"))
-
-    refused = client.post("/api/deletion/everything", json={"confirm": "delete everything"})
-
-    assert refused.status_code == 403
-    assert refused.headers["x-arno-step-up"] == "passkey"
-    assert _counts(await deletion.preview(demo_ledger, "everything")) == before
-
-
 async def test_a_wrong_confirmation_phrase_is_refused_and_the_ledger_is_unchanged(
-    authed_client, demo_ledger
+    session_client, demo_ledger
 ):
     before = _counts(await deletion.preview(demo_ledger, "everything"))
 
-    refused = authed_client.post("/api/deletion/everything", json={"confirm": "delete all"})
+    refused = session_client.post("/api/deletion/everything", json={"confirm": "delete all"})
 
     assert refused.status_code == 400, refused.text
     assert _counts(await deletion.preview(demo_ledger, "everything")) == before
@@ -209,15 +163,17 @@ async def test_the_statement_preview_counts_the_stored_file_and_names_what_survi
     assert "Undo import" in retains
 
 
-async def test_the_preview_route_answers_for_one_item_and_refuses_an_unknown_one(authed_client, db):
+async def test_the_preview_route_answers_for_one_item_and_refuses_an_unknown_one(
+    session_client, db
+):
     memory = await db.fetchrow(
         "INSERT INTO preferences (body, created_by) VALUES ('Takes the 7:10 train', 'user') "
         "RETURNING *"
     )
 
-    found = authed_client.get(f"/api/deletion/preview?scope=memory&id={memory['id']}")
+    found = session_client.get(f"/api/deletion/preview?scope=memory&id={memory['id']}")
 
     assert found.status_code == 200, found.text
     assert _counts(found.json()) == {"preferences": 1}
-    missing = authed_client.get("/api/deletion/preview?scope=memory&id=prf_missing")
+    missing = session_client.get("/api/deletion/preview?scope=memory&id=prf_missing")
     assert missing.status_code == 404

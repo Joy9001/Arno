@@ -7,10 +7,10 @@ from datetime import datetime
 from fastapi.testclient import TestClient
 
 from arno.api.app import create_app
-from arno.auth.sessions import COOKIE_NAME
 from arno.db.conn import Connection, connect
 from arno.tools.read import active_preferences
 from arno.tools.write import change_preference, delete_preference_for_good
+from tests.conftest import OWNER_EMAIL
 
 
 async def _remember(
@@ -71,9 +71,8 @@ async def test_memories_survive_a_restart(session_client, settings, ledger):
     assert memory["previous"]["text"] == "Prefers tea"
     assert memory["previous"]["superseded_at"]
 
-    token = session_client.cookies[COOKIE_NAME]
     with TestClient(create_app(settings)) as restarted:
-        restarted.cookies.set(COOKIE_NAME, token)
+        restarted.headers["Tailscale-User-Login"] = OWNER_EMAIL
         response = restarted.get("/api/preferences")
     assert response.status_code == 200, response.text
     shown = next(row for row in response.json()["preferences"] if row["body"] == "Prefers coffee")

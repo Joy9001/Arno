@@ -5,31 +5,20 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from datetime import date, datetime
-from zoneinfo import ZoneInfo
+from datetime import date
 
 import asyncpg
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
-from arno.auth.setup import issue_setup_token
 from arno.cli import app as cli_app
 from arno.config import ConfigurationError, Settings
 from arno.db.conn import connect
 from arno.db.migrate import MigrationError, discover, run_migrations
 from arno.demo.persona import seed_demo
-from arno.jobs.runner import (
-    JobRunner,
-    _claim_one,
-    recover_interrupted_jobs,
-)
-from arno.jobs.schedules import enqueue_due_schedules
 from arno.ledger.accounts import list_accounts
 from tests.conftest import fresh_database
-from tests.fixtures.passkeys import complete_setup
-from tests.software_authenticator import SoftwareAuthenticator
 
 
 def test_telemetry_is_off_when_no_collector_endpoint_is_configured(monkeypatch, caplog):
@@ -62,10 +51,7 @@ async def test_export_reports_a_missing_pg_dump_instead_of_a_traceback(monkeypat
 PUBLIC_ROUTES = {
     ("GET", "/api/health"),
     ("GET", "/api/auth/state"),
-    ("POST", "/api/auth/setup/begin"),
-    ("POST", "/api/auth/setup/verify"),
-    ("POST", "/api/auth/login/begin"),
-    ("POST", "/api/auth/login/verify"),
+    ("POST", "/api/auth/login"),
     # Clearing a cookie needs no session: it always answers 204.
     ("POST", "/api/auth/logout"),
 }
@@ -78,7 +64,7 @@ def test_every_non_public_api_route_requires_a_session(app):
         for path, operations in spec["paths"].items()
         for method in operations
     ]
-    assert len(routes) > 100
+    assert len(routes) > 50
 
     with TestClient(app) as client:
         for method, path in routes:
@@ -103,169 +89,6 @@ def test_a_cross_origin_request_gets_no_cors_permission(client):
         "access-control-allow-origin"
         not in client.get("/api/health", headers={"Origin": "https://evil.example"}).headers
     )
-
-
-async def test_one_enrollment_link_registers_exactly_one_passkey(app, settings, db):
-    """Two browsers can both open the link: one of them must lose the race."""
-    del db
-    async with connect(settings.database_url) as conn:
-        token = (await issue_setup_token(conn, ttl_hours=1)).token
-
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-        first_begin = await client.post("/api/auth/setup/begin", json={"token": token})
-        second_begin = await client.post("/api/auth/setup/begin", json={"token": token})
-        assert first_begin.status_code == 200, first_begin.text
-        assert second_begin.status_code == 200, second_begin.text
-
-        first = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
-        second = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
-        first_body = {
-            "challenge_id": first_begin.json()["challenge_id"],
-            "credential": first.registration_credential(first_begin.json()["options"]),
-        }
-        second_body = {
-            "challenge_id": second_begin.json()["challenge_id"],
-            "credential": second.registration_credential(second_begin.json()["options"]),
-        }
-        responses = await asyncio.gather(
-            client.post("/api/auth/setup/verify", json=first_body),
-            client.post("/api/auth/setup/verify", json=second_body),
-        )
-
-    assert sorted(response.status_code for response in responses) == [200, 400]
-    async with connect(settings.database_url) as conn:
-        assert await conn.fetchval("SELECT count(*) FROM users") == 1
-        assert await conn.fetchval("SELECT count(*) FROM webauthn_credentials") == 1
-
-
-async def test_an_expired_session_is_refused(client, setup_token, settings, db):
-    authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
-    assert complete_setup(client, setup_token, authenticator).status_code == 200
-    assert client.get("/api/auth/session").status_code == 200
-
-    await db.execute("UPDATE sessions SET expires_at = now() - interval '1 second'")
-
-    assert client.get("/api/auth/session").status_code == 401
-
-
-async def test_a_session_cookie_alone_authenticates_and_satisfies_step_up(session_client):
-    """The fast fixture is a real session: no passkey ceremony, but the same request boundary."""
-    assert session_client.get("/api/auth/session").status_code == 200
-    assert session_client.get("/api/accounts").status_code == 200
-    assert session_client.get("/api/export/json").status_code == 200
-
-
-async def test_an_expired_first_run_token_is_refused(client, settings, db):
-    async with connect(settings.database_url) as conn:
-        token = (await issue_setup_token(conn, ttl_hours=1)).token
-    await db.execute("UPDATE setup_tokens SET expires_at = now() - interval '1 second'")
-
-    response = client.post("/api/auth/setup/begin", json={"token": token})
-
-    assert response.status_code == 401
-
-
-async def test_two_workers_never_claim_the_same_due_job(db):
-    await db.execute("INSERT INTO jobs (key, kind) VALUES ('claim:1', 'recompute_baselines')")
-
-    async with connect() as first, connect() as second:
-        claimed = await asyncio.gather(_claim_one(first), _claim_one(second))
-
-    ids = [job["id"] for job in claimed if job is not None]
-    assert len(ids) == 1
-    assert await db.fetchval("SELECT count(*) FROM jobs WHERE status = 'running'") == 1
-
-
-async def test_a_job_interrupted_mid_run_is_retried_exactly_once(db):
-    runs: list[str] = []
-
-    async def handler(payload):
-        runs.append(payload["period"])
-        return {"ok": True}
-
-    await db.execute(
-        """
-        INSERT INTO jobs (key, kind, status, started_at, payload)
-        VALUES ('crash:1', 'crash', 'running', now(), '{"period": "2026-W44"}'::jsonb)
-        """
-    )
-    assert await recover_interrupted_jobs(db) == 1
-
-    runner = JobRunner(registry={"crash": handler}, timeouts={"crash": 5})
-    await runner.run_once()
-
-    assert runs == ["2026-W44"]
-    row = await db.fetchrow("SELECT status, attempts, result FROM jobs WHERE key = 'crash:1'")
-    assert row["status"] == "done" and row["result"] == {"ok": True}
-
-
-async def test_a_due_schedule_creates_one_job_and_does_not_repeat_it(db):
-    await db.execute(
-        """
-        INSERT INTO job_schedules (kind, payload, rule, next_run_at)
-        VALUES ('reminders', '{}'::jsonb, 'FREQ=DAILY;BYHOUR=8;BYMINUTE=0',
-                now() - interval '2 days')
-        """
-    )
-    now = datetime.now(ZoneInfo("Asia/Kolkata"))
-
-    assert await enqueue_due_schedules(db, now=now) == 1
-    assert await enqueue_due_schedules(db, now=now) == 0
-    assert await db.fetchval("SELECT count(*) FROM jobs WHERE kind = 'reminders'") == 1
-
-
-async def test_two_simultaneous_passkey_deletes_cannot_remove_the_last_one(authed_client, db):
-    from arno.auth.sessions import COOKIE_NAME
-
-    await db.execute(
-        """
-        INSERT INTO webauthn_credentials
-            (user_id, credential_id, public_key, sign_count, transports, aaguid, name)
-        SELECT user_id, decode('0102', 'hex'), public_key, sign_count, transports, aaguid, 'Second'
-        FROM webauthn_credentials LIMIT 1
-        """
-    )
-    ids = [row["id"] for row in await db.fetch("SELECT id FROM webauthn_credentials")]
-    assert len(ids) == 2
-    token = authed_client.cookies[COOKIE_NAME]
-
-    transport = httpx.ASGITransport(app=authed_client.app)
-    async with httpx.AsyncClient(
-        transport=transport,
-        base_url="http://testserver",
-        cookies={COOKIE_NAME: token},
-    ) as client:
-        responses = await asyncio.gather(
-            client.delete(f"/api/auth/passkeys/{ids[0]}"),
-            client.delete(f"/api/auth/passkeys/{ids[1]}"),
-        )
-
-    assert sorted(response.status_code for response in responses) == [204, 409]
-    assert await db.fetchval("SELECT count(*) FROM webauthn_credentials") == 1
-
-
-async def test_clean_shutdown_leaves_an_interrupted_row_for_boot_recovery(db):
-    started = asyncio.Event()
-    resume = asyncio.Event()
-
-    async def slow(payload):
-        del payload
-        started.set()
-        await resume.wait()
-        return {}
-
-    runner = JobRunner(registry={"slow": slow}, concurrency=1, max_idle_seconds=60)
-    await db.execute("INSERT INTO jobs (key, kind) VALUES ('stop:1', 'slow')")
-    runner.start()
-    try:
-        await asyncio.wait_for(started.wait(), timeout=10)
-    finally:
-        await runner.stop()
-
-    assert await recover_interrupted_jobs(db) == 1
-    row = await db.fetchrow("SELECT status FROM jobs WHERE key = 'stop:1'")
-    assert row["status"] == "pending"
 
 
 def test_a_migration_include_still_cannot_escape_the_db_directory(tmp_path):
@@ -411,25 +234,9 @@ def test_a_typo_in_a_boolean_is_an_error_not_silently_false(monkeypatch):
 
 
 def test_a_zero_lifetime_is_refused(monkeypatch):
-    monkeypatch.setenv("ARNO_SETUP_TOKEN_TTL_HOURS", "0")
+    monkeypatch.setenv("ARNO_SESSION_TTL_DAYS", "0")
 
-    with pytest.raises(ConfigurationError, match="ARNO_SETUP_TOKEN_TTL_HOURS"):
-        Settings.from_env()
-
-
-def test_an_origin_with_a_path_is_refused(monkeypatch):
-    """WebAuthn compares the origin exactly; a path would fail every ceremony later."""
-    monkeypatch.setenv("ARNO_RP_ORIGIN", "https://box.tailnet.ts.net/app")
-
-    with pytest.raises(ConfigurationError, match="ARNO_RP_ORIGIN"):
-        Settings.from_env()
-
-
-def test_a_blank_rp_id_names_its_own_variable(monkeypatch):
-    monkeypatch.setenv("ARNO_RP_ID", "")
-    monkeypatch.delenv("ARNO_RP_ORIGIN", raising=False)
-
-    with pytest.raises(ConfigurationError, match="ARNO_RP_ID"):
+    with pytest.raises(ConfigurationError, match="ARNO_SESSION_TTL_DAYS"):
         Settings.from_env()
 
 

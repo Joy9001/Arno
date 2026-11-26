@@ -17,8 +17,8 @@ These items verify live provider parity and current-release cutover on the owner
 - [ ] **Live daily-cap check.** Confirm `llm_usage` rows for chat on the owner's chosen provider
       carry a nonzero `usd` when the price catalog knows the model, and that the $20 cap pauses the
       next request. OpenCode-routed models are unpriced and log `$0`, so they never count.
-- [ ] **Real-statement UI import pass.** Run a full real-bank import through the browser UI with a
-      passkey (upload, responsive chat during parse, review, commit, saved-parser replay, and
+- [ ] **Real-statement UI import pass.** Run a full real-bank import through the browser UI
+      (upload, responsive chat during extraction, review, commit, and
       post-commit categorization).
 
 ## Real-data and device verification
@@ -41,8 +41,8 @@ closed in CI.
 ### Statements
 
 - [ ] **Collect and test Union Bank statements.** Add 12 months of real Union Bank statements under
-      `private/statements/union/`, import them through the review screen, and record the format and parser
-      decision in [`specs/import.md`](specs/import.md#bank-format-findings) and
+      `private/statements/union/`, import them through the review screen, and record the format and
+      extraction result in [`specs/import.md`](specs/import.md#bank-format-findings) and
       [`plan.md`](plan.md#6-open-questions).
 - [ ] **Complete the 12-month real backfill through the review screen (milestone 24).** Reconcile
       the remaining Slice cycles (blocked on missing repayments in Slice's exported PDFs) and
@@ -58,12 +58,10 @@ closed in CI.
       token counts and prompt-cache hit rates, check confirm-card tap rates, and confirm model
       timeouts ([`plan.md`](plan.md#6-open-questions)).
 
-### Phone, push, voice, and vision
+### Phone, voice, and vision
 
 - [ ] **Complete phone tailnet access (milestone 4).** Reach `https://<host>.ts.net` from an
-      Android phone over Tailscale and sign in with a passkey (the host half already returns `200`).
-- [ ] **Install the Android PWA and verify real web push.** Receive a live push notification on
-      Android (`web/src/sw.ts:4`, `src/arno/notifications.py:404`).
+      Android phone over Tailscale and sign in as the owner (the host half already returns `200`).
 - [ ] **Test real Hinglish voice capture.** Configure `STT_*` (a cloud or self-hosted
       OpenAI-compatible endpoint), record real Hinglish voice notes, and decide whether to
       keep `STT_PAYEE_CONTEXT=1` (`src/arno/capture/transcribe.py:14`).

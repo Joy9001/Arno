@@ -2,8 +2,8 @@
 
 These are fixtures for tests and eval trials: no real statement is read, and no row is inserted
 into `imports` or `statement_lines` by hand. The helper writes a CSV, creates an attachment,
-runs the parser/review pipeline, and commits the result, so `outside_text`, captures,
-reconciliation, coverage, and the saved layout all behave as they do for a user import.
+finalizes the statement the way extraction would, and commits the result, so `outside_text`,
+captures, reconciliation, and coverage all behave as they do for a user import.
 """
 
 from __future__ import annotations
@@ -14,60 +14,20 @@ import io
 from datetime import date, timedelta
 from typing import Any
 
-from arno.agent.parser import submit_parser_code
 from arno.db.conn import Connection
 from arno.importers.commit import commit_import
+from arno.importers.extract import (
+    ExtractedAccount,
+    ExtractedRow,
+    ExtractedStatement,
+    finalize_extracted,
+)
 from arno.importers.periods import ledger_opening
 from arno.importers.pipeline import create_import
 from arno.ledger.audit import new_id
 from arno.ledger.common import today as ledger_today
 
 SYNTHETIC_INSTITUTION = "Synthetic Bank"
-
-SYNTHETIC_PARSER = r"""
-rows = await doc_cells(0)
-header = None
-header_index = -1
-for i, row in enumerate(rows):
-    joined = ' '.join(str(c) for c in row).lower()
-    if 'narration' in joined and 'debit' in joined and 'credit' in joined and 'date' in joined:
-        header = row
-        header_index = i
-        break
-if header is None:
-    result = {'not_a_statement': 'unknown'}
-else:
-    opening = None
-    closing = None
-    for row in rows:
-        text = ' '.join(str(c) for c in row)
-        low = text.lower()
-        if 'opening balance' in low:
-            opening = money(text.split(':')[-1])
-        if 'closing balance' in low:
-            closing = money(text.split(':')[-1])
-    out = []
-    for row in rows[header_index + 1:]:
-        if not row or not to_iso(row[0]):
-            continue
-        out.append({
-            'date': to_iso(row[0]),
-            'description': str(row[1]),
-            'debit': money(row[2]) or 0,
-            'credit': money(row[3]) or 0,
-            'balance': money(row[4]),
-            'counterparty': str(row[1])[:120],
-        })
-    result = {'accounts': [{
-        'name': 'Synthetic statement',
-        'institution': 'Synthetic Bank',
-        'opening': opening,
-        'closing': closing,
-        'headers': header,
-        'rows': out,
-    }]}
-result
-"""
 
 
 def _money(paise: int) -> str:
@@ -172,9 +132,29 @@ async def seed_committed_statement(
     )
     import_row = await create_import(conn, attachment_id=attachment_id, account_id=account_id)
 
-    submitted = await submit_parser_code(conn, import_ids=[import_row["id"]], code=SYNTHETIC_PARSER)
-    if submitted["status"] != "parser_submitted":
-        raise RuntimeError(f"Synthetic import did not pass the gate: {submitted.get('reason')}")
+    closing = opening_paise - amount_paise if debit else opening_paise + amount_paise
+    await finalize_extracted(
+        conn,
+        import_row["id"],
+        ExtractedStatement(
+            account=ExtractedAccount(name="Synthetic statement", institution=SYNTHETIC_INSTITUTION),
+            opening=opening_paise,
+            closing=closing,
+            period_start=period_start.isoformat(),
+            period_end=period_end.isoformat(),
+            rows=[
+                ExtractedRow(
+                    date=day.isoformat(),
+                    description=narration,
+                    debit=amount_paise if debit else 0,
+                    credit=0 if debit else amount_paise,
+                    balance=closing,
+                    counterparty=narration[:120],
+                )
+            ],
+        ),
+        text=payload.decode(),
+    )
 
     current = await conn.fetchrow("SELECT * FROM imports WHERE id = $1", import_row["id"])
     if current is None or current["status"] != "review":

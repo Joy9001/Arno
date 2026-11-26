@@ -1372,13 +1372,6 @@ async def test_undoing_an_added_scheduled_question_archives_it(ledger):
     assert (
         await ledger.fetchval("SELECT active FROM scheduled_questions WHERE id = $1", question_id)
     ) is False
-    assert (
-        await ledger.fetchval(
-            "SELECT count(*) FROM job_schedules WHERE active AND scheduled_question_id = $1",
-            question_id,
-        )
-        == 0
-    )
 
 
 async def test_undo_latest_never_reverts_the_system_bootstrap(db):

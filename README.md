@@ -71,19 +71,20 @@ git clone https://github.com/Joy9001/Arno.git && cd Arno
 cp .env.example .env      # fill in the secrets and your chat model; .env.example explains each
 docker compose pull api db   # the published images
 docker compose up -d
-docker compose logs api   # prints a one-time enrollment link and a QR code
+docker compose logs api   # warns if neither ARNO_OWNER_EMAIL nor ARNO_PASSPHRASE is set
 ```
 
 Tracing is off by default. To turn it on, start the optional Phoenix service with
 `docker compose --profile obs up -d`, fill in the four `PHOENIX_*` secrets in `.env`, and set
 `OTEL_EXPORTER_OTLP_ENDPOINT=http://phoenix:6006`.
 
-Open <http://localhost:8000>, follow the link, and create a passkey. Tell Arno your balances,
+Set `ARNO_OWNER_EMAIL` (your Tailscale login) or `ARNO_PASSPHRASE` in `.env`, then open
+<http://localhost:8000>. Tell Arno your balances,
 salary day, and card dues, and it can answer from the first conversation. To try it on sample data
 first, run `docker compose exec api arno demo seed` on an empty instance.
 
-For phone access, run `tailscale serve --bg 8000` on the host, then set `ARNO_RP_ID` and
-`ARNO_RP_ORIGIN` in `.env` to the `ts.net` address it prints.
+For phone access, run `tailscale serve --bg 8000` on the host and open the `ts.net` address it
+prints. Tailscale tells Arno who you are, so `ARNO_OWNER_EMAIL` is all the sign-in you need.
 
 > [!WARNING]
 > Keep `RESTIC_PASSWORD` somewhere other than this machine. The daily backups are encrypted with
@@ -102,8 +103,6 @@ default backups volume is root-owned, so it takes the form shown in the list.
 ```bash
 arno migrate                    # apply pending SQL migrations
 arno export --format json       # json, csv, or sql
-arno setup                      # print a fresh enrollment link
-arno passkeys reset             # delete every passkey and session, then reopen setup
 arno demo seed                  # load the synthetic persona into an empty instance
 docker compose run --rm --no-deps --user root api arno restore   # newest backup, verified
 ```
@@ -114,7 +113,8 @@ docker compose run --rm --no-deps --user root api arno restore   # newest backup
 
 - Compose publishes only on `127.0.0.1`, and Tailscale provides HTTPS. Nothing faces the public
   internet.
-- One user signs in with a passkey. Exports and passkey changes ask for the passkey again.
+- One user. Tailscale supplies the identity, or an optional passphrase sets a signed cookie.
+  Requests from the sandbox network and cross-site requests are refused.
 - The agent's SQL runs as a read-only database role with a two-second timeout and no access to
   auth tables.
 - There are no analytics. Traces, when you turn them on, stay on the host in Phoenix. Only the

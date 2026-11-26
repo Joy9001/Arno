@@ -1,9 +1,8 @@
 """The non-negotiable checks, run before a single row reaches the ledger.
 
-The balance identity alone is not enough: a day/month swap and an inserted column both
-balance. So the period comes from outside the parser, the header fingerprint must match a
-saved layout, an empty result is refused unless the statement says it was empty, and the
-printed opening is compared with the ledger's.
+The balance identity alone is not enough: a day/month swap balances too. So the period comes
+from outside the extraction, an empty result is refused unless the statement says it was empty,
+and the printed opening is compared with the ledger's.
 """
 
 from __future__ import annotations
@@ -12,14 +11,13 @@ import re
 from datetime import date
 from typing import Any, TypeGuard
 
-from arno.importers.layout import normalize_headers
+from arno.india.formatting import format_paise
 from arno.ledger.common import today
 
 _ISO = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 OPENING_MISSING = "opening balance not found in the file or the ledger"
 CLOSING_MISSING = "closing balance not found in the file"
-INPUT_REASONS = (OPENING_MISSING, CLOSING_MISSING)
 
 
 def _period_end(period: Any) -> date | None:
@@ -71,16 +69,13 @@ def check_statement(
     period: tuple[str, str] | list[str] | None = None,
     ledger_opening: int | None = None,
     manual_opening: int | None = None,
-    headers: Any = None,
-    expected_fingerprint: str | None = None,
     empty_statement: bool = False,
 ) -> dict[str, Any]:
     """Integer paise. A row has date, debit, credit, and optionally balance.
 
     Everything here is ledger-signed: `opening`, `closing`, the rows' running `balance`, and
-    both opening sources. A card that owes money is negative, so a parser returns a printed
-    amount owed negated (`PARSE_INSTRUCTIONS` in `agent/parser.py` and `import.md` §Signs say
-    so).
+    both opening sources. A card that owes money is negative, so extraction returns a printed
+    amount owed negated (`import.md` §Signs).
     """
     result: dict[str, Any] = {
         "status": "FAILED",
@@ -179,11 +174,6 @@ def check_statement(
         else:
             result["dates_in_period"] = None
 
-        if headers is not None and expected_fingerprint:
-            actual = normalize_headers(headers)
-            result["fingerprint"] = actual
-            result["header_match"] = actual == expected_fingerprint
-
         # A manual value is the user's evidence; a parser claim never overrides it.
         opening_disagrees = (
             opening_source == "ledger"
@@ -209,9 +199,6 @@ def check_statement(
                 f"This statement's period ends on {end.isoformat()}, after today "
                 f"({today().isoformat()}). A statement that has not ended yet is not imported."
             )
-        if expected_fingerprint and result.get("header_match") is False:
-            ok = False
-            result["reason"] = "column headers do not match the saved layout"
         if opening_disagrees:
             ok = False
         result["status"] = "VERIFIED" if ok else "DISCREPANCY"
@@ -266,26 +253,31 @@ def account_check(account: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
         account.get("rows"),
         account.get("opening"),
         account.get("closing"),
-        headers=account.get("headers"),
         empty_statement=bool(account.get("empty_statement")),
         **kwargs,
     )
 
 
-def worst_status(statuses: list[str]) -> str:
-    rank = {"VERIFIED": 3, "DISCREPANCY": 2, "FAILED": 1}
-    if not statuses:
-        return "FAILED"
-    return min(statuses, key=lambda status: rank.get(status, 0))
+def failure_reason(check: dict[str, Any]) -> str:
+    """Why a check did not pass, in words a person or a model can act on."""
+    if check.get("reason"):
+        return str(check["reason"])
+    if check.get("total_ok") is False:
+        return (
+            f"the rows add up to a closing of {format_paise(check['computed_closing'])}, but the "
+            f"statement's closing is {format_paise(check['closing_paise'])}"
+        )
+    if check.get("chain_ok") is False:
+        return f"the running balance breaks at row(s) {check['chain_breaks']} (0-based)"
+    return "the checks did not pass"
 
 
 __all__ = [
     "CLOSING_MISSING",
-    "INPUT_REASONS",
     "OPENING_MISSING",
     "account_check",
     "check_statement",
     "opening_is_evidenced",
+    "failure_reason",
     "stated_opening_to_ledger",
-    "worst_status",
 ]

@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+import csv
 import io
 import zipfile
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
+
+from arno.importers.extract import ExtractedAccount, ExtractedRow, ExtractedStatement
 
 SBI_ROWS = [
     (
@@ -26,30 +31,6 @@ SBI_ROWS = [
     ),
 ]
 
-UNION_ROWS = [
-    (
-        "02/04/2026",
-        "UPI/DR/999999999999/AMAZON/amazon@okhdfcbank",
-        "999999999999",
-        "1000.00 Dr",
-        "99000.00",
-    ),
-    ("10/04/2026", "SALARY APRIL", "", "50000.00 Cr", "149000.00"),
-    (
-        "18/04/2026",
-        "UPI/DR/888888888888/SWIGGY/swiggy@okaxis",
-        "888888888888",
-        "350.00 Dr",
-        "148650.00",
-    ),
-]
-
-SLICE_ROWS = [
-    ("03/04/2026", "SWIGGY BANGALORE", "-350.00"),
-    ("05/04/2026", "PAYMENT RECEIVED - THANK YOU", "5000.00"),
-    ("09/04/2026", "AMAZON PAY INDIA MUMBAI", "-1200.00"),
-]
-
 
 def sbi_csv() -> bytes:
     lines = [
@@ -62,31 +43,6 @@ def sbi_csv() -> bytes:
     ]
     lines += [",".join(row) for row in SBI_ROWS]
     lines += ['"Closing Balance: 3,44,028.90"', "Page 1 of 1"]
-    return ("\n".join(lines) + "\n").encode("utf-8")
-
-
-def union_tsv() -> bytes:
-    lines = [
-        "Union Bank of India",
-        "Statement Period: 01/04/2026 to 30/04/2026",
-        "Opening Balance: 1,00,000.00",
-        "Date\tParticulars\tRef\tAmount\tBalance",
-    ]
-    lines += ["\t".join(row) for row in UNION_ROWS]
-    lines += ["Closing Balance: 1,48,650.00"]
-    return ("\n".join(lines) + "\n").encode("utf-8")
-
-
-def slice_csv() -> bytes:
-    lines = [
-        "Slice",
-        "Credit Card Statement",
-        "Statement Period: 01/04/2026 to 30/04/2026",
-        "Date,Transaction Details,Amount",
-    ]
-    lines += [",".join(row) for row in SLICE_ROWS]
-    # The amount owed, as a card prints it: a negative owed balance is a card in credit.
-    lines += ['"Closing Balance: -2,450.00"']
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
@@ -192,203 +148,85 @@ def minimal_pdf(lines: list[str]) -> bytes:
     return bytes(out)
 
 
-SBI_PARSER = r"""
-rows = await doc_cells(0)
-header = None
-header_index = -1
-for i, row in enumerate(rows):
-    joined = ' '.join(str(c) for c in row).lower()
-    if 'narration' in joined and 'debit' in joined and 'credit' in joined:
-        header = row
-        header_index = i
-        break
-if header is None:
-    result = {'not_a_statement': 'unknown'}
-else:
-    opening = None
-    closing = None
-    out = []
-    for row in rows:
-        text = ' '.join(str(c) for c in row)
-        low = text.lower()
-        if 'opening balance' in low:
-            opening = money(text.split(':')[-1])
-        if 'closing balance' in low:
-            closing = money(text.split(':')[-1])
-    for row in rows[header_index + 1:]:
-        if not row or not to_iso(row[0]):
+def _paise(text: str) -> int | None:
+    cleaned = text.replace(",", "").replace("Dr", "").replace("Cr", "").strip()
+    try:
+        return int(Decimal(cleaned) * 100)
+    except InvalidOperation:
+        return None
+
+
+def _iso(text: str) -> str | None:
+    try:
+        return datetime.strptime(text.strip(), "%d/%m/%Y").date().isoformat()
+    except ValueError:
+        return None
+
+
+def statement_from_csv(
+    data: bytes, *, layout: str, name: str, institution: str, account_number: str | None = None
+) -> ExtractedStatement:
+    """What extraction returns for this module's CSV statements.
+
+    `bank` prints its opening and closing, `wallet` prints neither, and `card` prints the amount
+    owed (negated to ledger sign) with signed amounts in one column.
+    """
+    table = list(csv.reader(io.StringIO(data.decode("utf-8"))))
+    sign = -1 if layout == "card" else 1
+    opening = closing = None
+    if layout != "wallet":
+        for row in table:
+            text = " ".join(row)
+            value = _paise(text.split(":")[-1]) if ":" in text else None
+            if value is None:
+                continue
+            if "opening balance" in text.lower():
+                opening = sign * value
+            if "closing balance" in text.lower():
+                closing = sign * value
+    rows: list[ExtractedRow] = []
+    for row in table:
+        day = _iso(row[0]) if row else None
+        if day is None:
+            continue
+        description = row[1]
+        if layout == "card":
+            amount = _paise(row[2]) or 0
+            rows.append(
+                ExtractedRow(
+                    date=day,
+                    description=description,
+                    debit=max(-amount, 0),
+                    credit=max(amount, 0),
+                    counterparty=description[:120],
+                )
+            )
             continue
         counterparty = None
-        for part in str(row[1]).split('/'):
-            part = part.strip()
-            if not part or '@' in part or part.isdigit():
-                continue
-            if part.upper() in ('UPI', 'DR', 'CR', 'NEFT', 'IMPS', 'NEFT CR'):
-                continue
-            counterparty = part[:120]
-            break
-        out.append({'date': to_iso(row[0]), 'description': str(row[1]),
-                    'debit': money(row[3]) or 0, 'credit': money(row[4]) or 0,
-                    'balance': money(row[5]), 'counterparty': counterparty})
-    result = {'accounts': [{'name': 'SBI savings', 'institution': 'SBI',
-                   'account_number': '50100123456789', 'opening': opening,
-                   'closing': closing, 'headers': header, 'rows': out}]}
-result
-"""
-
-UNION_PARSER = r"""
-rows = await doc_cells(0)
-header = None
-header_index = -1
-for i, row in enumerate(rows):
-    joined = ' '.join(str(c) for c in row).lower()
-    if 'particulars' in joined and 'amount' in joined and 'balance' in joined:
-        header = row
-        header_index = i
-        break
-if header is None:
-    result = {'not_a_statement': 'unknown'}
-else:
-    opening = None
-    closing = None
-    for row in rows:
-        text = ' '.join(str(c) for c in row)
-        low = text.lower()
-        if 'opening balance' in low:
-            opening = money(text.split(':')[-1])
-        if 'closing balance' in low:
-            closing = money(text.split(':')[-1])
-    out = []
-    for row in rows[header_index + 1:]:
-        if not row or not to_iso(row[0]):
-            continue
-        amount = str(row[3]).strip()
-        debit = 0
-        credit = 0
-        if amount.lower().endswith('dr'):
-            debit = money(amount[:-2]) or 0
-        elif amount.lower().endswith('cr'):
-            credit = money(amount[:-2]) or 0
-        counterparty = None
-        for part in str(row[1]).split('/'):
-            part = part.strip()
-            if not part or '@' in part or part.isdigit():
-                continue
-            if part.upper() in ('UPI', 'DR', 'CR', 'NEFT', 'IMPS', 'NEFT CR'):
-                continue
-            counterparty = part[:120]
-            break
-        out.append({'date': to_iso(row[0]), 'description': str(row[1]),
-                    'debit': debit, 'credit': credit, 'balance': money(row[4]),
-                    'counterparty': counterparty})
-    result = {'accounts': [{'name': 'Union Bank', 'institution': 'Union Bank of India',
-                   'opening': opening, 'closing': closing,
-                   'headers': header, 'rows': out}]}
-result
-"""
-
-SLICE_PARSER = r"""
-rows = await doc_cells(0)
-header = None
-header_index = -1
-for i, row in enumerate(rows):
-    joined = ' '.join(str(c) for c in row).lower()
-    if 'transaction details' in joined and 'amount' in joined:
-        header = row
-        header_index = i
-        break
-if header is None:
-    result = {'not_a_statement': 'unknown'}
-else:
-    closing = None
-    for row in rows:
-        text = ' '.join(str(c) for c in row)
-        if 'closing balance' in text.lower():
-            closing = -money(text.split(':')[-1])
-    out = []
-    for row in rows[header_index + 1:]:
-        if not row or not to_iso(row[0]):
-            continue
-        amount = money(row[2]) or 0
-        description = str(row[1])
-        counterparty = None if 'payment received' in description.lower() else description[:120]
-        out.append({'date': to_iso(row[0]), 'description': description,
-                    'debit': -amount if amount < 0 else 0,
-                    'credit': amount if amount > 0 else 0, 'balance': None,
-                    'counterparty': counterparty})
-    result = {'accounts': [{'name': 'Slice card', 'institution': 'Slice',
-                   'opening': None, 'closing': closing,
-                   'headers': header, 'rows': out}]}
-result
-"""
-
-# A six-column wallet-style statement with a printed opening and closing and running balances.
-WALLET_PARSER = r"""
-rows = await doc_cells(0)
-header_index = -1
-for i, row in enumerate(rows):
-    joined = ' '.join(str(c) for c in row).lower()
-    if 'date' in joined and 'narration' in joined and 'debit' in joined and 'balance' in joined:
-        header_index = i
-        break
-result = {'not_a_statement': 'unknown'}
-if header_index >= 0:
-    out = []
-    for row in rows[header_index + 1:]:
-        if len(row) < 6 or not to_iso(row[0]):
-            continue
-        out.append({'date': to_iso(row[0]), 'description': str(row[1]),
-                    'debit': money(row[3]) or 0, 'credit': money(row[4]) or 0,
-                    'balance': money(row[5]), 'counterparty': None})
-    result = {'accounts': [{'name': 'PhonePe', 'institution': 'PhonePe',
-                            'opening': None, 'closing': None,
-                            'headers': rows[header_index], 'rows': out}]}
-result
-"""
-
-CASH_PARSER = WALLET_PARSER.replace(
-    "'name': 'PhonePe', 'institution': 'PhonePe'", "'name': 'Cash Account', 'institution': 'Cash'"
-)
+        if layout == "bank":
+            for part in (piece.strip() for piece in description.split("/")):
+                if part and "@" not in part and not part.isdigit() and part.upper() not in _RAILS:
+                    counterparty = part[:120]
+                    break
+        rows.append(
+            ExtractedRow(
+                date=day,
+                description=description,
+                debit=_paise(row[3]) or 0,
+                credit=_paise(row[4]) or 0,
+                balance=_paise(row[5]),
+                counterparty=counterparty,
+            )
+        )
+    return ExtractedStatement(
+        account=ExtractedAccount(name=name, institution=institution, account_number=account_number),
+        opening=opening,
+        closing=closing,
+        rows=rows,
+    )
 
 
-CARD_PARSER = r"""
-rows = await doc_cells(0)
-header = None
-header_index = -1
-for i, row in enumerate(rows):
-    joined = ' '.join(str(c) for c in row).lower()
-    if 'transaction details' in joined and 'amount' in joined:
-        header = row
-        header_index = i
-        break
-if header is None:
-    result = {'not_a_statement': 'unknown'}
-else:
-    opening = None
-    closing = None
-    for row in rows:
-        text = ' '.join(str(c) for c in row)
-        low = text.lower()
-        value = money(text.split(':')[-1])
-        if value is None:
-            continue
-        if 'opening balance' in low:
-            opening = -value
-        if 'closing balance' in low:
-            closing = -value
-    out = []
-    for row in rows[header_index + 1:]:
-        if not row or not to_iso(row[0]):
-            continue
-        amount = money(row[2]) or 0
-        out.append({'date': to_iso(row[0]), 'description': str(row[1]),
-                    'debit': -amount if amount < 0 else 0,
-                    'credit': amount if amount > 0 else 0, 'balance': None,
-                    'counterparty': str(row[1])[:120]})
-    result = {'accounts': [{'name': 'Slice card', 'institution': 'Slice',
-               'opening': opening, 'closing': closing, 'headers': header, 'rows': out}]}
-result
-"""
+_RAILS = ("UPI", "DR", "CR", "NEFT", "IMPS", "NEFT CR")
 
 
 def card_statement(
@@ -452,16 +290,10 @@ def wallet_statement(
 
 
 __all__ = [
-    "CARD_PARSER",
-    "CASH_PARSER",
-    "SBI_PARSER",
-    "SLICE_PARSER",
-    "UNION_PARSER",
-    "WALLET_PARSER",
+    "card_statement",
     "minimal_pdf",
     "minimal_xlsx",
     "sbi_csv",
-    "slice_csv",
-    "union_tsv",
+    "statement_from_csv",
     "wallet_statement",
 ]

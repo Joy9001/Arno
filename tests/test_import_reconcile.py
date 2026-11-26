@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from datetime import date
 
-from arno.agent.parser import submit_parser_code
 from arno.importers.baselines import recompute_baselines
 from arno.importers.commit import commit_import, reject_import, undo_import
 from arno.importers.identifiers import find_upi_ref, match_hash, scrub, scrub_account_number
@@ -15,9 +14,8 @@ from arno.ledger.audit import new_id
 from arno.ledger.schedule_payments import link_payment
 from arno.ledger.schedules import create_schedule
 from arno.tools.projection import load_inputs
-from tests.agent_helpers import run_context
 from tests.fixtures import import_helpers as helpers
-from tests.import_fixtures import WALLET_PARSER, wallet_statement
+from tests.import_fixtures import wallet_statement
 
 
 async def _account(conn) -> dict:
@@ -690,7 +688,6 @@ async def test_a_reversed_logged_row_does_not_absorb_a_statement_line(ledger):
 
 
 async def test_confirming_a_matched_transfer_keeps_its_one_movement(ledger):
-    from arno.agent.parser import suggest_transfers
     from arno.importers.reconcile import resolve_line
 
     here = await create_account(
@@ -730,22 +727,14 @@ async def test_confirming_a_matched_transfer_keeps_its_one_movement(ledger):
         ),
         account_id=here["id"],
     )
-    submitted = await submit_parser_code(ledger, import_ids=[import_id], code=WALLET_PARSER)
-    assert submitted["status"] == "parser_submitted", submitted
+    assert await helpers.read_csv(ledger, import_id, "wallet") == "review"
 
     line = await ledger.fetchrow("SELECT * FROM statement_lines WHERE import_id = $1", import_id)
     assert line["match_state"] == "certain"
     assert line["movement_id"] == logged["id"]
 
-    # The parser suggests the other account; the user confirms it on the review screen.
-    from arno.agent.deps import AgentDeps
-
-    suggested = await suggest_transfers(
-        run_context(AgentDeps(conversation_id="conv_transfer")),
-        import_id,
-        [{"row": 0, "account_id": other["id"]}],
-    )
-    assert suggested["status"] == "suggested"
+    # The line's own text names the other account; the user confirms it on the review screen.
+    assert line["match_detail"]["suggested_transfer_account_id"] == other["id"]
     await resolve_line(
         ledger, import_id=import_id, line_id=line["id"], resolution="confirm_transfer"
     )
@@ -838,3 +827,53 @@ async def test_a_statement_line_that_created_its_own_movement_is_caught(ledger):
     )
     codes = {violation.code for violation in await check_ledger(ledger)}
     assert "movement_from_uncommitted_import" in codes
+
+
+async def test_reconcile_issues_the_same_queries_for_any_number_of_lines(ledger, monkeypatch):
+    """Two bulk preloads and one batch write, not a query per line."""
+    account = await _account(ledger)
+    for index in range(3):
+        await movements_mod.record_expense(
+            ledger,
+            account_id=account["id"],
+            amount_paise=10_000 + index,
+            description=f"logged {index}",
+            date=date(2026, 4, 2),
+        )
+    issued: list[str] = []
+    for name in ("fetch", "fetchrow", "fetchval", "execute"):
+        original = getattr(type(ledger), name)
+
+        async def counted(self, query, *args, _original=original, **kwargs):
+            issued.append(query)
+            return await _original(self, query, *args, **kwargs)
+
+        monkeypatch.setattr(type(ledger), name, counted)
+
+    async def queries_for(count: int) -> int:
+        import_id = await _import(ledger, account)
+        rows = [
+            {
+                "date": "2026-04-02",
+                "description": f"UPI/DR/{index}/shop{index}",
+                "debit": 10_000 + index,
+                "credit": 0,
+            }
+            for index in range(count)
+        ]
+        issued.clear()
+        await insert_lines(
+            ledger, import_id=import_id, account=account, parsed_account={"rows": rows}
+        )
+        await reconcile(
+            ledger,
+            import_id=import_id,
+            account=account,
+            period=(date(2026, 4, 1), date(2026, 4, 30)),
+        )
+        return len(issued)
+
+    small = await queries_for(5)
+    large = await queries_for(50)
+    assert small == large
+    assert large <= 12

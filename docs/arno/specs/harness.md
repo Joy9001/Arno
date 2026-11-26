@@ -32,7 +32,7 @@ exposing Arno over MCP later remains a thin adapter ([`parked.md`](../planning/p
 
 | Capability | Role | Source |
 |---|---|---|
-| `InferenceContext` | Propagates `session.id`, `gen_ai.conversation.id`, `arno.cost.workload`, and background consent through jobs | `src/arno/agent/capabilities.py` |
+| `InferenceContext` | Propagates `session.id`, `gen_ai.conversation.id`, `arno.cost.workload`, and background consent through background tasks | `src/arno/agent/capabilities.py` |
 | `RootSpanIO` | Records `user.id`, `input.value`, `output.value`, and `arno.approvals.offered` / `arno.approvals.approved` on the `invoke_agent` span | `src/arno/agent/capabilities.py` |
 | `Caching` | Enables prompt caching | PydanticAI |
 | `ToolErrorsToModel` | Converts unexpected tool failures into structured error payloads while propagating `COST_STOP_ERRORS` unchanged | `src/arno/agent/capabilities.py` |

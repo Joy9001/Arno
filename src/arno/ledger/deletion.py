@@ -6,8 +6,8 @@ retention terms of each configured model provider. `erase_everything` is the Set
 delete. Both return plain dicts; the API and the web app render them as they are.
 
 The erase is one transaction: every table that holds user or financial rows is truncated, then
-the rows a fresh install has are rebuilt (system accounts, default categories, seed rules, job
-schedules, the risk row) so the instance keeps working without a restart. Nothing here imports
+the rows a fresh install has are rebuilt (system accounts, default categories, the
+weekly briefing question) so the instance keeps working without a restart. Nothing here imports
 PydanticAI or FastAPI; the router in `api/deletion.py` wraps it.
 """
 
@@ -20,33 +20,26 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from arno.db.conn import Connection, quote_ident
-from arno.importers.seed_rules import SEED_RULES, ensure_seed_rules
-from arno.india.categories import DEFAULT_CATEGORIES, DEFAULT_CATEGORY_NAMES
+from arno.india.categories import DEFAULT_CATEGORIES
 from arno.ledger.accounts import ensure_system_accounts
 from arno.ledger.categories import ensure_default_categories
 from arno.ledger.errors import ConflictLedgerError, InvalidLedgerError, NotFoundLedgerError
 
 SCOPES = ("memory", "statement", "everything")
 
-# The erase takes this lock exclusively and the job runner's claim takes it shared, so no job
-# can start between the busy check and the truncate.
+# The erase tries this lock exclusively and every background task holds it shared, so no task
+# can run between the busy check and the truncate.
 ERASE_LOCK_KEY = 0x41524E4F  # "ARNO"
 
 # The phrase the Settings panel asks for before the bulk delete.
 CONFIRM_PHRASE = "delete everything"
 
-# Sign-in, bootstrap settings, and the migration ledger. An erase that also removed these would
-# lock the owner out of their own instance, so they are never touched.
+# Bootstrap settings and the migration ledger. An erase that also removed these would break the
+# instance, so they are never touched.
 RETAINED = frozenset(
     {
         "schema_version",
         "settings",
-        "users",
-        "vapid_keys",
-        "webauthn_credentials",
-        "webauthn_challenges",
-        "sessions",
-        "setup_tokens",
     }
 )
 
@@ -55,24 +48,13 @@ def _rebuilt_counts() -> dict[str, int]:
     """Rows the erase rebuilds exactly as a fresh install has them.
 
     They are subtracted from every count: after an erase each of these reads zero, so the
-    erase's own seed rows never look like user data the preview promised to remove. The import
-    stays here because `jobs.schedules` reaches the agent packages, and the ledger does not.
+    erase's own seed rows never look like user data the preview promised to remove.
     """
-    from arno.jobs.schedules import BUILTIN_KINDS
-
     return {
         "accounts": 3,
         "categories": len(DEFAULT_CATEGORIES),
-        "category_rules": len(
-            {
-                (match, pattern)
-                for name, match, pattern in SEED_RULES
-                if name in DEFAULT_CATEGORY_NAMES
-            }
-        ),
-        "job_schedules": len(BUILTIN_KINDS),
         "pgledger_accounts": 3,
-        "risk_state": 1,
+        "scheduled_questions": 1,
     }
 
 
@@ -97,8 +79,8 @@ _PROVIDER_NAME = re.compile(r"[a-z0-9][a-z0-9._-]{0,39}")
 
 _EVERYTHING_RETAINS: tuple[dict[str, str], ...] = (
     {
-        "what": "Your sign-in: the user row, passkeys, and active sessions",
-        "why": "so the same passkey opens the instance afterwards",
+        "what": "Your sign-in: it comes from Tailscale and the environment, not the database",
+        "why": "so you can still open the instance afterwards",
     },
     {
         "what": "The instance settings row",
@@ -106,11 +88,11 @@ _EVERYTHING_RETAINS: tuple[dict[str, str], ...] = (
         "spending floor and last model error are cleared",
     },
     {
-        "what": "VAPID keys and the schema version",
-        "why": "needed to run, upgrade, and keep push notifications working",
+        "what": "The schema version",
+        "why": "needed to run and upgrade the instance",
     },
     {
-        "what": "Default categories, merchant rules, system accounts, and job schedules",
+        "what": "Default categories, merchant rules, system accounts, and the weekly briefing",
         "why": "rebuilt as on a fresh install; they name no person and hold no money",
     },
     {
@@ -284,18 +266,14 @@ async def preview(conn: Connection, scope: str, target_id: str | None = None) ->
 
 async def erase_everything(conn: Connection) -> dict[str, Any]:
     """Delete every user and financial row in one transaction, then rebuild the seed rows."""
-    from arno.jobs.schedules import ensure_builtin_schedules
+    from arno.scheduled_questions import ensure_default_question
 
     async with conn.transaction():
-        # `_claim_one` holds this lock shared for its claim transaction: while the erase waits
-        # here no job can start, and once it holds the lock the busy check below is final.
-        await conn.execute("SELECT pg_advisory_xact_lock($1)", ERASE_LOCK_KEY)
-        # A queued job can't be claimed while this lock is held, so it is erased with the rest;
-        # only a job already running could write into the tables being truncated.
-        busy = await conn.fetchval("SELECT count(*) FROM jobs WHERE status = 'running'")
-        if busy:
+        # A background task holds this lock shared while it runs, so getting it exclusively
+        # means none is running, and none can start until this transaction ends.
+        if not await conn.fetchval("SELECT pg_try_advisory_xact_lock($1)", ERASE_LOCK_KEY):
             raise ConflictLedgerError(
-                "A background job is running. Wait for it to finish, then delete everything."
+                "A background task is running. Wait for it to finish, then delete everything."
             )
         removes = await _removable_counts(conn)
         tables = ", ".join(quote_ident(table) for table in await _data_tables(conn))
@@ -304,12 +282,9 @@ async def erase_everything(conn: Connection) -> dict[str, Any]:
         await conn.execute(f"TRUNCATE {tables}")
         await ensure_system_accounts(conn)
         await ensure_default_categories(conn)
-        await ensure_seed_rules(conn)
-        await ensure_builtin_schedules(conn)
-        await conn.execute("INSERT INTO risk_state (id) VALUES (1) ON CONFLICT DO NOTHING")
-        # Rebuilding the seed rows writes audit entries and queues a risk check; a fresh start
-        # keeps no history of either.
-        await conn.execute("TRUNCATE audit_log, jobs")
+        await ensure_default_question(conn)
+        # Rebuilding the seed rows writes audit entries; a fresh start keeps no history.
+        await conn.execute("TRUNCATE audit_log")
         await conn.execute(
             """
             UPDATE settings

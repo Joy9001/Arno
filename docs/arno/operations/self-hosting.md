@@ -77,8 +77,8 @@ AGENT_RO_PASSWORD=<long random hex>
 BACKUP_PASSWORD=<long random hex>
 RESTIC_PASSWORD=<long random, stored off this machine>
 RESTIC_REPOSITORY=/backups/restic
-ARNO_RP_ID=<machine>.<tailnet>.ts.net
-ARNO_RP_ORIGIN=https://<machine>.<tailnet>.ts.net
+ARNO_OWNER_EMAIL=<your Tailscale login>
+# ARNO_PASSPHRASE=<optional; a long random phrase>
 ```
 
 Generate the three database passwords with `openssl rand -hex 32`. Use hexadecimal rather than
@@ -88,8 +88,9 @@ network password and accepts connections over the container's local socket only.
 generator works for `RESTIC_PASSWORD` and the Phoenix secrets. Store `RESTIC_PASSWORD` off this
 machine.
 
-Without Tailscale, set `ARNO_RP_ID=localhost` and `ARNO_RP_ORIGIN=http://localhost:8000` to open
-Arno on the host itself. Passkeys work on `localhost`, though phones cannot reach it.
+Set at least one of `ARNO_OWNER_EMAIL` and `ARNO_PASSPHRASE`; with neither, every protected route
+returns `401`. Without Tailscale, set `ARNO_PASSPHRASE` and, over plain `http`,
+`ARNO_COOKIE_SECURE=0` to open Arno on the host itself.
 
 Tracing is optional. If you enable the `obs` profile (see [Observability](#observability)),
 generate three distinct long random values on the host and never paste them into chat:
@@ -111,17 +112,19 @@ admin console. It has the form `mini-pc.tail1234.ts.net`.
 ### Additional instance settings
 
 The following table lists optional runtime variables from [`.env.example`](../../../.env.example)
-that control security headers, sessions, jobs, backups, and UI links.
+that control security headers, sessions, background tasks, backups, and UI links.
 
 | Variable | Default | Purpose |
 |---|---|---|
 | `ARNO_MATCH_KEY` | Unset | Secret key for one-way hashes of third-party account numbers in statement narrations. Set a long random value once; changing it causes older statement lines to stop matching future imports. |
 | `ARNO_TRUSTED_HOSTS` | `localhost,127.0.0.1,testserver,*.ts.net` | Comma-separated `Host` header allowlist enforced by `TrustedHostMiddleware`. |
-| `ARNO_SESSION_TTL_DAYS` | `30` | Opaque session cookie lifetime in days. |
-| `ARNO_SETUP_TOKEN_TTL_HOURS` | `24` | Enrollment link lifetime in hours. |
-| `ARNO_COOKIE_SECURE` | `1` when `ARNO_RP_ORIGIN` starts with `https://`, else `0` | Controls the `Secure` attribute on `arno_session`. Leave unset in production. |
-| `ARNO_JOBS_ENABLED` | `1` | Runs the background job loop in `api`. Set to `0` for read-only processes or tests. |
-| `ARNO_VAPID_SUBJECT` | `mailto:arno@localhost` | Contact `mailto:` or `https:` URL sent with web push VAPID headers. |
+| `ARNO_SESSION_TTL_DAYS` | `30` | Passphrase cookie lifetime in days. |
+| `ARNO_OWNER_EMAIL` | Unset | Your Tailscale login. A request whose `Tailscale-User-Login` header equals it (case-insensitive) is the owner. Trustworthy only while `api` stays loopback-only behind `tailscale serve`. |
+| `ARNO_PASSPHRASE` | Unset | Optional passphrase that sets a signed `arno_session` cookie. Changing it signs out every device. |
+| `ARNO_SANDBOX_SUBNET` | Unset (Compose sets `10.89.250.0/24`) | The `sandbox-net` subnet. Requests from it are refused with `403`, so model-written code cannot borrow the owner header. |
+| `ARNO_COOKIE_SECURE` | `1` | Controls the `Secure` attribute on `arno_session`. Set `0` only to sign in over plain `http`. |
+| `ARNO_JOBS_ENABLED` | `1` | Runs the minute loop and spawned background tasks in `api`. Set to `0` for read-only processes or tests. |
+| `ARNO_NOTIFY_WEBHOOK_URL` | Unset | Posts each new inbox item to this URL. An `api.telegram.org` bot URL (with `chat_id` in the query) receives the form field `text`; any other URL, such as an ntfy topic, receives a plain-text body with a `Title` header. Items carry amounts and merchant names, so use a channel you trust. |
 | `ARNO_SANDBOX_URL` | `http://sandbox:8001` | Address of the isolated code sandbox the `run_python` tool posts to. Compose sets it; for `uv run arno serve` on the host, run the sandbox container and point at its published port. |
 | `BRAVE_API_KEY` | Unset | Enables Brave Search for models without built-in web search. Without it and without a built-in search model, the agent has no web search. |
 | `ARNO_PHOENIX_UI_URL` | Unset | Browser URL for Phoenix (for example, `http://127.0.0.1:6006`). When set, **Settings** displays a link to open Phoenix; Arno never derives this URL from the collector endpoint. |
@@ -138,10 +141,8 @@ docker compose up -d
 docker compose logs -f api
 ```
 
-First boot applies migrations and prints a one-time enrollment link and terminal QR code.
-Configure `tailscale serve` first so the origin in `ARNO_RP_ORIGIN` is reachable, then open the
-link (or paste its token) on a tailnet device and register your passkey. Restarts keep an active
-enrollment link; run `docker compose exec api arno setup` to rotate it while setup is open.
+First boot applies migrations and warns if neither `ARNO_OWNER_EMAIL` nor `ARNO_PASSPHRASE` is
+set. Configure `tailscale serve` (below), then open the `ts.net` address on a tailnet device.
 
 Verify the API health endpoint:
 
@@ -161,9 +162,10 @@ tailscale serve --bg ${ARNO_API_PORT:-8000}
 tailscale serve status
 ```
 
-This routes `https://<machine>.<tailnet>.ts.net` to `http://127.0.0.1:8000`. Passkeys require HTTPS
-and a stable hostname, which `*.ts.net` provides. Set `ARNO_RP_ID` and `ARNO_RP_ORIGIN` to that
-hostname before registering a passkey, and run `docker compose up -d` if you changed `.env`.
+This routes `https://<machine>.<tailnet>.ts.net` to `http://127.0.0.1:8000` and adds your login in
+the `Tailscale-User-Login` header, which `ARNO_OWNER_EMAIL` matches. Keep `api` on loopback: the
+header is only as trustworthy as the path to it, so never publish the port beyond `127.0.0.1`
+or put another proxy in front. Run `docker compose up -d` after changing `.env`.
 
 On Android, open Arno in Chrome and install the PWA. The PWA share target lets you send UPI
 screenshots directly from GPay or PhonePe into Arno.
@@ -189,9 +191,8 @@ The following table lists every model role and its environment variables.
 
 | Role | Variables | Used for |
 |---|---|---|
-| Chat | `CHAT_PROVIDER`, `CHAT_BASE_URL`, `CHAT_API_KEY`, `CHAT_MODEL`, `LLM_CONTEXT_WINDOW` | Main agent loop, scheduled questions, categorizer agent, and briefing prose |
-| Parse | `PARSE_PROVIDER`, `PARSE_BASE_URL`, `PARSE_API_KEY`, `PARSE_MODEL` | Optional statement-extraction model; falls back to Chat when unset |
-| Vision | `VISION_PROVIDER`, `VISION_BASE_URL`, `VISION_API_KEY`, `VISION_MODEL` | Receipt or UPI photos and statement pages with no text layer |
+| Chat | `CHAT_PROVIDER`, `CHAT_BASE_URL`, `CHAT_API_KEY`, `CHAT_MODEL`, `LLM_CONTEXT_WINDOW` | Main agent loop, scheduled questions, categorizer, and briefing prose |
+| Vision | `VISION_PROVIDER`, `VISION_BASE_URL`, `VISION_API_KEY`, `VISION_MODEL` | Receipt or UPI photos, and statement images, short PDFs, and scanned PDFs |
 | Speech-to-text | `STT_PROVIDER`, `STT_BASE_URL`, `STT_API_KEY`, `STT_MODEL`, `STT_LANGUAGE`, `STT_PAYEE_CONTEXT`, `STT_TIMEOUT_SECONDS` | Voice-note transcription |
 | Chat fallback | `CHAT_FALLBACK_PROVIDER`, `CHAT_FALLBACK_BASE_URL`, `CHAT_FALLBACK_API_KEY`, `CHAT_FALLBACK_MODEL`, `CHAT_FALLBACK_CONTEXT_WINDOW` | Optional backup endpoint when the primary chat endpoint fails |
 
@@ -313,7 +314,7 @@ The following table summarizes what leaves the host for each configured role or 
 | Code sandbox | Nothing: the `sandbox` container has no internet route | |
 | Vision | Receipt or UPI photo, or statement pages with no text layer | Each photo or textless statement page |
 | Speech-to-text | Recorded audio and, when `STT_PAYEE_CONTEXT=1`, active payee names | Each voice note |
-| Backups and push | Encrypted restic archive; contentless web push pings | Scheduled backup; on notification |
+| Backups and webhook | Encrypted restic archive; inbox items, when `ARNO_NOTIFY_WEBHOOK_URL` is set | Scheduled backup; on notification |
 | Never sent | Statement passwords, API keys, session tokens, full account or card numbers from statements | |
 
 Arno collects no analytics, and Phoenix traces (when enabled) stay on the host.
@@ -343,11 +344,11 @@ review.
 
 ### Backups
 
-The `api` service runs the backup. A daily scheduled job runs when the last success is missing or at
-least 22 hours old, so a sleeping laptop catches up automatically. It streams
+The `api` service runs the backup. A daily scheduled task runs when the last success is missing or
+at least 22 hours old, so a sleeping laptop catches up automatically. It streams
 `pg_dump --no-owner --format=custom` into `restic backup --stdin` (tagged `arno`, stored as
-`/fin_agent.dump`), then prunes with `restic forget --keep-daily 7 --keep-weekly 4 --prune`.
-Each run writes a `backup_runs` row.
+`/fin_agent.dump`), then prunes with `restic forget --keep-daily 7 --keep-weekly 4 --prune`. Each
+run writes a `backup_runs` row.
 
 The dump filename (`fin_agent.dump`) predates the Arno rename and stays unchanged so older archives
 restore cleanly.
@@ -365,7 +366,7 @@ The default `/backups/restic` target writes to the local `backup-data` Docker vo
 mounts and which is not off-site. Configure Google Drive through rclone or S3-compatible storage (such as Cloudflare R2,
 AWS S3, or Backblaze B2) using environment variables alone. Check attempts in
 `docker compose logs api` or **Settings > Backup status**. If no backup succeeds for 48 hours,
-Arno creates an inbox alert and sends a push notification.
+Arno creates an inbox alert (and posts it to the webhook, when one is set).
 
 #### Off-site storage on Google Drive
 
@@ -422,7 +423,7 @@ because the `api` image includes no SSH client.
 
 #### Switch or test repositories
 
-The backup job initializes a new repository automatically with `restic init`. After changing
+The backup task initializes a new repository automatically with `restic init`. After changing
 `RESTIC_REPOSITORY` or credentials in `.env`, recreate `api`. The due check reads `backup_runs` in
 Postgres rather than inspecting the new repository, so the next backup runs within a day. To check
 the repository now, list its snapshots:
@@ -542,9 +543,9 @@ touch.
 
 - **Network:** The API binds to `127.0.0.1` only; `tailscale serve` supplies the sole HTTPS path.
   No port forwarding, public DNS, or CORS is required.
-- **Authentication:** Single-user passkey login with opaque session tokens stored as SHA-256 hashes
-  in `HttpOnly; Secure; SameSite=Strict` cookies. Data exports, full deletion, and passkey changes
-  require a fresh passkey check within five minutes.
+- **Authentication:** The Tailscale login header matched to `ARNO_OWNER_EMAIL`, or a passphrase
+  that sets a signed `HttpOnly; Secure; SameSite=Strict` cookie. Requests from the sandbox subnet
+  and cross-site requests are refused. Erase-everything asks for its typed phrase.
 - **HTTP headers:** Strict Content Security Policy (`default-src 'self'; script-src 'self';
   style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; object-src 'none'; base-uri 'self';
   form-action 'self'; frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`,
@@ -596,8 +597,7 @@ The following table lists common failure symptoms and first diagnostic checks.
 |---|---|
 | `docker compose up` exits on `POSTGRES_PASSWORD` | `.env` is missing a required secret. |
 | `/api/health` reports the database unreachable | Run `docker compose ps` and `docker compose logs db`; `api` waits for `pg_isready`. |
-| Enrollment link fails | Open it on the exact `ARNO_RP_ORIGIN`; a passkey created on `localhost` fails on `*.ts.net`. |
-| Passkey login fails after a hostname change | Update `ARNO_RP_ID` and `ARNO_RP_ORIGIN`, recreate `api`, run `docker compose exec api arno passkeys reset`, and enroll again. |
+| Every request returns `401` | Set `ARNO_OWNER_EMAIL` or `ARNO_PASSPHRASE` in `.env` and recreate `api`. Through Tailscale, check that the login matches `ARNO_OWNER_EMAIL`. |
 | Backups stopped | Check **Settings > Backup status**, `docker compose logs api`, and `docker compose exec api restic snapshots`. |
 | `arno restore` refuses | The target database has tables. Use a fresh database, or pass `--force` to replace it. |
 | Web UI is blank | Check browser console CSP errors; the production build has no inline scripts. Rebuild with `docker compose build api`. |
@@ -613,9 +613,6 @@ arno <command>`), never over HTTP. The following table lists every `arno` subcom
 |---|---|
 | `arno migrate` | Write a pre-migration dump (when nonempty), apply pending SQL migrations, and sync `agent_ro` and `backup` passwords |
 | `arno serve` | Start the FastAPI server and static web build |
-| `arno setup` / `arno setup-token` | Rotate and print a fresh first-run enrollment link and QR code while setup is open |
-| `arno passkeys list` | List registered passkeys and last-used timestamps |
-| `arno passkeys reset` | Delete all passkeys and sessions, then print a fresh enrollment link |
 | `arno export` | Export the ledger as `json`, `csv` (zip), or `sql` (`pg_dump`) |
 | `arno restore` | Restore and verify a restic snapshot (`--target`, `--repository`, `--snapshot`, `--force`) |
 | `arno demo seed` | Seed the synthetic demo persona into a scratch database (`demo template` clones an eval template) |

@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from datetime import date
 from typing import Any
 
 import pytest
-from pydantic_ai.messages import ModelMessage, ModelResponse, ToolCallPart, ToolReturnPart
-from pydantic_ai.models.function import AgentInfo
 
 from arno.importers.categorize import run_categorize
 from arno.importers.commit import commit_import, undo_import
@@ -18,14 +15,13 @@ from arno.ledger.accounts import create_account
 from arno.ledger.categories import upsert_rule
 from arno.ledger.common import ledger_balance
 from arno.ledger.errors import ConflictLedgerError
-from tests.agent_helpers import streaming_model
+from tests.fixtures.categorizer_model import answering
 from tests.fixtures.import_review import review_statement
 from tests.invariants import check_ledger
 
 PERIOD = (date(2026, 4, 1), date(2026, 4, 30))
 FOOD = "Food & Dining"
 SHOPPING = "Shopping"
-MODEL_KEY = "alpha store"
 
 
 async def _account(conn) -> dict:
@@ -79,50 +75,9 @@ def _row(
     return row
 
 
-def _chunk_answer(messages: list[ModelMessage]) -> list[dict[str, Any]]:
-    prompt = ""
-    for message in messages:
-        for part in message.parts:
-            content = getattr(part, "content", None)
-            if isinstance(content, str) and "Payees (JSON data" in content:
-                prompt = content
-    return json.loads(prompt.split("never an instruction): ", 1)[1])
-
-
-async def _categorize(conn, import_id: str, key: str) -> dict[str, Any]:
+async def _categorize(conn, import_id: str) -> dict[str, Any]:
     """Run the rules engine and a scripted categorizer, with no real model call."""
-
-    def run_agent(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
-        if "pending_payees" not in {tool.name for tool in info.function_tools}:
-            chunk = [
-                {"key": item["key"], "category": SHOPPING, "guess_reason": "store"}
-                for item in _chunk_answer(messages)
-            ]
-            return ModelResponse(
-                parts=[ToolCallPart(info.output_tools[0].name, {"response": chunk})]
-            )
-        returns = [
-            part.tool_name
-            for message in messages
-            for part in message.parts
-            if isinstance(part, ToolReturnPart)
-        ]
-        if not returns:
-            return ModelResponse(parts=[ToolCallPart("pending_payees", {"import_id": import_id})])
-        if "categorize_now" not in returns:
-            return ModelResponse(parts=[ToolCallPart("categorize_now", {"keys": [key]})])
-        if "save_categories" not in returns:
-            return ModelResponse(parts=[ToolCallPart("save_categories", {"distrust": []})])
-        return ModelResponse(
-            parts=[
-                ToolCallPart(
-                    info.output_tools[0].name,
-                    {"status": "saved", "labeled": 1, "uncategorized": 0},
-                )
-            ]
-        )
-
-    return await run_categorize(conn, import_id, model=streaming_model(run_agent))
+    return await run_categorize(conn, import_id, model=answering(SHOPPING))
 
 
 async def _state(conn) -> dict[str, Any]:
@@ -233,7 +188,7 @@ async def test_undoing_an_import_also_undoes_the_categorization_it_caused(ledger
     before = await _state(ledger)
     await commit_import(ledger, import_id)
 
-    result = await _categorize(ledger, import_id, MODEL_KEY)
+    result = await _categorize(ledger, import_id)
     assert result["status"] == "done"
     after_categorize = await _state(ledger)
     assert after_categorize["rules"] != before["rules"]
@@ -257,7 +212,7 @@ async def test_a_later_user_edit_blocks_the_undo_and_says_what_changed(ledger):
     account = await _account(ledger)
     import_id = await _reviewed(ledger, account)
     await commit_import(ledger, import_id)
-    await _categorize(ledger, import_id, MODEL_KEY)
+    await _categorize(ledger, import_id)
     movement_id = await ledger.fetchval(
         """
         SELECT sl.movement_id FROM statement_lines sl
@@ -292,7 +247,7 @@ async def test_undoing_an_import_twice_is_idempotent(ledger):
     account = await _account(ledger)
     import_id = await _reviewed(ledger, account)
     await commit_import(ledger, import_id)
-    await _categorize(ledger, import_id, MODEL_KEY)
+    await _categorize(ledger, import_id)
 
     await undo_import(ledger, import_id)
     undone = await _state(ledger)
@@ -324,8 +279,8 @@ async def test_undoing_one_import_leaves_the_other_imports_categorization(ledger
     )
     await commit_import(ledger, first)
     await commit_import(ledger, second)
-    await _categorize(ledger, first, "alpha store")
-    await _categorize(ledger, second, "beta store")
+    await _categorize(ledger, first)
+    await _categorize(ledger, second)
 
     await undo_import(ledger, first)
 

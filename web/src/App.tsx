@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState } from "react";
-import { errorMessage } from "./api";
+import { api, errorMessage } from "./api";
 import { getAuthState, type AuthState } from "./auth";
 import { Login } from "./Login";
-import { Setup } from "./Setup";
 import { Shell } from "./Shell";
+import type { Settings, User } from "./types";
 
 export function App() {
   const [state, setState] = useState<AuthState | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [user, setUser] = useState<User | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -35,6 +36,14 @@ export function App() {
     };
   }, []);
 
+  const authenticated = state?.authenticated ?? false;
+  useEffect(() => {
+    if (!authenticated) return;
+    api<Settings>("/api/settings")
+      .then((settings) => setUser({ display_name: settings.profile.display_name ?? "You" }))
+      .catch(() => undefined);
+  }, [authenticated]);
+
   if (error) {
     return (
       <main className="centered">
@@ -61,15 +70,9 @@ export function App() {
     );
   }
 
-  const onSetupPath = window.location.pathname.replace(/\/+$/, "") === "/setup";
-
-  if (onSetupPath || state.setup_required) {
-    return <Setup authState={state} />;
-  }
-
   if (!state.authenticated) {
-    return <Login onDone={refresh} />;
+    return <Login state={state} onDone={refresh} />;
   }
 
-  return <Shell user={state.user} onSignedOut={refresh} />;
+  return <Shell user={user} onSignedOut={refresh} />;
 }

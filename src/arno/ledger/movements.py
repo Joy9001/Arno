@@ -983,32 +983,6 @@ async def reverse_movement(
         transfers=opposite,
         reverses_id=movement_id,
     )
-    from arno.notifications import sync_payment_alerts_in_group
-
-    # A reversal moves the whole chain's parity, so the payment that changed is the chain's root.
-    linked_occurrences = await conn.fetch(
-        """
-        WITH RECURSIVE chain AS (
-            SELECT id, kind, reverses_id FROM movements WHERE id = $1
-            UNION ALL
-            SELECT m.id, m.kind, m.reverses_id
-            FROM movements m JOIN chain c ON m.id = c.reverses_id
-        )
-        SELECT DISTINCT o.schedule_id, o.due_date
-        FROM schedule_occurrences o
-        JOIN schedule_payments sp ON sp.occurrence_id = o.id
-        WHERE sp.movement_id IN (SELECT id FROM chain WHERE kind <> 'reversal')
-        ORDER BY o.schedule_id, o.due_date
-        """,
-        movement_id,
-    )
-    for occ in linked_occurrences:
-        await sync_payment_alerts_in_group(
-            conn,
-            group,
-            schedule_id=str(occ["schedule_id"]),
-            due_date=occ["due_date"],
-        )
     return record
 
 

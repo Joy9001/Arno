@@ -8,19 +8,6 @@ session summary stay honest.
 from __future__ import annotations
 
 
-async def test_session_exposes_only_safe_current_session_fields(session_client):
-    response = session_client.get("/api/auth/session")
-    assert response.status_code == 200
-    payload = response.json()
-
-    assert payload["authenticated"] is True
-    assert payload["user"]["display_name"] == "You"
-    assert set(payload) == {"authenticated", "user", "session"}
-    assert set(payload["session"]) == {"id", "expires_at", "reverified_at", "fresh"}
-    assert payload["session"]["expires_at"]
-    assert payload["session"]["fresh"] is True
-
-
 async def test_scheduled_questions_include_inactive_is_opt_in_and_pause_is_reversible(
     session_client,
 ):

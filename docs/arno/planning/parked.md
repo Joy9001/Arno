@@ -27,7 +27,7 @@ Signal is the privacy-preserving choice; Telegram bot chats are not end-to-end e
 
 ### Native Android app
 
-**Why parked:** The PWA covers chat, voice capture, camera, web push, and the Android share sheet.
+**Why parked:** The PWA covers chat, voice capture, camera, and the Android share sheet.
 
 **Trigger:** Daily use requires a capability the PWA lacks, such as SMS access or home-screen
 widgets. The REST API and chat stream already serve as the client contract.
@@ -68,12 +68,12 @@ agent always states balance age beside figures.
 ### OCR for scanned statements
 
 **Why parked:** The `VISION` model already reads statement pages with no text layer and handles
-harsh phone photos. In the Monty evaluation, RapidOCR read clean scans and moderate photos after
+harsh phone photos. In an earlier evaluation, RapidOCR read clean scans and moderate photos after
 one to two repairs at 4–8 seconds per page on CPU and failed on harsh photos; it also depends on
 OpenCV, which bundles LGPL FFmpeg and requires license review.
 
-**Future shape:** One additional source of positioned words feeding `doc_words` so saved parsers
-reuse the same pipeline unchanged.
+**Future shape:** One additional source of text feeding the script path (Path B) so scanned
+statements reuse the same pipeline unchanged.
 
 **Trigger:** Real statements (for example, Union Bank or other Indian banks) commonly arrive as
 scans where local OCR outperforms vision models, or a self-hoster runs without a vision model.
@@ -190,19 +190,6 @@ recovery codes, and login rate limiting alongside the existing security headers.
 
 **Trigger:** A user requires access without Tailscale.
 
-### Setup through Tailscale identity
-
-**Why parked:** `tailscale serve` injects a `Tailscale-User-Login` header, which could skip
-[enrollment links](../specs/platform.md#enrollment-links). However, that header is trustworthy only
-when every request reaches `api` exclusively through `tailscale serve`; other containers on the
-Docker network can reach `api` directly and spoof headers.
-
-**Future shape:** A Tailscale sidecar in Compose acting as the sole ingress to `api`, plus an owner
-check on `/setup/*`, keeping enrollment links as a fallback.
-
-**Trigger:** `api` becomes reachable exclusively through Tailscale and enrollment links still add
-friction.
-
 ### Encryption inside the database
 
 **Why parked:** Host disk encryption protects against a stolen drive, and restic encrypts backups.
@@ -234,7 +221,7 @@ using an attacker's key ([`architecture.md`](../architecture.md)).
 **Future shape:** An internal Docker Compose network paired with an allowlisting proxy sidecar
 following
 [Hermes network isolation](https://hermes-agent.nousresearch.com/docs/user-guide/egress/network-isolation),
-allowing only configured LLM, speech, vision, web push, Tailscale, and backup hosts.
+allowing only configured LLM, speech, vision, webhook, Tailscale, and backup hosts.
 
 **Trigger:** Any tool or bridge gains outbound network access, or a supply-chain incident occurs.
 
@@ -254,12 +241,12 @@ maintenance time.
 ### MCP server
 
 **Why parked:** The web app and REST API cover single-user access. Exposing Arno over MCP adds
-non-passkey token authentication and sends ledger data to whatever external model the MCP client
+a token authentication scheme and sends ledger data to whatever external model the MCP client
 runs, bypassing Arno's number check and confirm cards.
 
 **Future shape:** A read-only MCP adapter over `src/arno/tools/` (matching architecture rule 3 in
 `plan.md` §4), reachable over the tailnet only, authenticated with a scoped, expiring, revocable
-token issued from **Settings** behind a fresh passkey
+token issued from **Settings**
 ([`C31`](capability-catalog.md#c31-arno-as-an-mcp-server)).
 
 **Trigger:** The owner needs Arno's ledger and affordability answers inside another desktop

@@ -44,25 +44,6 @@ _COMMIT_LOSS_ERRORS = (
 # Columns a generic restore may touch. Identity and provenance stay put.
 _IMMUTABLE_COLUMNS = {"id", "created_at"}
 
-# A write to any of these can move the projection, so it queues a risk check. Preferences,
-# notifications, and scheduled questions do not: they never change cash.
-RISK_TABLES = frozenset(
-    {
-        "accounts",
-        "baselines",
-        "categories",
-        "goals",
-        "imports",
-        "movements",
-        "payees",
-        "schedules",
-        "schedule_occurrences",
-        "schedule_payments",
-        "settings",
-        "movement_legs",
-    }
-)
-
 
 def jsonable(value: Any) -> Any:
     """Turn database values into JSON-safe values for audit rows and exports."""
@@ -190,11 +171,6 @@ async def write_group(
                 entry["before"],
                 entry["after"],
             )
-        if any(entry["table_name"] in RISK_TABLES for entry in group.entries):
-            # Same transaction as the write, so a crash cannot lose the check or run it twice.
-            from arno.jobs.runner import enqueue_risk_check
-
-            await enqueue_risk_check(conn, group.group_id)
     except BaseException:
         if not conn.is_closed():
             try:
@@ -516,6 +492,8 @@ def _settings_phrase(before: dict[str, Any] | None, after: dict[str, Any] | None
         if old is None:
             return f"Set floor {format_paise(int(new))}"
         return f"Changed floor {format_paise(int(old))} → {format_paise(int(new))}"
+    if before.get("display_name") != after.get("display_name"):
+        return f"Changed your name to {after.get('display_name')}"
     return "Changed settings"
 
 
@@ -613,9 +591,6 @@ async def _entry_phrase(conn: Connection, entry: dict[str, Any]) -> str | None:
         )
     if table == "goals":
         return _goal_phrase(before, after)
-    if table == "users":
-        name = (after or before or {}).get("display_name") or "you"
-        return f"Changed your name to {name}" if after is not None else "Removed your profile"
     return None
 
 
@@ -845,7 +820,6 @@ async def _restore_before(
         elif table in {
             "category_rules",
             "captures",
-            "users",
             "schedule_occurrences",
             "schedule_payments",
             "baselines",
@@ -968,11 +942,6 @@ async def undo_group(
                 continue
             else:
                 await _restore_before(conn, undo, table, row_id, entry["before"])
-        if "scheduled_questions" in touched:
-            # Undoing a scheduled question must also stop its next run, as archiving it does.
-            from arno.jobs.schedules import sync_scheduled_questions
-
-            await sync_scheduled_questions(conn)
         await conn.execute(
             "UPDATE audit_log SET undone_at = now() WHERE group_id = $1 AND undone_at IS NULL",
             undo_id,

@@ -7,15 +7,13 @@ The answer is written into the inbox, keyed by the question and its scheduled pe
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any
 
 from arno.agent.builder import build_agent
 from arno.agent.capabilities import MODEL_SETTINGS, drain_events
 from arno.agent.deps import AgentDeps
 from arno.db.conn import Connection, connect
-from arno.jobs.schedules import INDIA, period_for
-from arno.notifications import create_notification, send_push_for_kind
+from arno.notifications import create_notification
 
 logger = logging.getLogger("arno.jobs.questions")
 
@@ -105,7 +103,7 @@ async def run_scheduled_question(
     conn: Connection,
     *,
     question_id: str,
-    period: str | None = None,
+    period: str,
     agent: Any = None,
 ) -> dict[str, Any]:
     question = await conn.fetchrow(
@@ -113,12 +111,9 @@ async def run_scheduled_question(
     )
     if question is None:
         return {"skipped": "inactive or missing"}
-    period = period or period_for(
-        "scheduled_question", datetime.now(INDIA), {"scheduled_question_id": question_id}
-    )
     dedupe_key = f"scheduled_question:{question_id}:{period}"
     if await conn.fetchval("SELECT 1 FROM notifications WHERE dedupe_key = $1", dedupe_key):
-        # A crash-retried job must not spend a second model call on an answer already written.
+        # A restarted run must not spend a second model call on an answer already written.
         await conn.execute(
             "UPDATE scheduled_questions SET last_run_at = coalesce(last_run_at, now()), "
             "updated_at = now() WHERE id = $1",
@@ -142,17 +137,9 @@ async def run_scheduled_question(
     }
 
 
-async def handle_scheduled_question(payload: dict[str, Any]) -> dict[str, Any]:
-    question_id = str(payload.get("scheduled_question_id") or "")
-    if not question_id:
-        raise ValueError("scheduled question job has no scheduled_question_id")
+async def handle_scheduled_question(question_id: str, period: str) -> None:
     async with connect() as conn:
-        result = await run_scheduled_question(
-            conn, question_id=question_id, period=payload.get("period")
-        )
-        if result.get("notification_id"):
-            await send_push_for_kind(conn, "scheduled_question")
-        return result
+        await run_scheduled_question(conn, question_id=question_id, period=period)
 
 
 __all__ = [

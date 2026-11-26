@@ -122,16 +122,3 @@ async def test_a_scheduled_question_stops_at_the_limit(db):
 
     with pytest.raises(DailyBudgetExceeded):
         await answer_question(db, {"id": "sq_limit", "prompt": "What did I spend?"}, agent=agent)
-
-
-async def test_vision_propagates_a_cost_stop(monkeypatch):
-    from arno.importers.readers import Doc
-    from arno.importers.vision import transcribe_page
-    from tests.import_fixtures import minimal_pdf
-
-    async def fail(messages, info):
-        raise DailyBudgetExceeded("synthetic")
-
-    monkeypatch.setattr("arno.importers.vision.vision_model", lambda: FunctionModel(fail))
-    with pytest.raises(DailyBudgetExceeded):
-        await transcribe_page(Doc(minimal_pdf(["synthetic page"])))

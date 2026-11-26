@@ -1,18 +1,17 @@
 """Statement imports: rows, accounts, and the step that moves an import to review.
 
-The parser subagent reads the file and submits a script; this module owns the import row,
-resolving it to an account, and writing the reviewed rows. Nothing reaches the ledger before a
-commit.
+Extraction (`agent/extractor.py`) reads the file; this module owns the import row, resolving it
+to an account, and writing the reviewed rows. Nothing reaches the ledger before a commit.
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from datetime import date, datetime
+from datetime import date
 from typing import Any
 
-from arno.db.conn import Connection, connect
+from arno.db.conn import Connection
 from arno.importers.balance_plan import (
     closing_adjustment_reason,
     closing_source_reason,
@@ -25,10 +24,7 @@ from arno.importers.checks import (
     stated_opening_to_ledger,
 )
 from arno.importers.identifiers import scrub_account_number
-from arno.importers.passwords import PASSWORDS
-from arno.importers.readers import Doc
 from arno.importers.reconcile import credit_decision_required, insert_lines, reconcile
-from arno.jobs.runner import MAX_ATTEMPTS
 from arno.ledger.audit import new_id
 
 logger = logging.getLogger("arno.importers")
@@ -56,23 +52,10 @@ async def _real_accounts(conn: Connection) -> list[dict[str, Any]]:
     )
 
 
-async def _infer_account(conn: Connection, doc: Doc) -> dict[str, Any] | None:
+async def _infer_account(conn: Connection, text: str) -> dict[str, Any] | None:
     accounts = await _real_accounts(conn)
     if len(accounts) == 1:
         return accounts[0]
-    text = ""
-    try:
-        if doc.kind == "pdf":
-            from arno.importers.layout_detect import line_text, text_lines
-
-            for page in range(min(doc.page_count(), 1)):
-                text += "\n".join(line_text(line) for line in text_lines(doc.words(page)))
-        elif doc.kind in ("xlsx", "xls", "xlsb", "ods", "text"):
-            text = "\n".join(
-                " ".join(str(cell) for cell in row if cell is not None) for row in doc.cells(0)[:15]
-            )
-    except Exception:  # noqa: BLE001 - inference is best effort
-        return None
     lowered = text.lower()
     # Score the clues instead of taking the first hit. A statement's own bank is usually in its
     # header block, while a row can name another account ("TRANSFER TO SAVINGS 4821" is the other
@@ -109,11 +92,11 @@ async def _resolve_parsed_account(
     *,
     parsed_account: dict[str, Any],
     current: dict[str, Any] | None,
-    doc: Doc,
+    text: str,
 ) -> dict[str, Any] | None:
     if current is not None:
         # An account already chosen — inferred at open, or answered on the import card — is the
-        # user's; the script's own naming cannot overrule it.
+        # user's; the extraction's own naming cannot overrule it.
         return current
     accounts = await _real_accounts(conn)
     last4 = scrub_account_number(parsed_account.get("account_number"))
@@ -128,7 +111,7 @@ async def _resolve_parsed_account(
         for needle in (account["institution"], account["name"], account["last4"]):
             if needle and str(needle).lower() in haystack:
                 return account
-    return await _infer_account(conn, doc)
+    return await _infer_account(conn, text)
 
 
 async def create_import(
@@ -151,8 +134,8 @@ async def create_import(
         attachment_id,
     )
     if own is not None:
-        # One attachment is one import, whatever its status. A parser that asks for this turn's
-        # state again must not turn a file the user rejected into a second import.
+        # One attachment is one import, whatever its status, so a file the user rejected never
+        # becomes a second import.
         return dict(own)
     existing = await conn.fetchrow(
         """
@@ -160,8 +143,7 @@ async def create_import(
         FROM imports i
         JOIN attachments a ON a.id = i.attachment_id
         WHERE a.sha256 = $1
-          AND i.status IN ('parsing', 'needs_password', 'needs_input', 'paused', 'review',
-                           'committed')
+          AND i.status IN ('parsing', 'needs_password', 'needs_input', 'review', 'committed')
         ORDER BY i.created_at DESC
         LIMIT 1
         """,
@@ -174,8 +156,8 @@ async def create_import(
         row = await conn.fetchrow(
             """
             INSERT INTO imports
-                (id, file_hash, status, attachment_id, account_id, parser, commit_groups)
-            VALUES ($1, $2, 'parsing', $3, $4, NULL, '[]'::jsonb)
+                (id, file_hash, status, attachment_id, account_id, commit_groups)
+            VALUES ($1, $2, 'parsing', $3, $4, '[]'::jsonb)
             ON CONFLICT (attachment_id) WHERE attachment_id IS NOT NULL DO NOTHING
             RETURNING *
             """,
@@ -190,12 +172,6 @@ async def create_import(
                 attachment_id,
             )
     return dict(row)
-
-
-async def retry_with_password(conn: Connection, *, import_id: str, password: str) -> None:
-    """Put the card's password in the in-memory vault; the waiting parser picks it up."""
-    PASSWORDS.put(import_id, password)
-    await conn.execute("UPDATE imports SET updated_at = now() WHERE id = $1", import_id)
 
 
 async def set_progress(conn: Connection, import_id: str, progress: str | None) -> None:
@@ -228,7 +204,7 @@ async def _set_status(
         assignments.append(f"{key} = ${len(params) + 1}")
         params.append(value)
     params.append(import_id)
-    # A rejected import is the user's decision. A parser that is still running must not move it
+    # A rejected import is the user's decision. An extraction that is still running must not move it
     # back to parsing or review with a late write.
     await conn.execute(
         f"UPDATE imports SET {', '.join(assignments)} "  # noqa: S608 - fixed keys
@@ -244,16 +220,13 @@ async def _finalize(
     account: dict[str, Any],
     parsed_account: dict[str, Any],
     check: dict[str, Any],
-    script: str,
-    helper_version: str | None,
-    fingerprint: str | None,
     period: dict[str, Any] | None,
     status: str = "review",
     reason: str | None = None,
 ) -> bool:
     """Write the reviewed rows and move the import to `status`.
 
-    Returns False when the import was rejected (or committed) while the parser was still
+    Returns False when the import was rejected (or committed) while extraction was still
     working: the user's decision stands and the rows are not written.
     """
     async with conn.transaction():
@@ -263,10 +236,8 @@ async def _finalize(
             SET account_id = $1, period_start = $2, period_end = $3,
                 opening_balance_paise = $4, closing_balance_paise = $5,
                 check_result = $6::jsonb - 'status', check_status = $6::jsonb ->> 'status',
-                parser = $7, helper_version = $8,
-                fingerprint = $9, institution = $10, status = $12, reason = $13,
-                progress = NULL
-            WHERE id = $11 AND status NOT IN ('rejected', 'committed')
+                institution = $7, status = $9, reason = $10, progress = NULL
+            WHERE id = $8 AND status NOT IN ('rejected', 'committed')
             RETURNING id
             """,
             account["id"],
@@ -275,9 +246,6 @@ async def _finalize(
             check.get("opening_paise"),
             check.get("closing_paise"),
             check,
-            script,
-            helper_version,
-            fingerprint,
             account["institution"] or account["name"] or parsed_account.get("institution"),
             import_id,
             status,
@@ -304,125 +272,20 @@ async def _finalize(
     return True
 
 
-async def _store_unlocked(attachment_id: str, data: bytes, docs: list[Doc]) -> None:
-    """Keep the unlocked copy once the password opened it, so a replay needs no password."""
-    from arno.importers.readers import sniff
-
-    if not docs or sniff(data) == "zip":
-        return
-    try:
-        unlocked = docs[0].readable_bytes()
-    except Exception:  # noqa: BLE001 - the original stays readable with the password
-        logger.warning("could not store an unlocked copy for attachment %s", attachment_id)
-        return
-    if unlocked == data:
-        return
-    async with connect() as conn:
-        await conn.execute(
-            """
-            UPDATE attachments SET data = $1, unlocked_at = now() WHERE id = $2
-            """,
-            unlocked,
-            attachment_id,
-        )
-
-
-def _account_fingerprint(account: dict[str, Any] | None) -> str | None:
-    """A card statement has no column headers; key its layout by the card instead."""
-    if not account or not account.get("last4"):
-        return None
-    return f"{account['kind']}|{account.get('institution') or account['name']}|{account['last4']}"
-
-
-def _fingerprint_from_headers(parsed: dict[str, Any]) -> str | None:
-    from arno.importers.layout import normalize_headers
-
-    headers = parsed.get("headers")
-    return normalize_headers(headers) if headers else None
-
-
-def _moment(value: datetime | None) -> str | None:
-    return value.isoformat() if value is not None else None
-
-
 async def categorize_state(conn: Connection, import_id: str) -> dict[str, Any] | None:
-    """Where this import's categorization stands, from its newest job (and one legacy query)."""
-    rows = await conn.fetch(
-        """
-        SELECT * FROM jobs
-        WHERE kind = 'categorize_import'
-          AND payload ->> 'import_id' = $1
-        ORDER BY created_at DESC, id DESC
-        LIMIT 10
-        """,
-        import_id,
-    )
-    if not rows:
+    """Where this import's categorization stands, from `imports.categorize`."""
+    stored = await conn.fetchval("SELECT categorize FROM imports WHERE id = $1", import_id)
+    if not stored:
         return None
-    job = rows[0]
-    status = str(job["status"])
-    attempts = int(job["attempts"] or 0)
-    result = job["result"] or {}
-
-    def state(**overrides: Any) -> dict[str, Any]:
-        view: dict[str, Any] = {
-            "state": "queued",
-            "labeled": None,
-            "uncategorized": None,
-            "failed_payees": None,
-            "error": None,
-            # The app shows the attempt in progress, so a failed job shows the one that failed.
-            "attempt": attempts if status == "failed" else attempts + 1,
-            "max_attempts": MAX_ATTEMPTS,
-            "next_run_at": None,
-            "started_at": _moment(job["started_at"]),
-            "finished_at": _moment(job["finished_at"]),
-            "job_id": str(job["id"]),
-        }
-        view.update(overrides)
-        return view
-
-    if status == "pending":
-        retrying = attempts > 0
-        return state(
-            state="retrying" if retrying else "queued",
-            next_run_at=_moment(job["run_at"]),
-            error=job["last_error"] if retrying else None,
-        )
-    if status == "running":
-        return state(state="running")
-    if status == "failed":
-        return state(state="failed", error=job["last_error"])
-
-    outcome = result.get("status")
-    counts = {
-        "labeled": result.get("labeled"),
-        "uncategorized": result.get("uncategorized"),
-        "failed_payees": result.get("failed_payees"),
+    return {
+        "labeled": None,
+        "uncategorized": None,
+        "failed_payees": None,
+        "error": None,
+        "started_at": None,
+        "finished_at": None,
+        **stored,
     }
-    if outcome == "partial":
-        return state(state="partial", **counts)
-    if outcome is not None:
-        return state(state="done", **counts)
-
-    # Rows written before `jobs.result` existed: the run row still has the counts.
-    run = await conn.fetchrow(
-        """
-        SELECT * FROM categorize_runs
-        WHERE import_id = $1
-        ORDER BY started_at DESC, id DESC
-        LIMIT 1
-        """,
-        import_id,
-    )
-    if run is None:
-        return state(state="done")
-    return state(
-        state="done",
-        labeled=run["labeled"],
-        uncategorized=run["uncategorized"],
-        finished_at=_moment(run["finished_at"]),
-    )
 
 
 async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
@@ -547,9 +410,8 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
         "review": row["review"],
         "reason": row["reason"],
         "recovery_action": "reupload" if row["status"] == "failed" else None,
-        # The stored file is still here, so the parse can run again on the same import.
+        # The stored file is still here, so extraction can run again on the same import.
         "can_retry_parse": row["status"] == "failed" and file_present,
-        "parser_saved": row["layout_id"] is not None,
         "categorize": categorize,
         "created_at": row["created_at"].isoformat() if row["created_at"] else None,
         "committed_at": row["committed_at"].isoformat() if row["committed_at"] else None,
@@ -638,10 +500,6 @@ async def set_manual_opening(
             period=period,
             manual_opening=opening_paise,
         )
-        # The header check passed when the parser was gated; the manual opening cannot undo it.
-        for key in ("fingerprint", "header_match"):
-            if key in check:
-                recomputed.setdefault(key, check[key])
         check = recomputed
         check_status = check["status"]
     review = dict(row["review"] or {})
@@ -718,7 +576,6 @@ __all__ = [
     "import_list_item",
     "import_payload",
     "list_imports",
-    "retry_with_password",
     "set_manual_opening",
     "set_progress",
 ]

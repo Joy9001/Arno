@@ -44,7 +44,7 @@ _RESET_TABLES = """
 TRUNCATE
     pgledger_idempotency_keys, pgledger_entries, pgledger_transfers, pgledger_accounts,
     accounts, payees, categories, movements, movement_legs, captures,
-    imports, statement_lines, statement_layouts, parser_versions, attachments,
+    imports, statement_lines, attachments,
     schedules, series_detections, goals, scheduled_questions,
     category_rules, baselines, audit_log, backup_runs
 RESTART IDENTITY CASCADE
@@ -126,12 +126,11 @@ async def _seed_statement_coverage(
             await conn.execute(
                 """
                 INSERT INTO imports (
-                    file_hash, parser, account_id, period_start, period_end,
+                    file_hash, account_id, period_start, period_end,
                     check_status, check_result, status, committed_at
-                ) VALUES ($1, $2, $3, $4, $5, 'VERIFIED', $6, 'committed', now())
+                ) VALUES ($1, $2, $3, $4, 'VERIFIED', $5, 'committed', now())
                 """,
                 f"demo-statement:{account['id']}:{key}",
-                "synthetic-demo",
                 account["id"],
                 start,
                 end,

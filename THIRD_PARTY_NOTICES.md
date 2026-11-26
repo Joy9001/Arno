@@ -95,8 +95,6 @@ These are installed from PyPI and carry their own license files in the image:
 - `pypdfium2` — BSD-3-Clause or Apache-2.0
 - `python-calamine` — MIT
 - `msoffcrypto-tool` — MIT
-- `python-docx` — MIT
-- `striprtf` — BSD-3-Clause
 - `olefile` — BSD-2-Clause
 - `python-multipart` — Apache-2.0
 
@@ -118,21 +116,15 @@ its `.dist-info` directory. The direct dependencies below are the ones Arno choo
 | `opentelemetry-api`, `opentelemetry-sdk`, `opentelemetry-exporter-otlp-proto-http`, `opentelemetry-instrumentation-fastapi`, `opentelemetry-instrumentation-asyncpg` | Apache-2.0 |
 | `pydantic` | MIT |
 | `pydantic-ai`, `pydantic-evals` | MIT |
-| `pydantic-monty` | MIT |
 | `pypdfium2` | BSD-3-Clause or Apache-2.0 |
 | `python-calamine` | MIT |
 | `python-dateutil` | BSD-3-Clause or Apache-2.0 |
-| `python-docx` | MIT |
 | `python-multipart` | Apache-2.0 |
-| `pywebpush` | MPL-2.0 |
-| `segno` | BSD-3-Clause |
-| `striprtf` | BSD-3-Clause |
 | `typer` | MIT |
 | `tzdata` (Windows only: time-zone data that Linux takes from the system) | Apache-2.0 |
 | `uvicorn` | BSD-3-Clause |
-| `webauthn` | BSD-3-Clause |
 
-Weak-copyleft libraries are used unmodified: `pywebpush` is MPL-2.0. NumPy's Linux wheel
+Weak-copyleft libraries are used unmodified. NumPy's Linux wheel
 bundles OpenBLAS and LAPACK (BSD-3-Clause), `libgfortran` (GPL-3.0-or-later WITH
 GCC-exception-3.1, the same runtime exception as the base image's `libgcc`), and `libquadmath`
 (LGPL-2.1-or-later), all as unmodified shared libraries; their texts are in NumPy's

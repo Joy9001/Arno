@@ -104,26 +104,6 @@ def test_loopback_is_not_evidence_that_a_role_is_configured():
     ).configured
 
 
-def test_parser_inherits_the_chat_endpoint_when_only_the_model_changes(monkeypatch):
-    monkeypatch.setenv("CHAT_BASE_URL", "http://127.0.0.1:11434/v1")
-    monkeypatch.setenv("CHAT_PROVIDER", "ollama")
-    monkeypatch.setenv("PARSE_MODEL", "parser-local")
-    monkeypatch.delenv("PARSE_BASE_URL", raising=False)
-
-    config = role_config("PARSE")
-
-    assert config.provider == "ollama"
-    assert config.model == "parser-local"
-
-
-def test_separate_parser_endpoint_does_not_inherit_chat_credentials(monkeypatch):
-    monkeypatch.setenv("CHAT_API_KEY", "chat-only-secret")
-    monkeypatch.setenv("PARSE_BASE_URL", "https://another.example/v1")
-    monkeypatch.delenv("PARSE_API_KEY", raising=False)
-
-    assert role_config("PARSE").api_key == "not-needed"
-
-
 def test_an_alternate_fallback_does_not_inherit_the_primary_provider(monkeypatch):
     monkeypatch.setenv("CHAT_PROVIDER", "anthropic")
     monkeypatch.setenv("CHAT_FALLBACK_BASE_URL", "https://api.cohere.ai/compatibility/v1")

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import io
-import json
 import zipfile
 
 import pytest
@@ -12,13 +11,6 @@ from arno.ledger.export import _csv_value, export_csv_zip, export_json, table_na
 SECRET_TABLES = frozenset(
     {
         "model_credentials",
-        "users",
-        "sessions",
-        "webauthn_credentials",
-        "webauthn_challenges",
-        "setup_tokens",
-        "vapid_keys",
-        "push_subscriptions",
     }
 )
 
@@ -30,10 +22,9 @@ def test_csv_neutralizes_formula_prefixes_only_for_text(prefix):
 
 
 async def test_export_never_carries_credential_tables_or_secrets(ledger):
-    await ledger.execute("INSERT INTO users (webauthn_user_handle) VALUES (decode('00', 'hex'))")
     await ledger.execute(
-        "INSERT INTO vapid_keys (public_key, private_key, subject) "
-        "VALUES ('public', 'PRIVATE-SECRET-KEY', 'mailto:demo@example.com')"
+        "INSERT INTO model_credentials (provider, client_id, access_token, refresh_token) "
+        "VALUES ('openai-chatgpt', 'client', 'ACCESS-SECRET', 'REFRESH-SECRET')"
     )
 
     names = set(await table_names(ledger))
@@ -43,7 +34,6 @@ async def test_export_never_carries_credential_tables_or_secrets(ledger):
     payload = await export_json(ledger)
     assert set(payload["tables"]) & SECRET_TABLES == set()
     assert payload["money_unit"] == "paise"
-    assert "PRIVATE-SECRET-KEY" not in json.dumps(payload)
 
 
 async def test_csv_export_neutralizes_text_without_changing_json(ledger):

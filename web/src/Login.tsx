@@ -1,10 +1,11 @@
 import { useState, type FormEvent } from "react";
 import { errorMessage } from "./api";
-import { loginWithPasskey } from "./auth";
+import { login, type AuthState } from "./auth";
 import { Busy } from "./Loading";
 import { Orb } from "./Orb";
 
-export function Login({ onDone }: { onDone: () => void }) {
+export function Login({ state, onDone }: { state: AuthState; onDone: () => void }) {
+  const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -13,7 +14,7 @@ export function Login({ onDone }: { onDone: () => void }) {
     setBusy(true);
     setError(null);
     try {
-      await loginWithPasskey();
+      await login(passphrase);
       onDone();
     } catch (caught) {
       setError(errorMessage(caught));
@@ -30,25 +31,33 @@ export function Login({ onDone }: { onDone: () => void }) {
           Arno
         </div>
         <h1>Sign in</h1>
-        <p className="muted">This instance is behind one passkey. There is no password.</p>
-        <p className="fine">
-          Lost the passkey? Run <code>arno passkeys</code> on the host.
-        </p>
-        {error && (
-          <p className="error" role="alert">
-            {error}
+        {state.passphrase_enabled ? (
+          <>
+            <label>
+              Passphrase
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={passphrase}
+                onChange={(event) => setPassphrase(event.target.value)}
+                required
+              />
+            </label>
+            {error && (
+              <p className="error" role="alert">
+                {error}
+              </p>
+            )}
+            <button type="submit" disabled={busy || !passphrase}>
+              {busy ? <Busy /> : "Sign in"}
+            </button>
+          </>
+        ) : (
+          <p className="muted">
+            Open Arno through your Tailscale address while signed in to the owner account. Nothing
+            here can be unlocked from this browser.
           </p>
         )}
-        <button type="submit" disabled={busy}>
-          {busy ? (
-            <>
-              <Busy />
-              Waiting for your passkey…
-            </>
-          ) : (
-            "Sign in with a passkey"
-          )}
-        </button>
       </form>
     </main>
   );

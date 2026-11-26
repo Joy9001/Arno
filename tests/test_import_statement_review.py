@@ -8,7 +8,7 @@ import pytest
 
 from arno.importers.checks import check_statement
 from arno.importers.commit import commit_import, undo_import
-from arno.importers.monty import normalize_accounts
+from arno.importers.extract import ExtractedRow, ExtractedStatement, _parsed
 from arno.importers.periods import ledger_opening
 from arno.importers.pipeline import import_payload
 from arno.importers.rules import payee_key, pending_rows
@@ -222,27 +222,20 @@ def test_a_rail_token_counterparty_falls_back_to_the_narration():
     assert payee_key("DR", None) == ""
 
 
-def test_the_parser_helper_drops_a_rail_token_counterparty():
-    accounts, reason = normalize_accounts(
-        {
-            "accounts": [
-                {
-                    "name": "HDFC",
-                    "rows": [
-                        {
-                            "date": "2026-10-05",
-                            "description": "UPI/DR/555000111222/BIGBASKET GURGAON",
-                            "debit": 45000,
-                            "credit": 0,
-                            "counterparty": "DR",
-                        }
-                    ],
-                }
+def test_extraction_drops_a_rail_token_counterparty():
+    parsed = _parsed(
+        ExtractedStatement(
+            rows=[
+                ExtractedRow(
+                    date="2026-10-05",
+                    description="UPI/DR/555000111222/BIGBASKET GURGAON",
+                    debit=45000,
+                    counterparty="DR",
+                )
             ]
-        }
+        )
     )
-    assert reason is None
-    assert accounts[0]["rows"][0]["counterparty"] is None
+    assert parsed["rows"][0]["counterparty"] is None
 
 
 async def test_a_rail_token_counterparty_creates_no_payee_and_no_rule_key(ledger):

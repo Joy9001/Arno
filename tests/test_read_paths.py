@@ -589,7 +589,7 @@ async def test_a_known_sum_with_a_gap_is_not_unknown(ledger):
     assert empty["coverage"]["complete"] is False
 
 
-async def test_recap_routes_serve_the_badge_and_the_rows_behind_a_figure(authed_client, ledger):
+async def test_recap_routes_serve_the_badge_and_the_rows_behind_a_figure(session_client, ledger):
     bank = (await create_account(ledger, kind="bank", name="Route bank", opening_balance_paise=0))[
         "id"
     ]
@@ -603,10 +603,10 @@ async def test_recap_routes_serve_the_badge_and_the_rows_behind_a_figure(authed_
         date=date(2026, 10, 7),
     )
 
-    listed = authed_client.get("/api/recaps")
+    listed = session_client.get("/api/recaps")
     assert listed.status_code == 200, listed.text
-    assert listed.json()["unseen"] == authed_client.get("/api/recaps/unseen").json()["unseen"]
-    rows = authed_client.get("/api/recaps/month-2026-10/rows", params={"story": "total"})
+    assert listed.json()["unseen"] == session_client.get("/api/recaps/unseen").json()["unseen"]
+    rows = session_client.get("/api/recaps/month-2026-10/rows", params={"story": "total"})
     assert rows.status_code == 200, rows.text
     assert rows.json()["sum"]["paise"] == -30_000
 
@@ -614,13 +614,7 @@ async def test_recap_routes_serve_the_badge_and_the_rows_behind_a_figure(authed_
 async def test_run_query_cannot_read_auth_or_secret_tables(ledger):
     import asyncpg
 
-    for sql in (
-        "SELECT count(*) FROM users",
-        "SELECT count(*) FROM sessions",
-        "SELECT count(*) FROM webauthn_credentials",
-        "SELECT count(*) FROM setup_tokens",
-        "SELECT count(*) FROM audit_log",
-    ):
+    for sql in ("SELECT count(*) FROM audit_log",):
         with pytest.raises(asyncpg.InsufficientPrivilegeError):
             await read_tools.run_query(sql)
     readable = await read_tools.run_query("SELECT count(*) AS n FROM v_spending")

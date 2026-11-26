@@ -8,12 +8,12 @@ their date are listed as "logged but not on the statement".
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any
 
 from arno.db.conn import Connection
 from arno.importers.identifiers import find_upi_ref, scrub
-from arno.ledger.audit import new_id
 
 CREDIT_KINDS = ("refund", "transfer", "income")
 DUPLICATE_REASON = "content hash already imported"
@@ -48,9 +48,17 @@ async def insert_lines(
     parsed_account: dict[str, Any],
 ) -> list[dict[str, Any]]:
     own_last4 = {account["last4"]} if account.get("last4") else set()
-    inserted: list[dict[str, Any]] = []
+    rows = parsed_account.get("rows") or []
+    if not rows:
+        return []
+    # Ids from one instant do not sort in insertion order, so the parser's own row order is
+    # stored beside the line. The gate's replay and the transfer suggestions read it.
+    ids = await conn.fetch(
+        "SELECT pgledger_generate_id('stl') AS id FROM generate_series(1, $1)", len(rows)
+    )
+    batch: list[dict[str, Any]] = []
     seen: dict[str, int] = {}
-    for index, row in enumerate(parsed_account.get("rows") or []):
+    for index, row in enumerate(rows):
         debit = int(row.get("debit") or 0)
         credit = int(row.get("credit") or 0)
         amount = credit - debit
@@ -67,72 +75,100 @@ async def insert_lines(
         seen[digest] = occurrence + 1
         if occurrence:
             digest = content_hash(str(row["date"]), amount, f"{safe_raw or ''}#{occurrence}")
-        row_id = await new_id(conn, "stl")
-        # Ids from one instant do not sort in insertion order, so the parser's own row order is
-        # stored beside the line. The gate's replay and the transfer suggestions read it.
         detail: dict[str, Any] = {"identifier_hashes": sorted(hashes), "row": index}
         counterparty = str(row.get("counterparty") or "").strip()[:120]
         if counterparty:
             detail["counterparty"] = counterparty
-        created = await conn.fetchrow(
-            """
-            INSERT INTO statement_lines
-                (id, import_id, date, description_raw, amount_paise, debit_paise,
-                 credit_paise, balance_paise, upi_ref, content_hash, match_state,
-                 outside_text, match_detail)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'new', true, $11)
-            ON CONFLICT (import_id, content_hash) DO NOTHING
-            RETURNING *
-            """,
-            row_id,
-            import_id,
-            day,
-            safe_raw or "",
-            amount,
-            debit,
-            credit,
-            row.get("balance"),
-            upi_ref,
-            digest,
-            detail,
+        batch.append(
+            {
+                "id": ids[index]["id"],
+                "date": day.isoformat(),
+                "description_raw": safe_raw or "",
+                "amount_paise": amount,
+                "debit_paise": debit,
+                "credit_paise": credit,
+                "balance_paise": row.get("balance"),
+                "upi_ref": upi_ref,
+                "content_hash": digest,
+                "match_detail": detail,
+            }
         )
-        if created is not None:
-            inserted.append(dict(created))
-    return inserted
-
-
-async def _duplicate_exists(conn: Connection, line: dict[str, Any], account_id: str | None) -> bool:
-    """A row already imported for the same account. Another account keeps its own copy."""
-    row = await conn.fetchrow(
+    created = await conn.fetch(
         """
-        SELECT 1
-        FROM statement_lines sl
-        JOIN imports i ON i.id = sl.import_id
-        WHERE sl.content_hash = $1
-          AND sl.import_id <> $2
-          AND i.account_id IS NOT DISTINCT FROM $3
-          AND i.status IN ('committed', 'review')
-          AND sl.match_state NOT IN ('ignored')
-        LIMIT 1
+        INSERT INTO statement_lines
+            (id, import_id, date, description_raw, amount_paise, debit_paise,
+             credit_paise, balance_paise, upi_ref, content_hash, match_state,
+             outside_text, match_detail)
+        SELECT b.id, $1, b.date, b.description_raw, b.amount_paise, b.debit_paise,
+               b.credit_paise, b.balance_paise, b.upi_ref, b.content_hash, 'new', true,
+               b.match_detail
+        FROM jsonb_to_recordset($2::jsonb) AS b(
+            id text, date date, description_raw text, amount_paise bigint, debit_paise bigint,
+            credit_paise bigint, balance_paise bigint, upi_ref text, content_hash text,
+            match_detail jsonb
+        )
+        ON CONFLICT (import_id, content_hash) DO NOTHING
+        RETURNING *
         """,
-        line["content_hash"],
-        line["import_id"],
-        account_id,
+        import_id,
+        batch,
     )
-    return row is not None
+    return sorted(created, key=lambda line: line["match_detail"]["row"])
 
 
-async def _candidates(
-    conn: Connection,
-    *,
-    line: dict[str, Any],
-    account: dict[str, Any],
-    used: set[str],
-) -> list[dict[str, Any]]:
-    day = line["date"]
-    if not isinstance(day, date):
-        day = date.fromisoformat(str(day))
+@dataclass
+class _Ledger:
+    """What one import's lines match against, read once: no query per line."""
+
+    imported: set[str]
+    movements: list[dict[str, Any]]
+    claimed: dict[str, set[str]]
+    claim_of: dict[str, str] = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.claim_of = {line: m for m, lines in self.claimed.items() for line in lines}
+
+    def claim(self, line_id: str, state: str, movement_id: str | None) -> None:
+        """Follow a line's new state, so a later line sees what an earlier one took."""
+        old = self.claim_of.pop(line_id, None)
+        if old is not None:
+            self.claimed[old].discard(line_id)
+        if state in ("certain", "merged") and movement_id:
+            self.claimed.setdefault(movement_id, set()).add(line_id)
+            self.claim_of[line_id] = movement_id
+
+
+async def _preload(
+    conn: Connection, *, import_id: str, account: dict[str, Any], lines: list[dict[str, Any]]
+) -> _Ledger:
+    """Two bulk reads for the whole import, in place of two queries per line.
+
+    The first is the content hashes the account already holds in committed or review imports,
+    the second the effective movements on the account around the statement's dates, with the
+    UPI references, payee hashes, and claiming lines the match needs.
+    """
+    if not lines:
+        return _Ledger(imported=set(), movements=[], claimed={})
+    imported = {
+        str(row["content_hash"])
+        for row in await conn.fetch(
+            """
+            SELECT DISTINCT sl.content_hash
+            FROM statement_lines sl
+            JOIN imports i ON i.id = sl.import_id
+            WHERE sl.content_hash = ANY($1::text[])
+              AND sl.import_id <> $2
+              AND i.account_id IS NOT DISTINCT FROM $3
+              AND i.status IN ('committed', 'review')
+              AND sl.match_state NOT IN ('ignored')
+            """,
+            [line["content_hash"] for line in lines],
+            import_id,
+            account["id"],
+        )
+    }
     ledger_id = account["ledger_account_id"]
+    days = [_as_date(line["date"]) for line in lines]
     rows = await conn.fetch(
         """
         SELECT
@@ -143,61 +179,67 @@ async def _candidates(
             sum(
                 CASE
                     WHEN t.from_account_id = $1 THEN -t.amount
-                    WHEN t.to_account_id = $2 THEN t.amount
+                    WHEN t.to_account_id = $1 THEN t.amount
                     ELSE 0
                 END
-            )::bigint AS net_paise
+            )::bigint AS net_paise,
+            coalesce((
+                SELECT array_agg(c.upi_ref ORDER BY c.id) FROM captures c
+                WHERE c.movement_id = m.id AND c.upi_ref IS NOT NULL
+            ), '{}') AS upi_refs,
+            coalesce((
+                SELECT array_agg(DISTINCT p.match_hash)
+                FROM movement_legs l JOIN payees p ON p.id = l.payee_id
+                WHERE l.movement_id = m.id AND p.match_hash IS NOT NULL
+            ), '{}') AS match_hashes,
+            coalesce((
+                SELECT array_agg(sl.id) FROM statement_lines sl
+                JOIN imports i ON i.id = sl.import_id
+                WHERE sl.movement_id = m.id
+                  AND sl.match_state IN ('certain', 'merged')
+                  AND i.account_id = $4
+            ), '{}') AS claimed_by
         FROM movements m
         JOIN v_movement_state ms ON ms.movement_id = m.id
         JOIN movement_legs ml ON ml.movement_id = m.id
         JOIN pgledger_transfers t ON t.id = ml.transfer_id
         WHERE ms.is_effective
-          AND m.date BETWEEN $3 AND $4
-          AND (t.from_account_id = $5 OR t.to_account_id = $6)
-          AND NOT EXISTS (
-              SELECT 1 FROM statement_lines sl
-              JOIN imports i ON i.id = sl.import_id
-              WHERE sl.movement_id = m.id
-                AND sl.id <> $7
-                AND sl.match_state IN ('certain', 'merged')
-                AND i.account_id = $8
-          )
+          AND m.date BETWEEN $2 AND $3
+          AND (t.from_account_id = $1 OR t.to_account_id = $1)
         GROUP BY m.id, m.date, m.description, m.kind
         ORDER BY m.date, m.id
         """,
         ledger_id,
-        ledger_id,
-        day - timedelta(days=3),
-        day + timedelta(days=3),
-        ledger_id,
-        ledger_id,
-        line["id"],
+        min(days) - timedelta(days=3),
+        max(days) + timedelta(days=3),
         account["id"],
     )
+    return _Ledger(
+        imported=imported,
+        movements=rows,
+        claimed={str(row["id"]): set(row["claimed_by"]) for row in rows},
+    )
+
+
+def _as_date(day: Any) -> date:
+    return day if isinstance(day, date) else date.fromisoformat(str(day))
+
+
+def _candidates(pre: _Ledger, *, line: dict[str, Any], used: set[str]) -> list[dict[str, Any]]:
+    day = _as_date(line["date"])
     candidates: list[dict[str, Any]] = []
-    for row in rows:
-        if str(row["id"]) in used:
+    for row in pre.movements:
+        movement_id = str(row["id"])
+        if (
+            abs((row["date"] - day).days) > 3
+            or movement_id in used
+            or pre.claimed.get(movement_id, set()) - {line["id"]}
+        ):
             continue
-        captures = await conn.fetch(
-            "SELECT upi_ref FROM captures WHERE movement_id = $1 AND upi_ref IS NOT NULL",
-            row["id"],
-        )
-        upi_refs = [str(capture["upi_ref"]) for capture in captures]
-        payee_hashes = [
-            str(payee["match_hash"])
-            for payee in await conn.fetch(
-                """
-                SELECT DISTINCT p.match_hash
-                FROM movement_legs ml
-                JOIN payees p ON p.id = ml.payee_id
-                WHERE ml.movement_id = $1 AND p.match_hash IS NOT NULL
-                """,
-                row["id"],
-            )
-        ]
+        upi_refs = [str(ref) for ref in row["upi_refs"]]
         candidates.append(
             {
-                "movement_id": str(row["id"]),
+                "movement_id": movement_id,
                 "date": row["date"].isoformat(),
                 "description": row["description"],
                 "kind": row["kind"],
@@ -205,27 +247,21 @@ async def _candidates(
                 "net_paise": int(row["net_paise"]),
                 "upi_refs": upi_refs,
                 "upi_match": bool(line.get("upi_ref") and line["upi_ref"] in upi_refs),
-                "match_hashes": payee_hashes,
+                "match_hashes": [str(item) for item in row["match_hashes"]],
             }
         )
     return candidates
 
 
-async def _settle_line(
-    conn: Connection,
-    *,
-    line: dict[str, Any],
-    account: dict[str, Any],
-    used: set[str],
-) -> dict[str, Any]:
+def _settle_line(pre: _Ledger, *, line: dict[str, Any], used: set[str]) -> dict[str, Any]:
     """One line's match state: its detail, and the movement it matched, if any."""
-    if await _duplicate_exists(conn, line, account["id"]):
+    if line["content_hash"] in pre.imported:
         return {
             "state": "ignored",
             "movement_id": None,
             "detail": {"reason": DUPLICATE_REASON},
         }
-    candidates = await _candidates(conn, line=line, account=account, used=used)
+    candidates = _candidates(pre, line=line, used=used)
     want_debit = int(line["amount_paise"]) < 0
     line_hashes = set((line.get("match_detail") or {}).get("identifier_hashes") or [])
     exact = [
@@ -292,14 +328,26 @@ async def reconcile(
         "SELECT * FROM statement_lines WHERE import_id = $1 ORDER BY date, id",
         import_id,
     )
+    pre = await _preload(conn, import_id=import_id, account=account, lines=lines)
     used: set[str] = set()
     counts = {"new": 0, "certain": 0, "ambiguous": 0, "ignored": 0}
     ambiguous: list[dict[str, Any]] = []
+    matched_ids: set[str] = set()
+    updates: list[tuple[str, str, str | None, dict[str, Any]]] = []
 
     for line in lines:
-        settled = await _settle_line(conn, line=line, account=account, used=used)
+        settled = _settle_line(pre, line=line, used=used)
         state = settled["state"]
-        await _set_match(conn, line["id"], state, settled["movement_id"], settled["detail"])
+        updates.append((line["id"], state, settled["movement_id"], settled["detail"]))
+        pre.claim(line["id"], state, settled["movement_id"])
+        # What the lines now hold: the movement each one took, and every candidate any detail
+        # lists (a duplicate's detail keeps the candidates an earlier run stored).
+        if settled["movement_id"]:
+            matched_ids.add(str(settled["movement_id"]))
+        stored = {**(line.get("match_detail") or {}), **settled["detail"]}
+        for candidate in stored.get("candidates") or []:
+            if candidate.get("movement_id"):
+                matched_ids.add(str(candidate["movement_id"]))
         if state == "certain":
             used.add(settled["movement_id"])
             counts["certain"] += 1
@@ -318,16 +366,8 @@ async def reconcile(
             counts["ignored"] += 1
         else:
             counts["new"] += 1
+    await _set_matches(conn, updates)
 
-    lines = await conn.fetch(
-        "SELECT * FROM statement_lines WHERE import_id = $1 ORDER BY date, id",
-        import_id,
-    )
-    matched_ids = {str(line["movement_id"]) for line in lines if line.get("movement_id")}
-    for line in lines:
-        for candidate in (line.get("match_detail") or {}).get("candidates") or []:
-            if candidate.get("movement_id"):
-                matched_ids.add(str(candidate["movement_id"]))
     logged_not_on_statement = await _logged_not_on_statement(
         conn,
         account=account,
@@ -390,17 +430,21 @@ async def rematch_new_lines(conn: Connection, import_id: str) -> dict[str, int]:
                 import_id,
             )
         }
+        pre = await _preload(conn, import_id=import_id, account=account, lines=lines)
+        updates: list[tuple[str, str, str | None, dict[str, Any]]] = []
         for line in lines:
             if (line["match_detail"] or {}).get("resolved_by") == "user":
                 continue
-            settled = await _settle_line(conn, line=line, account=account, used=used)
+            settled = _settle_line(pre, line=line, used=used)
             state = settled["state"]
             if state == "new":
                 continue
             if settled["movement_id"]:
                 used.add(settled["movement_id"])
-            await _set_match(conn, line["id"], state, settled["movement_id"], settled["detail"])
+            updates.append((line["id"], state, settled["movement_id"], settled["detail"]))
+            pre.claim(line["id"], state, settled["movement_id"])
             counts[state] += 1
+        await _set_matches(conn, updates)
     if any(counts.values()):
         await _refresh_counts(conn, import_id)
     return counts
@@ -442,28 +486,27 @@ async def release_suppressed_duplicates(conn: Connection, *, account_id: str | N
             "SELECT * FROM statement_lines WHERE import_id = $1 ORDER BY date, id",
             import_id,
         )
+        # Read per import: the previous one's released rows now count as imported for this one.
+        pre = await _preload(conn, import_id=import_id, account=account, lines=lines)
         used = {str(line["movement_id"]) for line in lines if line.get("movement_id")}
-        changed = False
+        updates: list[tuple[str, str, str | None, dict[str, Any]]] = []
         for line in lines:
             if line["match_state"] != "ignored":
                 continue
             detail = line.get("match_detail") or {}
             if detail.get("resolved_by") or detail.get("reason") != DUPLICATE_REASON:
                 continue
-            settled = await _settle_line(conn, line=line, account=account, used=used)
+            settled = _settle_line(pre, line=line, used=used)
             if settled["state"] == "ignored":
                 continue
-            changed = True
             if settled["movement_id"]:
                 used.add(settled["movement_id"])
-            await _set_match(
-                conn,
-                line["id"],
-                settled["state"],
-                settled["movement_id"],
-                settled["detail"],
+            updates.append(
+                (line["id"], settled["state"], settled["movement_id"], settled["detail"])
             )
-        if changed:
+            pre.claim(line["id"], settled["state"], settled["movement_id"])
+        if updates:
+            await _set_matches(conn, updates)
             await _refresh_counts(conn, import_id)
             released.append(import_id)
     return released
@@ -496,25 +539,25 @@ async def _refresh_counts(conn: Connection, import_id: str) -> None:
     )
 
 
-async def _set_match(
-    conn: Connection,
-    line_id: str,
-    state: str,
-    movement_id: str | None,
-    detail: dict[str, Any],
+async def _set_matches(
+    conn: Connection, updates: list[tuple[str, str, str | None, dict[str, Any]]]
 ) -> None:
+    """Write many lines' match state, movement, and merged detail in one statement."""
+    if not updates:
+        return
     await conn.execute(
         """
-        UPDATE statement_lines
-        SET match_state = $1, movement_id = $2,
-            match_detail = coalesce(match_detail, '{}'::jsonb) || $3::jsonb,
+        UPDATE statement_lines sl
+        SET match_state = u.state, movement_id = u.movement_id,
+            match_detail = coalesce(sl.match_detail, '{}'::jsonb) || u.detail,
             updated_at = now()
-        WHERE id = $4
+        FROM jsonb_to_recordset($1::jsonb) AS u(id text, state text, movement_id text, detail jsonb)
+        WHERE sl.id = u.id
         """,
-        state,
-        movement_id,
-        detail,
-        line_id,
+        [
+            {"id": line_id, "state": state, "movement_id": movement_id, "detail": detail}
+            for line_id, state, movement_id, detail in updates
+        ],
     )
 
 
@@ -597,28 +640,25 @@ async def resolve_line(
     if line is None:
         raise ValueError("No such statement line")
     if resolution == "ignore":
-        await _set_match(conn, line_id, "ignored", None, {"resolved_by": "user"})
+        await _set_matches(conn, [(line_id, "ignored", None, {"resolved_by": "user"})])
     elif resolution == "new":
-        await _set_match(conn, line_id, "new", None, {"resolved_by": "user"})
+        await _set_matches(conn, [(line_id, "new", None, {"resolved_by": "user"})])
     elif resolution == "merge":
         if not movement_id:
             raise ValueError("merge needs a movement_id")
         candidate = await conn.fetchrow("SELECT id FROM movements WHERE id = $1", movement_id)
         if candidate is None:
             raise ValueError("No such movement")
-        await _set_match(conn, line_id, "certain", movement_id, {"resolved_by": "user"})
+        await _set_matches(conn, [(line_id, "certain", movement_id, {"resolved_by": "user"})])
     elif resolution == "confirm_transfer":
         if not (line["match_detail"] or {}).get("suggested_transfer_account_id"):
             raise ValueError("That line is not a suggested transfer")
         # A line the statement matched already has its record. Confirming the own-account move
         # keeps that record; dropping the match here would book a second transfer at commit and
         # the closing adjustment would hide the duplicate.
-        await _set_match(
-            conn,
-            line_id,
-            line["match_state"] if line.get("movement_id") else "new",
-            line["movement_id"],
-            {"transfer_confirmed": True},
+        state = line["match_state"] if line.get("movement_id") else "new"
+        await _set_matches(
+            conn, [(line_id, state, line["movement_id"], {"transfer_confirmed": True})]
         )
     elif resolution == "reject_transfer":
         # Rejecting the suggestion keeps whatever the statement already matched: only the

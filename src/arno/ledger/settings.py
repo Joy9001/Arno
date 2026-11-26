@@ -18,7 +18,6 @@ async def read_settings(conn: Connection) -> dict[str, Any]:
     row = await conn.fetchrow("SELECT * FROM settings WHERE id = 1")
     if row is None:  # pragma: no cover - migration 0003 inserts it
         raise InvalidLedgerError("The settings row is missing")
-    user = await conn.fetchrow("SELECT id, display_name FROM users ORDER BY created_at LIMIT 1")
     return {
         "base_currency": row["base_currency"],
         "time_zone": row["time_zone"],
@@ -29,10 +28,7 @@ async def read_settings(conn: Connection) -> dict[str, Any]:
         else str(row["notification_time"]),
         "weekly_briefing_dow": row["weekly_briefing_dow"],
         "reminder_lead_days": row["reminder_lead_days"],
-        "profile": {
-            "user_id": user["id"] if user else None,
-            "display_name": user["display_name"] if user else None,
-        },
+        "profile": {"display_name": row["display_name"]},
         "last_model_error_type": row["last_model_error_type"],
         "last_model_error_at": row["last_model_error_at"].isoformat()
         if row["last_model_error_at"]
@@ -80,7 +76,6 @@ async def update_settings(
             raise InvalidLedgerError("The notification time is HH:MM") from exc
 
     before = await conn.fetchrow_required("SELECT * FROM settings WHERE id = 1")
-    user_before = await conn.fetchrow("SELECT * FROM users ORDER BY created_at LIMIT 1")
     updates: dict[str, Any] = {}
     for key, value in {
         "floor_paise": floor_paise,
@@ -90,11 +85,12 @@ async def update_settings(
         "notification_time": parsed_time,
         "weekly_briefing_dow": weekly_briefing_dow,
         "reminder_lead_days": reminder_lead_days,
+        "display_name": display_name.strip() if display_name else None,
     }.items():
         if value is not None:
             updates[key] = value
 
-    if not updates and display_name is None:
+    if not updates:
         settings = await read_settings(conn)
         return settings | {"undo_id": None}
 
@@ -114,15 +110,6 @@ async def update_settings(
                 *[updates[column] for column in columns],
             )
             group.record_updated("settings", "1", before, after)
-        if display_name is not None:
-            if user_before is None:
-                raise InvalidLedgerError("There is no user profile yet")
-            user_after = await conn.fetchrow_required(
-                "UPDATE users SET display_name = $1 WHERE id = $2 RETURNING *",
-                display_name.strip(),
-                user_before["id"],
-            )
-            group.record_updated("users", user_before["id"], user_before, user_after)
     settings = await read_settings(conn)
     return settings | {"undo_id": group.group_id}
 

@@ -1,7 +1,8 @@
 # Legacy upgrades
 
 This guide owns one-time migration procedures for pre-0.3.0 installations: moving from the
-Fin-Agent project name and replacing the pre-0.3.0 superuser `app` database role. For routine
+Fin-Agent project name, replacing the pre-0.3.0 superuser `app` database role, and replacing passkey
+sign-in. For routine
 version updates and PostgreSQL major upgrades, see [self-hosting](self-hosting.md#update-arno).
 
 ---
@@ -45,15 +46,15 @@ Run this before any `docker compose up`, because starting the stack first initia
 database inside new volumes:
 
 ```bash
-for volume in db-data backup-data pre-migration-data tasks-data phoenix-data; do
+for volume in db-data backup-data pre-migration-data phoenix-data; do
   docker volume create "arno_$volume"
   docker run --rm -v "fin-agent_$volume:/from" -v "arno_$volume:/to" \
     alpine sh -c "cp -a /from/. /to/"
 done
 ```
 
-Those five volumes hold the ledger, local restic repository, pre-migration dumps, parser task
-records, and Phoenix traces. `cp -a` preserves file ownership, permissions, and timestamps so
+Those four volumes hold the ledger, local restic repository, pre-migration dumps, and Phoenix
+traces. `cp -a` preserves file ownership, permissions, and timestamps so
 PostgreSQL can read the copied cluster. The optional model cache (`ollama-data`) does not need copying; its profile re-downloads it.
 
 ### 5. Rename `.env` variables and the database path
@@ -89,9 +90,7 @@ docker compose exec api arno migrate
 ```
 
 Confirm `api` and `db` are healthy and `arno migrate` reports no pending
-migrations. Open Arno in your browser and sign in once on each device: the session cookie name
-changed from `fin_agent_session` to `arno_session`, while existing passkeys keep working because
-`ARNO_RP_ID` did not change.
+migrations. Then follow [replace passkey sign-in](#replace-passkey-sign-in).
 
 ### 8. Retire the old volumes
 
@@ -100,7 +99,7 @@ volumes:
 
 ```bash
 docker volume rm fin-agent_db-data fin-agent_backup-data fin-agent_pre-migration-data \
-  fin-agent_tasks-data fin-agent_phoenix-data
+  fin-agent_phoenix-data
 ```
 
 Backups created before the rename continue to restore unchanged; see
@@ -125,3 +124,22 @@ you to restore a backup into a fresh database volume. The supported path is:
    `docker compose logs api`.
 
 Keep the old volume until the restored instance answers real questions cleanly.
+
+---
+
+## Replace passkey sign-in
+
+Installs that registered passkeys, and later versions that dropped them, authenticate with your
+Tailscale login or an optional passphrase instead. Migrations `0046` through `0050` run on the next
+`arno migrate`. They drop the passkey, session, job queue, parser, and categorizer-run tables and
+delete the shipped seed category rules. Your ledger, your own category rules, and the rules the
+model learned stay, and your display name moves to settings. Do this before you open Arno:
+
+1. In `.env`, set `ARNO_OWNER_EMAIL` to your Tailscale login, set `ARNO_PASSPHRASE`, or set both.
+   With neither set, every protected route returns `401`.
+2. Remove the `ARNO_RP_ID` and `ARNO_RP_ORIGIN` lines. Arno ignores them.
+3. Optionally set `ARNO_NOTIFY_WEBHOOK_URL` to receive each inbox item as a message. Browser push
+   subscriptions are gone.
+4. Recreate `api` with `docker compose up -d api`.
+
+See [self-hosting](self-hosting.md) for each variable.

@@ -166,37 +166,6 @@ async def test_a_known_card_bill_still_carries_its_amount(ledger):
     assert due[0]["note"] is None
 
 
-async def test_the_briefing_lists_an_unknown_bill_and_keeps_it_out_of_the_total(ledger):
-    from arno.jobs.briefing import compose_briefing
-
-    food = await _category(ledger, "Food & Dining")
-    unknown = await create_account(
-        ledger,
-        kind="card",
-        name="Briefing card",
-        credit_limit_paise=10_000_000,
-        statement_day=25,
-        due_day=5,
-    )
-    await record_expense(
-        ledger,
-        account_id=unknown["id"],
-        amount_paise=300_000,
-        description="Dinner",
-        category_id=food,
-        date=date(2026, 10, 20),
-    )
-
-    payload = await compose_briefing(ledger, as_of=date(2026, 11, 1))
-    bills = payload["numbers"]["bills"]
-
-    assert bills["count"] == 1
-    assert bills["unknown_count"] == 1
-    assert bills["total_paise"] == 0
-    assert bills["items"][0]["amount"] is None
-    assert "1 with an unknown amount" in payload["template"]
-
-
 # --- next_date is not a paid occurrence (e4 F3) -------------------------------------------------
 
 

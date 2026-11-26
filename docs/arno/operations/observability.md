@@ -17,7 +17,7 @@ The following table lists the services that matter for tracing and their host bi
 
 | Service | Role | Host access |
 |---|---|---|
-| `api` | FastAPI server, agent, backup, and job loop; exports native spans to Phoenix when tracing is on | `127.0.0.1:8000` |
+| `api` | FastAPI server, agent, backup, and minute loop; exports native spans to Phoenix when tracing is on | `127.0.0.1:8000` |
 | `db` | PostgreSQL 18 cluster hosting the `arno` database | `127.0.0.1:5433` |
 | `phoenix` | Optional trace backend and UI (`obs` profile): stock `arizephoenix/phoenix:21.0`, pinned by digest | `127.0.0.1:6006` |
 
@@ -61,17 +61,19 @@ The FastAPI lifespan calls `shutdown_observability()` on shutdown to flush queue
   cancelled, or approval-pending runs omit `output.value`. Nothing redacts `input.value`, so a
   credential typed into chat appears in the trace; Phoenix stays loopback-only.
 - **Attribution and approval counts:** Outside the content switch, `RootSpanIO` sets `user.id` (the
-  signed-in passkey principal's opaque `users.id` in web chat, or `local-user` in scheduled runs) plus numeric `arno.approvals.offered` and `arno.approvals.approved` tap counts.
-  `InferenceContext` in `src/arno/agent/capabilities.py` sets `session.id`,
-  `gen_ai.conversation.id`, and `arno.cost.workload`.
+  owner's Tailscale login in web chat when present, or `local-user` otherwise) plus numeric
+  `arno.approvals.offered` and `arno.approvals.approved` tap counts. `InferenceContext` in
+  `src/arno/agent/capabilities.py` sets `session.id`, `gen_ai.conversation.id`, and
+  `arno.cost.workload`.
 - **Span status:** Follows Pydantic AI's native status: successful runs stay `UNSET`, and failed or
   cancelled runs report `ERROR`.
 - **Cost:** Spans carry no Arno cost data. Stock Phoenix prices spans from its own model catalog, so
   its cost totals are indicative. The `llm_usage` table is the source of truth for cost and the
   daily cap.
-- **Scope and fail-open behavior:** Jobs, imports, and notifications emit no custom spans. A
-  Phoenix outage or invalid bearer token fails trace export only; Arno continues serving requests.
-  SQL spans include statement text, so they carry financial data like the rest of the trace.
+- **Scope and fail-open behavior:** Background tasks, imports, and notifications emit no custom
+  spans. A Phoenix outage or invalid bearer token fails trace export only; Arno continues serving
+  requests. SQL spans include statement text, so they carry financial data like the rest of the
+  trace.
 - **Kill switch:** Setting `OTEL_SDK_DISABLED=true` installs no provider and no
   instrumentation.
 
@@ -127,8 +129,7 @@ docker compose logs --tail=100 api
 docker compose logs -f api
 ```
 
-Arno uses no central log store or log-trace correlation field. The first-run enrollment link prints
-to local stdout only; read it from a trusted host terminal.
+Arno uses no central log store or log-trace correlation field. 
 
 ---
 

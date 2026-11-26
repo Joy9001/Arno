@@ -1,1 +1,1 @@
-"""Statement import: readers, Monty parse runs, checks, reconciliation, and commit."""
+"""Statement import: host readers, extraction checks, reconciliation, and commit."""

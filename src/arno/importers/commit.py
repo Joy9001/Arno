@@ -1,6 +1,6 @@
-"""Commit a verified import: write movements, save the layout, adjust the closing balance.
+"""Commit a verified import: write movements and adjust the closing balance.
 
-Nothing is written before the review screen. The parser is saved only after a commit. Commit
+Nothing is written before the review screen. Commit
 groups are recorded, so undoing the import reverses every movement it wrote.
 
 A statement also says what the balance was on its first day, so the commit books that opening
@@ -17,21 +17,17 @@ from datetime import date
 from typing import Any, cast
 
 from arno.db.conn import Connection
-from arno.importers.balance_plan import (
-    apply_balances,
-    resolve_balance_window,
-    restore_account_balance,
-    stated_balance_conflict,
-    stated_balance_reason,
-)
+from arno.importers.balance_plan import plan_balances, restore_account_balance
+from arno.importers.baselines import handle_recompute_baselines
+from arno.importers.categorize import handle_categorize_import
 from arno.importers.checks import opening_is_evidenced
-from arno.importers.layouts import save_version
 from arno.importers.reconcile import (
     credit_decision_required,
     release_suppressed_duplicates,
     rematch_new_lines,
 )
-from arno.jobs.runner import enqueue_job
+from arno.jobs.background import spawn
+from arno.jobs.patterns import handle_pattern_detection
 from arno.ledger import movements as movements_mod
 from arno.ledger.audit import undo_group, write_group
 from arno.ledger.errors import ConflictLedgerError, InvalidLedgerError
@@ -265,12 +261,17 @@ async def commit_import(
     """
     rematched = await rematch_new_lines(conn, import_id)
     async with conn.transaction():
-        return await _commit(
+        result = await _commit(
             conn,
             import_id,
             adjustment_confirmed=adjustment_confirmed,
             rematched=rematched,
         )
+    if "already" not in result:
+        spawn(handle_categorize_import(import_id), name=f"categorize-{import_id}")
+        spawn(handle_recompute_baselines(), name=f"baselines-{import_id}")
+        spawn(handle_pattern_detection(), name=f"patterns-{import_id}")
+    return result
 
 
 async def lock_account_and_import(conn: Connection, import_id: str) -> dict[str, Any] | None:
@@ -287,7 +288,7 @@ async def lock_account_and_import(conn: Connection, import_id: str) -> dict[str,
     if row is None:
         return None
     if row["account_id"] is not None and row["account_id"] != account_id:
-        # A parser re-bound the import while this waited for its row: take that gate too.
+        # An extraction re-bound the import while this waited for its row: take that gate too.
         await conn.fetchval("SELECT id FROM accounts WHERE id = $1 FOR UPDATE", row["account_id"])
     return row
 
@@ -429,26 +430,6 @@ async def _commit(
             details={"invalid_credit_sources": invalid_sources},
         )
     group_ids = [str(group) for group in (row["commit_groups"] or [])]
-    window = resolve_balance_window(row, lines)
-    period_start = window.period_start
-    period_end = window.period_end
-    closing = window.closing
-    conflict = await stated_balance_conflict(
-        conn,
-        account=account,
-        check=check,
-        lines=lines,
-        period_start=period_start,
-        period_end=period_end,
-    )
-    # The statement is bank evidence for every day it covers, so a stated balance on one of those
-    # days is replaced. Never silently: the review says both figures, and this gate needs its yes.
-    if conflict is not None and not adjustment_confirmed:
-        stated, shown = conflict
-        raise ConflictLedgerError(
-            stated_balance_reason(stated, account["statement_balance_as_of"], shown),
-            details={"stated_balance_paise": stated, "statement_balance_paise": shown},
-        )
     committed_lines = 0
     for line in lines:
         if line["match_state"] == "ignored":
@@ -522,16 +503,18 @@ async def _commit(
         )
         committed_lines += 1
 
-    outcome, balance_review = await apply_balances(
+    booked = await plan_balances(
         conn,
         account=account,
-        check=check,
-        period_start=period_start,
-        period_end=period_end,
-        closing=closing,
+        row=row,
+        lines=lines,
+        book=True,
         adjustment_confirmed=adjustment_confirmed,
     )
-    group_ids.extend(outcome.groups)
+    balance_review = booked.review
+    closing = booked.closing
+    period_end = booked.period_end
+    group_ids.extend(booked.groups)
 
     async with conn.transaction():
         if balance_review["statement_updated"]:
@@ -547,55 +530,28 @@ async def _commit(
                 period_end,
                 account["id"],
             )
-        layout = None
-        fingerprint = row["fingerprint"]
-        parser = row["parser"]
-        if parser:
-            layout = await save_version(
-                conn,
-                institution=account["institution"] or account["name"],
-                kind=account["kind"],
-                fingerprint=fingerprint,
-                parser=parser,
-                source_import_id=import_id,
-            )
         review = {**(row["review"] or {}), **balance_review}
         await conn.execute(
             """
             UPDATE imports
             SET status = 'committed', committed_at = now(), commit_groups = $1,
-                review = $2, layout_id = $3
-            WHERE id = $4
+                review = $2
+            WHERE id = $3
             """,
             group_ids,
             review,
-            layout["id"] if layout else None,
             import_id,
         )
-        await enqueue_job(
-            conn,
-            key=f"baselines:{date.today().isoformat()}:import:{import_id}",
-            kind="recompute_baselines",
-            payload={"day": date.today().isoformat()},
-        )
-        await enqueue_job(
-            conn,
-            key=f"pattern_detection:{date.today().isoformat()}:import:{import_id}",
-            kind="pattern_detection",
-            payload={"day": date.today().isoformat(), "import_id": import_id},
-        )
-        await enqueue_job(
-            conn,
-            key=f"categorize_import:{import_id}",
-            kind="categorize_import",
-            payload={"import_id": import_id},
+        await conn.execute(
+            "UPDATE imports SET categorize = $1 WHERE id = $2",
+            {"state": "queued"},
+            import_id,
         )
     result = {
         "status": "committed",
         "import_id": import_id,
         "rows": committed_lines,
         "adjustment_paise": await _pending_adjustment(conn, import_id),
-        "layout_id": layout["id"] if layout else None,
     }
     return result
 
@@ -624,7 +580,9 @@ async def _pending_adjustment(conn: Connection, import_id: str) -> int | None:
 async def undo_import(conn: Connection, import_id: str) -> dict[str, Any]:
     """Undo a committed import. One transaction: a conflicting group cannot half-revert it."""
     async with conn.transaction():
-        return await _undo(conn, import_id)
+        result = await _undo(conn, import_id)
+    spawn(handle_recompute_baselines(), name=f"baselines-{import_id}")
+    return result
 
 
 async def _undo(conn: Connection, import_id: str) -> dict[str, Any]:
@@ -681,13 +639,6 @@ async def _undo(conn: Connection, import_id: str) -> dict[str, Any]:
         )
         # This import's rows no longer count as duplicates, so a waiting statement keeps its own.
         await release_suppressed_duplicates(conn, account_id=row["account_id"])
-
-        await enqueue_job(
-            conn,
-            key=f"baselines:{date.today().isoformat()}:undo:{import_id}",
-            kind="recompute_baselines",
-            payload={"day": date.today().isoformat()},
-        )
     return {"status": "undone", "import_id": import_id}
 
 

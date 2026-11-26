@@ -6,7 +6,6 @@ import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
 
 # Installed console commands need the runtime workspace, rather than site-packages.
 REPO_ROOT = Path(os.environ.get("ARNO_REPO_ROOT") or Path(__file__).resolve().parents[2]).resolve()
@@ -61,25 +60,20 @@ def _validate_postgres_dsn(dsn: str) -> None:
 class Settings:
     database_url: str
     web_dir: Path
-    rp_id: str
-    rp_origin: str
-    rp_name: str
     trusted_hosts: tuple[str, ...]
     cookie_secure: bool
     session_ttl_days: int
-    setup_token_ttl_hours: int
+    owner_email: str | None
+    passphrase: str | None
+    sandbox_subnet: str | None
     auto_migrate: bool
     jobs_enabled: bool
     agent_ro_password: str | None
     backup_password: str | None
     pre_migration_dir: Path
-    vapid_subject: str = "mailto:arno@localhost"
+    notify_webhook_url: str | None = None
     sandbox_url: str = "http://sandbox:8001"
     brave_api_key: str | None = None
-
-    @property
-    def cookie_name(self) -> str:
-        return "arno_session"
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -93,23 +87,6 @@ class Settings:
         except Exception as exc:  # noqa: BLE001 - normalize driver errors
             raise ConfigurationError(f"DATABASE_URL is not a valid libpq URI: {exc}") from exc
 
-        rp_id = os.environ.get("ARNO_RP_ID", "localhost").strip()
-        if not rp_id:
-            raise ConfigurationError("ARNO_RP_ID must be a hostname such as box.tailnet.ts.net")
-        rp_origin = os.environ.get("ARNO_RP_ORIGIN", f"http://{rp_id}:8000").strip().rstrip("/")
-        parsed_origin = urlsplit(rp_origin)
-        if (
-            parsed_origin.scheme not in {"http", "https"}
-            or not parsed_origin.hostname
-            or parsed_origin.path
-            or parsed_origin.query
-            or parsed_origin.fragment
-        ):
-            raise ConfigurationError(
-                "ARNO_RP_ORIGIN must be an origin such as https://box.tailnet.ts.net, "
-                "with no path, query, or fragment"
-            )
-
         hosts = os.environ.get("ARNO_TRUSTED_HOSTS")
         trusted_hosts = (
             tuple(h.strip() for h in hosts.split(",") if h.strip())
@@ -122,13 +99,12 @@ class Settings:
         return cls(
             database_url=database_url,
             web_dir=web_dir,
-            rp_id=rp_id,
-            rp_origin=rp_origin,
-            rp_name=os.environ.get("ARNO_RP_NAME", "Arno").strip(),
             trusted_hosts=trusted_hosts,
-            cookie_secure=_flag("ARNO_COOKIE_SECURE", rp_origin.startswith("https://")),
+            cookie_secure=_flag("ARNO_COOKIE_SECURE", True),
             session_ttl_days=_positive_int("ARNO_SESSION_TTL_DAYS", 30),
-            setup_token_ttl_hours=_positive_int("ARNO_SETUP_TOKEN_TTL_HOURS", 24),
+            owner_email=os.environ.get("ARNO_OWNER_EMAIL", "").strip().lower() or None,
+            passphrase=os.environ.get("ARNO_PASSPHRASE") or None,
+            sandbox_subnet=os.environ.get("ARNO_SANDBOX_SUBNET", "").strip() or None,
             auto_migrate=_flag("ARNO_AUTO_MIGRATE", True),
             jobs_enabled=_flag("ARNO_JOBS_ENABLED", True),
             agent_ro_password=os.environ.get("AGENT_RO_PASSWORD") or None,
@@ -139,7 +115,7 @@ class Settings:
                     Path(tempfile.gettempdir()) / "arno-pre-migration",
                 )
             ),
-            vapid_subject=os.environ.get("ARNO_VAPID_SUBJECT", "mailto:arno@localhost").strip(),
+            notify_webhook_url=os.environ.get("ARNO_NOTIFY_WEBHOOK_URL", "").strip() or None,
             sandbox_url=os.environ.get("ARNO_SANDBOX_URL", "http://sandbox:8001")
             .strip()
             .rstrip("/"),

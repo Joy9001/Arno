@@ -1,7 +1,7 @@
 """The rules engine: match a statement payee to a category before any model is asked.
 
-A rule is `equals`, `contains`, or a regex. Your rules beat the model's, which beat the seed list;
-inside one source a higher priority wins, then a longer pattern. Indian payment-rail tokens and
+A rule is `equals`, `contains`, or a regex. Your rules beat the model's; inside one source a
+higher priority wins, then a longer pattern. Indian payment-rail tokens and
 reference numbers are stripped from a narration first, and a parser's own `counterparty` is
 preferred. A credit that reverses an earlier debit within 60 days takes that purchase's category.
 """
@@ -13,11 +13,11 @@ from datetime import timedelta
 from typing import Any
 
 from arno.db.conn import Connection
-from arno.importers.seed_rules import PAYMENT_APPS
 from arno.ledger.audit import WriteGroup, write_group
 from arno.ledger.payees import is_placeholder_name
 
-SOURCE_RANK = {"user": 3, "llm": 2, "seed": 1}
+SOURCE_RANK = {"user": 2, "llm": 1}
+PAYMENT_APPS = ("one97", "paytm", "phonepe", "google pay", "gpay", "amazon pay", "razorpay")
 RAILS = ("upi/dr", "upi/cr", "upi", "neft", "imps", "rtgs", "pos", "nach", "wdl tfr", "atm wdl")
 _RAIL_RE = re.compile(
     r"\b(?:" + "|".join(re.escape(token) for token in RAILS).replace(r"\ ", r"\s*") + r")\b",
@@ -71,11 +71,9 @@ def _clean_key(text: str) -> str:
 
 
 def is_payment_app(key: str) -> bool:
-    """True when the payee is an app that fronts anything, so a name match would be wrong."""
+    """True when the payee is an app that fronts anything, so a name-only rule would be wrong."""
     text = normalize_pattern(key)
-    if any(name in text for name in PAYMENT_APPS if name != "cred"):
-        return True
-    return _CRED_RE.search(text) is not None
+    return any(name in text for name in PAYMENT_APPS) or _CRED_RE.search(text) is not None
 
 
 async def load_rules(conn: Connection) -> list[dict[str, Any]]:
@@ -112,7 +110,7 @@ def match_rule(
     *,
     sources: tuple[str, ...] | None = None,
 ) -> dict[str, Any] | None:
-    """The best rule for a payee key, or None. Seed rules never match a payment app by name."""
+    """The best rule for a payee key, or None."""
     key = normalize_pattern(text)
     if not key:
         return None
@@ -122,8 +120,6 @@ def match_rule(
     for rule in rules:
         source = str(rule["source"])
         if source not in allowed:
-            continue
-        if source == "seed" and is_payment_app(key):
             continue
         if not _rule_matches(rule, key):
             continue
@@ -198,7 +194,7 @@ async def lock_import(conn: Connection, import_id: str) -> None:
     await conn.fetchval("SELECT id FROM imports WHERE id = $1 FOR UPDATE", import_id)
 
 
-async def _label(
+async def label(
     conn: Connection,
     group: WriteGroup,
     movement_id: str,
@@ -242,85 +238,6 @@ async def _label(
     if after is not None and dict(after) != dict(before):
         group.record_updated("movements", movement_id, dict(before), dict(after))
     return True
-
-
-async def apply_categorization_answers(
-    conn: Connection,
-    *,
-    import_id: str,
-    answers: dict[str, tuple[str | None, str | None]],
-    categories: dict[str, tuple[str, str]],
-    distrust: set[str] | None = None,
-) -> dict[str, Any]:
-    """One write group: label trusted answers, write llm rules, hint on the rest.
-
-    The import's row lock comes first, as it does in undo, and the rows are read under it: a save
-    that waited for an undo finds nothing left to label. A user rule that wins the upsert supplies
-    the category actually used, so the movement never keeps the answer it overrode.
-    """
-    # Imported here: categories imports this module for rule matching at import time.
-    from arno.ledger.categories import upsert_rule_in_group
-
-    distrusted = distrust or set()
-    rules_written = 0
-    labeled = 0
-    uncategorized = 0
-    async with write_group(conn, actor="agent") as group:
-        await lock_import(conn, import_id)
-        pending = await pending_rows(conn, import_id)
-        for key, (category, reason) in answers.items():
-            movement_ids = pending.get(key)
-            if not movement_ids:
-                continue
-            chosen = categories.get(normalize_pattern(category or ""))
-            category_id, category_name = chosen if chosen else (None, None)
-            trusted = key not in distrusted and category_id is not None and category_name != "Other"
-            if trusted:
-                rule = await upsert_rule_in_group(
-                    conn,
-                    group,
-                    pattern=key,
-                    category_id=str(category_id),
-                    source="llm",
-                )
-                for movement_id in movement_ids:
-                    if await _label(
-                        conn,
-                        group,
-                        movement_id,
-                        str(rule["category_id"]),
-                        str(rule["id"]),
-                    ):
-                        labeled += 1
-                rules_written += 1
-                continue
-            hint = {
-                "category_id": str(category_id) if category_id else None,
-                "reason": (reason or "").strip() or None,
-            }
-            for movement_id in movement_ids:
-                before = await conn.fetchrow("SELECT * FROM movements WHERE id = $1", movement_id)
-                if before is None:
-                    continue
-                await conn.execute(
-                    "UPDATE movements SET category_hint = $1 WHERE id = $2",
-                    hint,
-                    movement_id,
-                )
-                after = await conn.fetchrow_required(
-                    "SELECT * FROM movements WHERE id = $1", movement_id
-                )
-                if dict(after) != dict(before):
-                    group.record_updated("movements", movement_id, dict(before), dict(after))
-                uncategorized += 1
-        if group.entries:
-            await record_categorize_group(conn, import_id=import_id, group_id=group.group_id)
-    return {
-        "undo_id": group.group_id,
-        "labeled": labeled,
-        "uncategorized": uncategorized,
-        "rules": rules_written,
-    }
 
 
 async def _refund_source(
@@ -383,7 +300,7 @@ async def apply_rules(conn: Connection, import_id: str) -> dict[str, int]:
             rule = match_rule(key, rules)
             if rule is None:
                 continue
-            if not await _label(
+            if not await label(
                 conn, group, str(row["movement_id"]), str(rule["category_id"]), str(rule["id"])
             ):
                 continue
@@ -402,7 +319,7 @@ async def apply_rules(conn: Connection, import_id: str) -> dict[str, int]:
             source = await _refund_source(conn, row=row, key=key, amount=int(row["amount_paise"]))
             if source is None:
                 continue
-            if not await _label(
+            if not await label(
                 conn,
                 group,
                 str(row["movement_id"]),
@@ -416,46 +333,29 @@ async def apply_rules(conn: Connection, import_id: str) -> dict[str, int]:
     return {"labeled": labeled, "rows": len(rows)}
 
 
-def _group_payees(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+async def pending_payees(conn: Connection, import_id: str) -> list[dict[str, Any]]:
+    """Uncategorized payees in this import: key, count, total, a sample narration, direction."""
     groups: dict[str, dict[str, Any]] = {}
-    for row in rows:
+    for row in await _import_rows(conn, import_id):
         key = row_key(row)
-        if not key:
+        if row["category_id"] is not None or not key:
             continue
         amount = abs(int(row["amount_paise"]))
-        entry = groups.get(key)
-        if entry is None:
-            groups[key] = {
+        entry = groups.setdefault(
+            key,
+            {
                 "key": key,
-                "count": 1,
-                "total_paise": amount,
+                "count": 0,
+                "total_paise": 0,
                 "narration": str(row["description_raw"])[:200],
                 "direction": "credit" if int(row["amount_paise"]) > 0 else "debit",
-                "category_id": row["category_id"],
-            }
-        else:
-            entry["count"] += 1
-            entry["total_paise"] += amount
+            },
+        )
+        entry["count"] += 1
+        entry["total_paise"] += amount
     return sorted(
-        groups.values(),
-        key=lambda item: (-item["count"], -item["total_paise"], item["key"]),
+        groups.values(), key=lambda item: (-item["count"], -item["total_paise"], item["key"])
     )
-
-
-async def pending_payees(conn: Connection, import_id: str) -> list[dict[str, Any]]:
-    """Uncategorized payees in this import, most frequent first."""
-    rows = [row for row in await _import_rows(conn, import_id) if row["category_id"] is None]
-    return [
-        {key: value for key, value in group.items() if key != "category_id"}
-        for group in _group_payees(rows)
-    ]
-
-
-async def payee_samples(conn: Connection, import_id: str, keys: list[str]) -> list[dict[str, Any]]:
-    """Sample narration and amount for any payee keys, including rows a rule covers."""
-    wanted = {normalize_pattern(key) for key in keys}
-    groups = _group_payees(await _import_rows(conn, import_id))
-    return [group for group in groups if group["key"] in wanted]
 
 
 async def pending_rows(conn: Connection, import_id: str) -> dict[str, list[str]]:
@@ -468,65 +368,3 @@ async def pending_rows(conn: Connection, import_id: str) -> dict[str, list[str]]
         if key:
             groups.setdefault(key, []).append(str(row["movement_id"]))
     return groups
-
-
-async def check_payees(
-    conn: Connection, import_id: str, count: int
-) -> tuple[list[dict[str, str]], dict[str, str]]:
-    """Payees a rule already covers, without their category, for measuring agreement."""
-    rows = await conn.fetch(
-        """
-        SELECT sl.description_raw, sl.match_detail, label.category_id, label.category_name,
-               payee.display_name AS payee_name
-        FROM statement_lines sl
-        JOIN movements m ON m.id = sl.movement_id
-        JOIN v_movement_state ms ON ms.movement_id = m.id
-        JOIN LATERAL (
-            SELECT ml.category_id, c.name AS category_name
-            FROM movement_legs ml
-            JOIN categories c ON c.id = ml.category_id
-            WHERE ml.movement_id = m.id AND ml.category_id IS NOT NULL
-            LIMIT 1
-        ) label ON true
-        LEFT JOIN LATERAL (
-            SELECT p.display_name
-            FROM movement_legs ml
-            JOIN payees p ON p.id = ml.payee_id
-            WHERE ml.movement_id = m.id
-            LIMIT 1
-        ) payee ON true
-        WHERE sl.import_id = $1 AND sl.match_state = 'merged' AND ms.is_effective
-        ORDER BY sl.date, sl.id
-        """,
-        import_id,
-    )
-    samples: list[dict[str, str]] = []
-    known: dict[str, str] = {}
-    seen: set[str] = set()
-    for row in rows:
-        if len(samples) >= max(0, count):
-            break
-        detail = dict(row)
-        key = payee_key(detail.get("description_raw"), detail.get("payee_name"))
-        if not key or key in seen:
-            continue
-        seen.add(key)
-        samples.append({"key": key, "narration": str(row["description_raw"])[:200]})
-        known[key] = str(row["category_name"])
-    return samples, known
-
-
-def agreement(answers: list[dict[str, Any]], known: dict[str, str]) -> tuple[float | None, int]:
-    """Share of sampled answers that match the category the rule already gave."""
-    checked = 0
-    matched = 0
-    for answer in answers:
-        expected = known.get(str(answer.get("key") or ""))
-        if expected is None:
-            continue
-        checked += 1
-        if str(answer.get("category") or "") == expected:
-            matched += 1
-    if checked == 0:
-        return None, 0
-    return matched / checked, checked

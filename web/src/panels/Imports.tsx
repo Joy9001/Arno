@@ -14,14 +14,7 @@ import { askAgent, attachAgent } from "../ask";
 import { api, errorMessage } from "../api";
 import { STATEMENT_ACCEPT } from "../chat/statement-attachment";
 import { formatDate, formatDuration, formatMoment, formatPaise } from "../format";
-import {
-  categorizeSummary,
-  kickActivity,
-  openUncategorized,
-  shortJobError,
-  useJobs,
-  useNow,
-} from "../jobs";
+import { goTo } from "../nav";
 import { Busy } from "../Loading";
 import { DeletionPreviewNote } from "./DeletionScope";
 import type {
@@ -30,8 +23,6 @@ import type {
   ImportLine,
   ImportList,
   ImportRecord,
-  LayoutList,
-  StatementLayout,
 } from "../types";
 import { useApi } from "../useApi";
 import "./Activity.css";
@@ -62,7 +53,7 @@ function StatusBadge({ status }: { status: ImportRecord["status"] }) {
   const tone =
     status === "committed"
       ? "good"
-      : ["review", "parsing", "needs_password", "needs_input", "paused"].includes(status)
+      : ["review", "parsing", "needs_password", "needs_input"].includes(status)
         ? "warn"
         : status === "failed" || status === "not_a_statement"
           ? "danger"
@@ -737,153 +728,17 @@ function HistorySkeleton() {
   );
 }
 
-function ParserLayouts() {
-  const layouts = useApi<LayoutList>("/api/layouts");
-  const [choice, setChoice] = useState<{ layout: StatementLayout; version: number } | null>(
-    null,
-  );
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function applyVersion() {
-    if (!choice) return;
-    setBusy(true);
-    setError(null);
-    try {
-      await api(`/api/layouts/${encodeURIComponent(choice.layout.id)}/rollback`, {
-        method: "POST",
-        body: JSON.stringify({ version: choice.version }),
-      });
-      setChoice(null);
-      layouts.reload();
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <section className="act-parsers" aria-labelledby="parser-layouts-heading">
-      <div className="section-head">
-        <h3 id="parser-layouts-heading">Parsers</h3>
-        <span className="fine">{layouts.data?.items.length ?? 0} layouts</span>
-      </div>
-      <p className="muted">
-        Each bank layout keeps its saved parser versions. Using an older version moves the
-        active pointer; nothing is deleted.
-      </p>
-      {layouts.error && (
-        <div className="act-error" role="alert">
-          <AlertCircle size={18} strokeWidth={1.8} aria-hidden="true" />
-          <div>
-            <strong>The parsers couldn’t load.</strong>
-            <p className="fine">{layouts.error}</p>
-          </div>
-          <button type="button" className="ghost small" onClick={layouts.reload}>
-            Retry
-          </button>
-        </div>
-      )}
-      {layouts.loading && !layouts.data && <Skeleton className="sk sk-line wide" />}
-      {layouts.data?.items.length === 0 && (
-        <p className="compact-empty">
-          No saved parsers yet. The first committed import saves one.
-        </p>
-      )}
-      {layouts.data && layouts.data.items.length > 0 && (
-        <ul className="plain-list">
-          {layouts.data.items.map((layout) => (
-            <li key={layout.id}>
-              <span>
-                <strong>{layout.institution}</strong> · {layout.kind} ·{" "}
-                {layout.variants.length} {layout.variants.length === 1 ? "variant" : "variants"}
-              </span>
-              <ul className="plain-list">
-                {layout.versions.map((version) => (
-                  <li key={version.version}>
-                    <span>
-                      Version {version.version} · {formatMoment(version.created_at)}
-                      {version.version === layout.active_version && (
-                        <span className="badge good"> Active</span>
-                      )}
-                    </span>
-                    {version.version !== layout.active_version && (
-                      <button
-                        type="button"
-                        className="ghost small"
-                        disabled={busy}
-                        onClick={() => setChoice({ layout, version: version.version })}
-                      >
-                        Use this version
-                      </button>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <Dialog.Root
-        open={Boolean(choice)}
-        onOpenChange={(open) => {
-          if (!open) setChoice(null);
-        }}
-      >
-        <Dialog.Portal>
-          <Dialog.Overlay className="dialog-overlay" />
-          <Dialog.Content className="movement-dialog" aria-describedby={undefined}>
-            <Dialog.Title>Use parser version {choice?.version}?</Dialog.Title>
-            <p className="fine">
-              {choice?.layout.institution} · {choice?.layout.kind}. The next statement from this
-              bank reruns version {choice?.version}.
-            </p>
-            <div className="row-actions">
-              <button type="button" disabled={busy} onClick={() => void applyVersion()}>
-                {busy ? (
-                  <>
-                    <Busy />
-                    Switching…
-                  </>
-                ) : (
-                  "Use this version"
-                )}
-              </button>
-              <Dialog.Close asChild>
-                <button type="button" className="ghost" disabled={busy}>
-                  Cancel
-                </button>
-              </Dialog.Close>
-            </div>
-            {error && (
-              <p className="error" role="alert">
-                {error}
-              </p>
-            )}
-          </Dialog.Content>
-        </Dialog.Portal>
-      </Dialog.Root>
-    </section>
-  );
-}
-
 /** A failed parse's recovery: run the stored file again, or say to upload it again. */
 export function ParseRecovery({
   detail,
   busy = null,
   error = null,
-  threadId = null,
   onRetry,
-  onOpenThread,
 }: {
   detail: ImportRecord;
   busy?: string | null;
   error?: string | null;
-  threadId?: string | null;
   onRetry?: () => void;
-  onOpenThread?: () => void;
 }) {
   if (detail.status !== "failed") return null;
   if (!detail.can_retry_parse) {
@@ -906,12 +761,6 @@ export function ParseRecovery({
             "Retry parse"
           )}
         </button>
-        {threadId && (
-          <button type="button" className="ghost small" onClick={onOpenThread}>
-            <MessageCircle size={13} aria-hidden="true" />
-            Open the retry in chat
-          </button>
-        )}
       </div>
       {error && (
         <p className="fine act-decision-note" role="alert">
@@ -922,26 +771,51 @@ export function ParseRecovery({
   );
 }
 
-/** What the categorization job behind a committed import is doing, in place. */
+/** "120 labeled · 14 need a category". */
+function categorizeSummary(labeled: number, uncategorized: number, failedPayees = 0): string {
+  const need = uncategorized === 1 ? "1 needs a category" : `${uncategorized} need a category`;
+  const unanswered = failedPayees > 0 ? ` · ${failedPayees} got no answer` : "";
+  return `${labeled} labeled · ${need}${unanswered}`;
+}
+
+/** A backend error, cut to fit a line of UI. */
+function shortError(message: string | null, limit = 140): string {
+  const text = message?.trim();
+  if (!text) return "Something went wrong.";
+  return text.length > limit ? `${text.slice(0, limit - 3)}…` : text;
+}
+
+/** What the categorization behind a committed import is doing, in place. */
 export function CategorizeStatus({
+  importId,
   state,
   onRefresh,
 }: {
+  importId: string;
   state: CategorizeState;
   onRefresh: () => void;
 }) {
-  const ticking = state.state === "running" || state.state === "retrying";
-  const now = useNow(ticking);
+  const ticking = state.state === "running" || state.state === "queued";
+  const [now, setNow] = useState(() => Date.now());
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
 
+  // The server holds the state; look again while it is still working.
+  useEffect(() => {
+    if (!ticking) return;
+    const clock = window.setInterval(() => setNow(Date.now()), 1000);
+    const poll = window.setInterval(onRefresh, 4000);
+    return () => {
+      window.clearInterval(clock);
+      window.clearInterval(poll);
+    };
+  }, [ticking, onRefresh]);
+
   async function retry() {
-    if (!state.job_id) return;
     setRetrying(true);
     setRetryError(null);
     try {
-      await api(`/api/jobs/${state.job_id}/retry`, { method: "POST" });
-      kickActivity();
+      await api(`/api/imports/${importId}/categorize`, { method: "POST" });
       onRefresh();
     } catch (caught) {
       setRetryError(errorMessage(caught));
@@ -954,26 +828,17 @@ export function CategorizeStatus({
     return (
       <div className="act-poll act-categorize" data-tone="danger" role="alert">
         <AlertCircle size={16} strokeWidth={1.8} aria-hidden="true" />
-        <span className="act-categorize-text">
-          Categorizing stopped. {shortJobError(state.error, 140)}
-        </span>
-        {state.job_id && (
-          <button
-            type="button"
-            className="ghost small"
-            disabled={retrying}
-            onClick={() => void retry()}
-          >
-            {retrying ? (
-              <>
-                <Busy />
-                Retrying…
-              </>
-            ) : (
-              "Retry"
-            )}
-          </button>
-        )}
+        <span className="act-categorize-text">Categorizing stopped. {shortError(state.error)}</span>
+        <button type="button" className="ghost small" disabled={retrying} onClick={() => void retry()}>
+          {retrying ? (
+            <>
+              <Busy />
+              Retrying…
+            </>
+          ) : (
+            "Retry"
+          )}
+        </button>
         {retryError && <span className="error">{retryError}</span>}
       </div>
     );
@@ -995,40 +860,10 @@ export function CategorizeStatus({
           )}
         </span>
         {uncategorized > 0 && (
-          <button type="button" className="ghost small" onClick={openUncategorized}>
+          <button type="button" className="ghost small" onClick={() => goTo("activity", "ledger")}>
             Review
           </button>
         )}
-      </div>
-    );
-  }
-
-  if (state.state === "waiting_on_batch") {
-    const minutes = state.next_run_at
-      ? Math.max(1, Math.round((new Date(state.next_run_at).getTime() - now) / 60_000))
-      : 6;
-    return (
-      <div className="act-poll act-categorize" role="status">
-        <span className="act-categorize-text">
-          Sent as a batch. Next check in ~{minutes} min.
-        </span>
-      </div>
-    );
-  }
-
-  if (state.state === "retrying") {
-    const seconds = state.next_run_at
-      ? Math.max(0, (new Date(state.next_run_at).getTime() - now) / 1000)
-      : 0;
-    return (
-      <div className="act-poll act-categorize">
-        <span className="act-categorize-text" role="status">
-          The model hiccuped; trying again{" "}
-          <span aria-hidden="true">
-            {seconds > 1 ? `in ${formatDuration(seconds)}` : "now"}
-          </span>{" "}
-          (attempt {state.attempt} of {state.max_attempts}).
-        </span>
       </div>
     );
   }
@@ -1115,10 +950,7 @@ export function ImportsPanel({
   const [busy, setBusy] = useState<string | null>(null);
   const [opening, setOpening] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // A retry runs as a chat turn; the import stays failed until the parser picks it up.
-  const [retryThread, setRetryThread] = useState<string | null>(null);
   const [retryError, setRetryError] = useState<string | null>(null);
-  const [retryWait, setRetryWait] = useState(false);
   const [pollError, setPollError] = useState<string | null>(null);
   const [deepLinkError, setDeepLinkError] = useState<string | null>(null);
   const [deepLinkRetry, setDeepLinkRetry] = useState(0);
@@ -1150,7 +982,7 @@ export function ImportsPanel({
   const parsePolling = Boolean(
     selected && ["parsing", "needs_password", "needs_input"].includes(selected.status),
   );
-  const needsPoll = parsePolling || categorizePolling || retryWait;
+  const needsPoll = parsePolling || categorizePolling;
 
   const refreshSelected = useCallback(async () => {
     const id = selected?.import_id;
@@ -1161,8 +993,6 @@ export function ImportsPanel({
       if (writeSeq.current !== seq) return;
       setSelected(next);
       setPollError(null);
-      // The retry turn has moved the import off failed; stop waiting for the parser.
-      if (next.status !== "failed") setRetryWait(false);
       if (next.status !== "parsing") reloadList();
     } catch (caught) {
       if (writeSeq.current !== seq) return;
@@ -1176,21 +1006,6 @@ export function ImportsPanel({
     return () => window.clearInterval(timer);
   }, [needsPoll, busy, refreshSelected]);
 
-  // A retry that never starts the parser must not poll forever.
-  useEffect(() => {
-    if (!retryWait) return;
-    const timer = window.setTimeout(() => setRetryWait(false), 60_000);
-    return () => window.clearTimeout(timer);
-  }, [retryWait]);
-
-  // A finished background job may be the one this import was waiting on.
-  const jobsVersion = useJobs((state) => state.version);
-  useEffect(() => {
-    if (jobsVersion === 0) return;
-    const timer = window.setTimeout(() => void refreshSelected(), 0);
-    return () => window.clearTimeout(timer);
-  }, [jobsVersion, refreshSelected]);
-
   async function openImport(importId: string) {
     writeSeq.current += 1;
     const seq = writeSeq.current;
@@ -1200,9 +1015,7 @@ export function ImportsPanel({
     setPassword("");
     setAdjustmentOpen(false);
     setPurgeOpen(false);
-    setRetryThread(null);
     setRetryError(null);
-    setRetryWait(false);
     try {
       const next = await api<ImportRecord>(`/api/imports/${encodeURIComponent(importId)}`);
       if (seq !== writeSeq.current) return;
@@ -1232,9 +1045,7 @@ export function ImportsPanel({
     setPassword("");
     setAdjustmentOpen(false);
     setPurgeOpen(false);
-    setRetryThread(null);
     setRetryError(null);
-    setRetryWait(false);
     loadedImport.current = null;
     setSelected(null);
     api<ImportRecord>(`/api/imports/${encodeURIComponent(importId)}`)
@@ -1273,7 +1084,6 @@ export function ImportsPanel({
       setPassword("");
       setPollError(null);
       reloadList();
-      if (path === "commit") kickActivity();
     } catch (caught) {
       setError(errorMessage(caught));
       // A refused commit states the amount it would book now: show it before it can be answered.
@@ -1296,17 +1106,12 @@ export function ImportsPanel({
     setError(null);
     setRetryError(null);
     try {
-      const next = await api<ImportRecord & { thread_id: string }>(
-        `/api/imports/${selected.import_id}/retry`,
-        { method: "POST" },
+      setSelected(
+        await api<ImportRecord>(`/api/imports/${selected.import_id}/retry`, { method: "POST" }),
       );
-      const { thread_id: threadId, ...detail } = next;
-      setSelected(detail);
-      setRetryThread(threadId);
-      setRetryWait(true);
       reloadList();
     } catch (caught) {
-      // A 409 or 503 states why the parser cannot run again right now.
+      // A 409 states why the file cannot be read again right now.
       setRetryError(errorMessage(caught));
     } finally {
       setBusy(null);
@@ -1680,7 +1485,7 @@ export function ImportsPanel({
               {selected.reason && <p className="notice">{selected.reason}</p>}
 
               {selected.categorize && (
-                <CategorizeStatus state={selected.categorize} onRefresh={() => void refreshSelected()} />
+                <CategorizeStatus importId={selected.import_id} state={selected.categorize} onRefresh={() => void refreshSelected()} />
               )}
 
               {parsePolling && (
@@ -1711,8 +1516,8 @@ export function ImportsPanel({
                 <div className="password-card">
                   <h4>This file is locked</h4>
                   <p className="fine">
-                    The password stays in memory for this import, is never stored, and never
-                    reaches the model.
+                    The password opens the file once. It is never stored, and it never reaches
+                    the model.
                   </p>
                   <div className="row-actions">
                     <input
@@ -1839,15 +1644,7 @@ export function ImportsPanel({
                       detail={selected}
                       busy={busy}
                       error={retryError}
-                      threadId={retryThread}
                       onRetry={() => void retryParse()}
-                      onOpenThread={() => {
-                        if (retryThread) {
-                          window.dispatchEvent(
-                            new CustomEvent("arno:open-thread", { detail: retryThread }),
-                          );
-                        }
-                      }}
                     />
                   )}
                   <div className="row-actions">
@@ -1948,18 +1745,11 @@ export function ImportsPanel({
                 </>
               )}
 
-              {selected.parser_saved && (
-                <p className="fine">
-                  This layout’s parser is saved. Next month’s statement reruns it with no model
-                  call.
-                </p>
-              )}
             </>
           )}
         </section>
       </div>
 
-      <ParserLayouts />
     </section>
   );
 }

@@ -16,7 +16,7 @@ from arno.config import get_settings
 from arno.db.conn import Connection, connect
 from arno.ledger import settings as settings_mod
 from arno.ledger.settings import BACKUP_ALERT_AFTER, BACKUP_DUE_AFTER
-from arno.notifications import create_notification, send_push_for_kind
+from arno.notifications import create_notification
 
 logger = logging.getLogger("arno.jobs.backup")
 # The check runs once a day, so a success a few minutes short of 24 hours old must not skip a day.
@@ -169,19 +169,14 @@ async def run_backup(conn: Connection) -> bool:
     return error is None
 
 
-async def handle_backup_check(payload: dict[str, Any]) -> dict[str, Any]:
-    del payload
+async def handle_backup_check() -> None:
     async with connect() as conn:
         age = (await settings_mod.backup_status(conn))["last_success_age_seconds"]
-        backed_up = None
         try:
             if age is None or age >= RUN_AFTER.total_seconds():
-                backed_up = await run_backup(conn)
+                await run_backup(conn)
         finally:  # the alert never depends on the backup finishing
-            row = await backup_alert(conn)
-            if row is not None:
-                await send_push_for_kind(conn, "backup_stale")
-        return {"backed_up": backed_up, "alert_id": row["id"] if row else None}
+            await backup_alert(conn)
 
 
 __all__ = ["backup_alert", "handle_backup_check", "run_backup"]

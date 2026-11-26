@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 
-from arno.api.deps import Database, FreshSession, current_session
+from arno.api.deps import Database, current_session
 from arno.ledger import deletion
 
 router = APIRouter(prefix="/api", tags=["deletion"], dependencies=[Depends(current_session)])
@@ -30,11 +30,8 @@ async def get_deletion_preview(
 
 
 @router.post("/deletion/everything")
-async def erase_everything(
-    conn: Database, fresh: FreshSession, body: EraseRequest
-) -> dict[str, Any]:
+async def erase_everything(conn: Database, body: EraseRequest) -> dict[str, Any]:
     """Delete every financial and user row. The typed phrase is the second confirmation."""
-    del fresh
     if body.confirm.strip().lower() != deletion.CONFIRM_PHRASE:
         raise HTTPException(status_code=400, detail='Type "delete everything" to confirm.')
     return await deletion.erase_everything(conn)

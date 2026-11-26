@@ -1,270 +1,235 @@
-"""The jobs table and its one loop."""
+"""The background layer: spawn, the minute loop's claim, the daily tasks, and the webhook."""
 
 from __future__ import annotations
 
 import asyncio
-import time
-from datetime import date, datetime
-from decimal import Decimal
-from typing import cast
+from datetime import UTC, datetime, timedelta
 
-from arno.agent.usage import DailyBudgetExceeded
-from arno.jobs.runner import (
-    Handler,
-    JobGaveUp,
-    JobRunner,
-    enqueue_job,
-    recover_interrupted_jobs,
+import httpx
+import pytest
+
+from arno.config import get_settings
+from arno.jobs import background, loop
+from arno.notifications import create_notification, post_webhook
+from arno.scheduled_questions import (
+    BRIEFING_ID,
+    INDIA,
+    create_question,
+    ensure_default_question,
 )
-from arno.ledger.errors import CommitOutcomeUnknownError
 
 
-async def _job(conn, key: str) -> dict:
-    return await conn.fetchrow("SELECT * FROM jobs WHERE key = $1", key)
+async def test_spawn_does_nothing_when_jobs_are_off():
+    async def work() -> None:
+        raise AssertionError("must not run")
+
+    assert get_settings().jobs_enabled is False
+    assert background.spawn(work(), name="off") is None
 
 
-async def test_enqueue_is_deduplicated_by_key_and_same_transaction_as_data(db):
-    conn = db
-    await conn.execute("INSERT INTO notifications (kind, title) VALUES ('test', 'before')")
-    import_id = "imp_test"
-    await conn.execute(
-        """
-        INSERT INTO imports (id, file_hash, status)
-        VALUES ($1, 'hash', 'parsing')
-        """,
-        import_id,
-    )
-    first = await enqueue_job(
-        conn, key="import:imp_test", kind="import_statement", payload={"x": 1}
-    )
-    second = await enqueue_job(
-        conn, key="import:imp_test", kind="import_statement", payload={"x": 2}
-    )
-    assert first == second
-    assert (await _job(conn, "import:imp_test"))["payload"]["x"] == 1
+async def test_spawn_isolates_a_failure_and_drops_the_reference(monkeypatch, clean_database):
+    from dataclasses import replace
 
-    tx = conn.transaction()
-    await tx.start()
-    await conn.execute(
-        "INSERT INTO imports (id, file_hash, status) VALUES ('imp_roll', 'h2', 'parsing')"
-    )
-    await enqueue_job(conn, key="import:imp_roll", kind="import_statement")
-    await tx.rollback()
-    assert await conn.fetchval("SELECT count(*) FROM imports WHERE id = 'imp_roll'") == 0
-    assert await _job(conn, "import:imp_roll") is None
+    import arno.config as config
+
+    monkeypatch.setattr(config, "_cached", replace(get_settings(), jobs_enabled=True))
+    ran: list[str] = []
+
+    async def boom() -> None:
+        ran.append("boom")
+        raise RuntimeError("expected")
+
+    async def fine() -> None:
+        ran.append("fine")
+
+    first = background.spawn(boom(), name="boom")
+    second = background.spawn(fine(), name="fine")
+    assert first is not None and second is not None
+    await background.drain(5)
+    assert sorted(ran) == ["boom", "fine"]
+    assert not background._tasks
 
 
-async def test_boot_recovery_requeues_running_jobs(db):
+async def test_the_default_briefing_seeds_once_and_an_archive_sticks(db):
+    await ensure_default_question(db)
+    row = await db.fetchrow("SELECT * FROM scheduled_questions WHERE id = $1", BRIEFING_ID)
+    assert "FREQ=WEEKLY;BYDAY=SU;BYHOUR=8;BYMINUTE=0" == row["rule"]
+    assert row["next_run_at"] > datetime.now(UTC)
+    await db.execute("UPDATE scheduled_questions SET active = false WHERE id = $1", BRIEFING_ID)
+    await ensure_default_question(db)
+    assert await db.fetchval("SELECT count(*) FROM scheduled_questions") == 1
+    assert await db.fetchval("SELECT active FROM scheduled_questions") is False
+
+
+async def test_a_due_question_is_claimed_once_and_moves_on(db):
+    question = await create_question(db, prompt="Spend?", rule="FREQ=DAILY;BYHOUR=9;BYMINUTE=0")
+    old = datetime.now(INDIA) - timedelta(days=5)
+    await db.execute("UPDATE scheduled_questions SET next_run_at = $1", old)
+    now = datetime.now(INDIA)
+
+    claimed = await loop.claim_due_questions(db, now)
+    assert claimed == [(question["id"], old.astimezone(INDIA).strftime("%Y-%m-%dT%H:%M"))]
+    assert await db.fetchval("SELECT next_run_at FROM scheduled_questions") > now
+    # A restart (or a second claimer) finds nothing due: the missed days fire once.
+    assert await loop.claim_due_questions(db, now) == []
+
+
+async def test_a_finished_rule_deactivates_after_its_last_run(db):
+    await create_question(db, prompt="Once", rule="FREQ=DAILY;COUNT=2;BYHOUR=9;BYMINUTE=0")
+    await db.execute("UPDATE scheduled_questions SET next_run_at = now() - interval '1 hour'")
+    later = datetime.now(INDIA) + timedelta(days=3)
+    assert len(await loop.claim_due_questions(db, later)) == 1
+    assert await db.fetchval("SELECT active FROM scheduled_questions") is False
+
+
+async def test_recover_resumes_queued_and_running_categorizations(db, monkeypatch):
+    seen: list[str] = []
+
+    def fake_spawn(coro, *, name):
+        coro.close()
+        seen.append(name)
+
+    monkeypatch.setattr(loop, "spawn", fake_spawn)
     await db.execute(
         """
-        INSERT INTO jobs (key, kind, status, started_at)
-        VALUES ('a', 'recompute_baselines', 'running', now()),
-               ('b', 'recompute_baselines', 'pending', NULL)
+        INSERT INTO imports (id, file_hash, status, categorize) VALUES
+            ('imp_q', 'a', 'committed', '{"state": "queued"}'),
+            ('imp_r', 'b', 'committed', '{"state": "running"}'),
+            ('imp_d', 'c', 'committed', '{"state": "done"}')
         """
     )
-    assert await recover_interrupted_jobs(db) == 1
-    assert (await db.fetchrow("SELECT status FROM jobs WHERE key = 'a'"))["status"] == "pending"
+    assert await loop.recover() == 2
+    assert sorted(seen) == ["categorize-imp_q", "categorize-imp_r"]
 
 
-async def test_a_failing_job_retries_three_times_then_fails_and_notifies(db):
-    attempts = {"n": 0}
+async def test_risk_warning_dedupes_within_a_week(ledger, monkeypatch):
+    from arno.jobs import risk
 
-    def failing(payload):
-        attempts["n"] += 1
-        raise RuntimeError("nope")
-
-    runner = JobRunner(registry={"bad": cast(Handler, failing)}, timeouts={"bad": 5})
-    enqueue = await db.fetchrow("INSERT INTO jobs (key, kind) VALUES ('bad:1', 'bad') RETURNING id")
-
-    await runner.run_once()
-    row = await _job(db, "bad:1")
-    assert row["status"] == "pending" and row["attempts"] == 1
-    assert row["run_at"] > datetime.now(row["run_at"].tzinfo)
-    await db.execute("UPDATE jobs SET run_at = now() WHERE id = $1", enqueue["id"])
-
-    await runner.run_once()
-    await db.execute("UPDATE jobs SET run_at = now() WHERE id = $1", enqueue["id"])
-    await runner.run_once()
-
-    row = await _job(db, "bad:1")
-    assert row["status"] == "failed" and row["attempts"] == 3
-    assert row["last_error"].startswith("RuntimeError")
-    assert await db.fetchval("SELECT count(*) FROM notifications WHERE kind = 'job_failed'") == 1
-
-
-async def test_a_done_job_keeps_what_its_handler_returned(db):
-    def handler(payload):
-        del payload
-        return {
-            "status": "done",
-            "rows": 2,
-            "day": date(2026, 11, 1),
-            "rate": Decimal("0.5"),
-        }
-
-    runner = JobRunner(registry={"report": cast(Handler, handler)}, timeouts={"report": 5})
-    await db.execute("INSERT INTO jobs (key, kind) VALUES ('report:1', 'report')")
-
-    await runner.run_once()
-
-    row = await _job(db, "report:1")
-    assert row["status"] == "done"
-    # Dates and Decimals are stored as text; only the display reads the result.
-    assert row["result"] == {
-        "status": "done",
-        "rows": 2,
-        "day": "2026-11-01",
-        "rate": "0.5",
+    projection = {
+        "data_quality": {},
+        "floor_probability": 0.4,
+        "floor_threshold": 0.9,
+        "floor_paise": 0,
+        "first_floor_crossing": None,
+        "source_ids": [],
     }
 
+    async def fake(*_a, **_k):
+        return projection
 
-async def test_a_job_that_gives_up_fails_after_one_attempt_and_notifies(db):
-    def handler(payload):
-        del payload
-        raise JobGaveUp("Stopped at the daily spend ceiling.")
+    monkeypatch.setattr(risk.projection_tools, "project", fake)
+    monday = datetime(2026, 11, 2).date()
+    assert await risk.risk_warning(ledger, as_of=monday) is not None
+    assert await risk.risk_warning(ledger, as_of=monday + timedelta(days=1)) is None
+    assert await risk.risk_warning(ledger, as_of=monday + timedelta(days=7)) is not None
 
-    runner = JobRunner(registry={"ceiling": handler}, timeouts={"ceiling": 5})
-    job = await db.fetchrow(
-        "INSERT INTO jobs (key, kind) VALUES ('ceiling:1', 'ceiling') RETURNING id"
+
+async def test_webhook_posts_form_text_to_telegram_and_plain_text_elsewhere():
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200)
+
+    transport = httpx.MockTransport(handler)
+    await post_webhook(
+        "https://api.telegram.org/bot1/sendMessage?chat_id=2",
+        "Rent due",
+        "Due 1st",
+        transport=transport,
     )
-
-    await runner.run_once()
-
-    row = await _job(db, "ceiling:1")
-    assert row["status"] == "failed" and row["attempts"] == 1
-    assert row["last_error"] == "Stopped at the daily spend ceiling."
-    notice = await db.fetchrow("SELECT * FROM notifications WHERE kind = 'job_failed'")
-    assert notice["dedupe_key"] == f"job_failed:{job['id']}"
-    assert notice["data"] == {"job_id": job["id"], "kind": "ceiling"}
+    await post_webhook("https://ntfy.sh/arno", "Rent due", "Due 1st", transport=transport)
+    telegram, ntfy = seen
+    assert telegram.content == b"text=Rent+due%0ADue+1st"
+    assert ntfy.headers["Title"] == "Rent due"
+    assert ntfy.content == b"Due 1st"
 
 
-async def test_a_timeout_is_a_failure_with_a_marker(db):
-    def slow(payload):
-        del payload
-        time.sleep(0.3)
+async def test_a_failing_webhook_never_raises():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500)
 
-    runner = JobRunner(registry={"slow": cast(Handler, slow)}, timeouts={"slow": 0.05})
-    await db.execute("INSERT INTO jobs (key, kind) VALUES ('slow:1', 'slow')")
-
-    await runner.run_once()
-    row = await _job(db, "slow:1")
-    assert row["status"] == "pending"
-    assert row["timed_out_at"] is not None
-    assert "timed out" in row["last_error"]
+    await post_webhook("https://ntfy.sh/x", "t", None, transport=httpx.MockTransport(handler))
 
 
-async def test_a_job_with_no_timeout_runs_to_completion(db):
-    import asyncio
+async def test_only_a_new_notification_posts_the_webhook(db, monkeypatch):
+    from dataclasses import replace
 
-    async def slow(payload):
-        del payload
-        await asyncio.sleep(0.2)
+    import arno.config as config
+    from arno import notifications
 
-    runner = JobRunner(registry={"slow": cast(Handler, slow)}, timeouts={"slow": None})
-    await db.execute("INSERT INTO jobs (key, kind) VALUES ('slow:none', 'slow')")
-
-    await runner.run_once()
-    row = await _job(db, "slow:none")
-    assert row["status"] == "done"
-    assert row["timed_out_at"] is None
-
-
-async def test_the_loop_claims_at_most_two_jobs_at_once(db):
-    started: list[str] = []
-
-    async def handler(payload):
-        started.append(payload["n"])
-        await asyncio.sleep(0.1)
-
-    runner = JobRunner(
-        registry={"sleepy": cast(Handler, handler)},
-        concurrency=2,
-        timeouts={"sleepy": 5},
+    monkeypatch.setattr(
+        config, "_cached", replace(get_settings(), notify_webhook_url="https://ntfy.sh/x")
     )
-    for index in range(3):
-        await db.execute(
-            "INSERT INTO jobs (key, kind, payload) VALUES ($1, 'sleepy', $2)",
-            f"sleepy:{index}",
-            {"n": index},
-        )
+    sent: list[str] = []
 
-    claimed = await runner.tick()
-    assert claimed == 2
-    assert len(runner._running) == 2
-    await asyncio.gather(*list(runner._running))
-    assert len(started) == 2
-    assert await runner.tick() == 1
-    await asyncio.gather(*list(runner._running))
-    assert sorted(started) == [0, 1, 2]
+    def fake_spawn(coro, *, name):
+        coro.close()
+        sent.append(name)
+
+    monkeypatch.setattr(notifications, "spawn", fake_spawn)
+    await create_notification(db, kind="k", title="t", dedupe_key="same")
+    await create_notification(db, kind="k", title="t", dedupe_key="same")
+    assert len(sent) == 1
 
 
-async def test_a_tick_does_not_resync_the_recurring_schedules(db, monkeypatch):
-    """Seeding and mirroring every second was the idle load; a tick only claims and enqueues."""
-    from arno.jobs import schedules as schedules_mod
+async def test_erase_refuses_while_a_background_task_runs(db, monkeypatch):
+    from dataclasses import replace
 
-    async def never(*args, **kwargs):
-        raise AssertionError("a tick must not seed or mirror the schedules")
+    import arno.config as config
+    from arno.ledger.deletion import erase_everything
+    from arno.ledger.errors import ConflictLedgerError
 
-    monkeypatch.setattr(schedules_mod, "ensure_builtin_schedules", never)
-    monkeypatch.setattr(schedules_mod, "sync_scheduled_questions", never)
-    runner = JobRunner(registry={"quick": cast(Handler, lambda payload: {})}, timeouts={"quick": 5})
-    await db.execute("INSERT INTO jobs (key, kind) VALUES ('quick:tick', 'quick')")
+    monkeypatch.setattr(config, "_cached", replace(get_settings(), jobs_enabled=True))
+    started, release = asyncio.Event(), asyncio.Event()
 
-    assert await runner.tick() == 1
-    await asyncio.gather(*list(runner._running))
-    assert (await _job(db, "quick:tick"))["status"] == "done"
-
-
-async def test_an_enqueue_wakes_an_idle_loop_without_waiting_for_the_cap(db):
-    started = asyncio.Event()
-
-    async def handler(payload):
-        del payload
+    async def hold() -> None:
         started.set()
-        return {}
+        await release.wait()
 
-    runner = JobRunner(
-        registry={"wake": cast(Handler, handler)},
-        concurrency=1,
-        max_idle_seconds=60,
-        timeouts={"wake": 5},
+    task = background.spawn(hold(), name="hold")
+    assert task is not None
+    await asyncio.wait_for(started.wait(), 10)
+    with pytest.raises(ConflictLedgerError):
+        await erase_everything(db)
+    release.set()
+    await background.drain(5)
+    await erase_everything(db)
+
+
+async def test_drain_cancels_what_outlives_the_timeout(monkeypatch, clean_database):
+    from dataclasses import replace
+
+    import arno.config as config
+
+    monkeypatch.setattr(config, "_cached", replace(get_settings(), jobs_enabled=True))
+    task = background.spawn(asyncio.sleep(60), name="slow")
+    assert task is not None
+    await background.drain(0.2)
+    assert task.cancelled()
+
+
+@pytest.mark.parametrize("outcome", ["done", "partial", "failed"])
+async def test_categorize_entry_point_records_its_state(db, monkeypatch, outcome):
+    from arno.importers import categorize
+
+    await db.execute(
+        "INSERT INTO imports (id, file_hash, status, categorize) "
+        "VALUES ('imp_x', 'h', 'committed', '{\"state\": \"queued\"}')"
     )
-    runner.start()
-    try:
-        await asyncio.sleep(0)
-        await enqueue_job(db, key="wake:1", kind="wake")
-        await asyncio.wait_for(started.wait(), timeout=5)
-    finally:
-        await runner.stop()
 
+    async def fake_run(conn, import_id, *, model=None):
+        if outcome == "failed":
+            raise RuntimeError("model down")
+        return {"status": outcome, "labeled": 3, "uncategorized": 1, "failed_payees": 0}
 
-async def test_a_cost_stop_fails_the_job_at_once_without_retrying(db):
-    def handler(payload):
-        del payload
-        raise DailyBudgetExceeded("the daily limit is spent")
-
-    runner = JobRunner(registry={"cost": cast(Handler, handler)}, timeouts={"cost": 5})
-    job = await db.fetchrow("INSERT INTO jobs (key, kind) VALUES ('cost:1', 'cost') RETURNING id")
-
-    await runner.run_once()
-    row = await _job(db, "cost:1")
-    assert row["status"] == "failed" and row["attempts"] == 1
-    assert row["last_error"] == "DailyBudgetExceeded"
-    notice = await db.fetchrow("SELECT * FROM notifications WHERE kind = 'job_failed'")
-    assert notice["data"] == {"job_id": job["id"], "kind": "cost"}
-    assert "without retrying" in notice["body"]
-
-
-async def test_an_uncertain_commit_fails_the_job_at_once_without_retrying(db):
-    def handler(payload):
-        del payload
-        raise CommitOutcomeUnknownError("commit outcome unknown")
-
-    runner = JobRunner(registry={"uncertain": cast(Handler, handler)}, timeouts={"uncertain": 5})
-    await db.execute("INSERT INTO jobs (key, kind) VALUES ('uncertain:1', 'uncertain')")
-
-    await runner.run_once()
-    row = await _job(db, "uncertain:1")
-    assert row["status"] == "failed" and row["attempts"] == 1
-    assert row["last_error"] == "commit outcome unknown"
-    assert await db.fetchval("SELECT count(*) FROM notifications WHERE kind = 'job_failed'") == 1
+    monkeypatch.setattr(categorize, "run_categorize", fake_run)
+    monkeypatch.setattr(categorize, "primary_model", lambda: None)
+    await categorize.handle_categorize_import("imp_x")
+    state = await db.fetchval("SELECT categorize FROM imports WHERE id = 'imp_x'")
+    assert state["state"] == outcome
+    assert "started_at" in state and "finished_at" in state
+    if outcome == "failed":
+        assert state["error"] == "model down"
+    else:
+        assert (state["labeled"], state["uncategorized"]) == (3, 1)

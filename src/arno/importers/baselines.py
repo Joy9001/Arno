@@ -77,10 +77,9 @@ async def recompute_baselines(conn: Connection, *, as_of: date | None = None) ->
     return {"computed": len(computed), "categories": computed, "window_days": covered_days}
 
 
-async def handle_recompute_baselines(payload: dict[str, Any]) -> dict[str, Any]:
-    del payload
+async def handle_recompute_baselines() -> None:
     async with connect() as conn:
-        return await recompute_baselines(conn)
+        await recompute_baselines(conn)
 
 
 __all__ = ["WINDOW_DAYS", "handle_recompute_baselines", "recompute_baselines"]

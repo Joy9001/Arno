@@ -34,19 +34,18 @@ from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
 
 import httpx
 
-from arno.auth.sessions import COOKIE_NAME
+from arno.api.deps import COOKIE_NAME
 from arno.ledger.common import today as ledger_today
-from tests.software_authenticator import SoftwareAuthenticator
 
 SERVE_COMMAND = ["uv", "run", "arno", "serve"]
 STATE_FILE = "state.json"
 LOG_FILE = "server.log"
 DEFAULT_TIMEOUT = 300.0
 JSON_LIMIT = 400
+E2E_PASSPHRASE = "e2e-passphrase"  # the scratch server only; never a real secret
 
 
 # --- small helpers ----------------------------------------------------------------------------
@@ -201,30 +200,17 @@ class Driver:
     def auth_state(self) -> dict[str, Any]:
         return self.get("/api/auth/state")
 
-    def session(self) -> dict[str, Any]:
-        return self.get("/api/auth/session")
-
     def logged_in(self) -> bool:
         try:
-            return bool(self.session().get("authenticated"))
+            return bool(self.auth_state().get("authenticated"))
         except DriverError:
             return False
 
-    def enroll(self, token: str) -> dict[str, Any]:
-        """The first-run ceremony: a real setup token and a real WebAuthn registration."""
-        origin = str(self.auth_state()["rp_origin"])
-        rp_id = urlsplit(origin).hostname or "localhost"
-        authenticator = SoftwareAuthenticator(rp_id, origin)
-        begin = self.post("/api/auth/setup/begin", json={"token": token})
-        credential = authenticator.registration_credential(begin["options"])
-        response = self.http.post(
-            "/api/auth/setup/verify",
-            json={"challenge_id": begin["challenge_id"], "credential": credential},
-        )
+    def login(self, passphrase: str = E2E_PASSPHRASE) -> None:
+        response = self.http.post("/api/auth/login", json={"passphrase": passphrase})
         self._check(response)
         self.cookie = response.cookies.get(COOKIE_NAME) or self.cookie
         self.use_cookie()
-        return response.json()
 
     # -- attachments and chat --
 
@@ -458,8 +444,7 @@ def render_turn(turn: dict[str, Any]) -> str:
 def server_env(port: int) -> dict[str, str]:
     """What `serve` needs to be a browser-reachable, job-running instance on this port."""
     return {
-        "ARNO_RP_ID": "localhost",
-        "ARNO_RP_ORIGIN": f"http://localhost:{port}",
+        "ARNO_PASSPHRASE": E2E_PASSPHRASE,
         "ARNO_COOKIE_SECURE": "0",
         "ARNO_JOBS_ENABLED": "1",
         "ARNO_TRUSTED_HOSTS": "localhost,127.0.0.1,testserver",
@@ -503,29 +488,6 @@ def prepare_database(*, empty: bool, seed: bool) -> str:
 
     asyncio.run(run())
     return name
-
-
-def issue_setup_token() -> str:
-    """A fresh first-run enrollment token, rotating the one the server logged at startup."""
-    from arno.auth.setup import issue_setup_token as issue
-    from arno.db.conn import connect
-
-    async def run() -> str:
-        async with connect(_dsn()) as conn:
-            return (await issue(conn, ttl_hours=1)).token
-
-    return asyncio.run(run())
-
-
-def reset_passkeys() -> str:
-    """Reopen first-run setup the way `arno passkeys reset` does, and return its token."""
-    from arno.cli import _passkeys_reset  # the CLI's own recovery path, not a copy
-    from arno.config import get_settings
-
-    _deleted, _revoked, issued = asyncio.run(_passkeys_reset(get_settings(refresh=True)))
-    if issued is None:
-        raise SystemExit("could not reopen setup after resetting the passkeys")
-    return issued.token
 
 
 def _spawn_kwargs() -> dict[str, Any]:
@@ -838,12 +800,8 @@ def cmd_up(args: argparse.Namespace) -> int:
     try:
         if state.get("cookie") and driver.logged_in():
             reused = True
-            user = driver.session().get("user") or {}
         else:
-            token = (
-                issue_setup_token() if driver.auth_state()["setup_required"] else reset_passkeys()
-            )
-            user = driver.enroll(token).get("user") or {}
+            driver.login()
         cookie = driver.cookie
     except BaseException:
         stop_server(process.pid)
@@ -864,12 +822,7 @@ def cmd_up(args: argparse.Namespace) -> int:
     )
     print(f"up: {base_url}  db={name}  pid={process.pid}  schema={health['schema_version']}")
     print(f"log: {log_path}")
-    print(f"user: {user.get('display_name')}")
-    print(
-        "session: reused from the state file"
-        if reused
-        else "enrolled: a software passkey registered through the real setup ceremony"
-    )
+    print("session: reused from the state file" if reused else "signed in with the passphrase")
     return 0
 
 
@@ -890,7 +843,7 @@ def _driver(args: argparse.Namespace) -> Driver:
     if not state.get("base_url"):
         raise SystemExit("no server in the state file; run `driver up --port N` first")
     if not state.get("cookie"):
-        raise SystemExit("no session in the state file; run `driver up` again to enroll")
+        raise SystemExit("no session in the state file; run `driver up` again to sign in")
     return Driver(state["base_url"], cookie=state["cookie"])
 
 
@@ -1017,7 +970,7 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--json", action="store_true", help="print the raw payload as JSON")
         return sub
 
-    up = command("up", "migrate, start the server, and enroll a passkey")
+    up = command("up", "migrate, start the server, and sign in with the passphrase")
     up.add_argument("--port", type=int, required=True)
     up.add_argument("--seed", choices=["demo"], help="seed the synthetic persona (resets the db)")
     up.add_argument("--empty", action="store_true", help="drop the schema first: no ledger at all")

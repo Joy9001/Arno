@@ -21,7 +21,7 @@ async def live_server(app, monkeypatch, model):
     monkeypatch.setattr(
         app_module, "build_agent", lambda **kwargs: build_agent(model=model, **kwargs)
     )
-    app.dependency_overrides[current_session] = lambda: {"user_id": "test"}
+    app.dependency_overrides[current_session] = lambda: {"method": "tailscale", "login": "test"}
     ready: Future[int] = Future()
 
     class TestServer(uvicorn.Server):

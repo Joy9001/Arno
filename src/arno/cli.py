@@ -1,4 +1,4 @@
-"""The host CLI: migrations, the server, and passkey recovery.
+"""The host CLI: migrations, the server, backups, and the demo persona.
 
 Admin commands never go over HTTP. Anyone with a shell on the host already has the data.
 """
@@ -18,9 +18,6 @@ from typing import Any
 import typer
 import uvicorn
 
-from arno.auth.enrollment import enrollment_message
-from arno.auth.sessions import revoke_all_sessions
-from arno.auth.setup import issue_setup_token, setup_required
 from arno.config import ConfigurationError, Settings, get_settings
 from arno.db.bootstrap import set_agent_ro_password, set_backup_password
 from arno.db.conn import connect
@@ -36,9 +33,7 @@ app = typer.Typer(
     no_args_is_help=True,
     help="Arno administration and development.",
 )
-passkeys_app = typer.Typer(no_args_is_help=True, help="Passkey recovery.")
 demo_app = typer.Typer(no_args_is_help=True, help="The synthetic demo persona.")
-app.add_typer(passkeys_app, name="passkeys")
 app.add_typer(demo_app, name="demo")
 
 logger = logging.getLogger("arno")
@@ -53,7 +48,7 @@ def _settings() -> Settings:
 
 
 def _configure_console() -> None:
-    """Write UTF-8 with replacement, so `₹` or a QR block can't crash a legacy console.
+    """Write UTF-8 with replacement, so `₹` can't crash a legacy console.
 
     A Windows console still reports a code page such as cp1252, where `₹` is unencodable:
     `typer.echo` would raise after the turn was already saved, and the user never saw the answer.
@@ -70,7 +65,7 @@ def _configure_console() -> None:
 
 @app.callback()
 def _entry() -> None:
-    """Every command runs on a console that can carry the rupee sign and QR blocks."""
+    """Every command runs on a console that can carry the rupee sign."""
     _configure_console()
 
 
@@ -116,95 +111,6 @@ def serve(
         reload=reload,
         log_level="info",
     )
-
-
-@app.command("setup")
-def setup() -> None:
-    """Issue a first-run setup token (alias of setup-token)."""
-    setup_token()
-
-
-async def _setup_token(settings: Settings) -> Any:
-    async with connect(settings.database_url) as conn:
-        if not await setup_required(conn):
-            return None
-        return await issue_setup_token(conn, ttl_hours=settings.setup_token_ttl_hours)
-
-
-@app.command("setup-token")
-def setup_token() -> None:
-    """Issue a fresh first-run enrollment link (rotates the previous one)."""
-    settings = _settings()
-    issued = asyncio.run(_setup_token(settings))
-    if issued is None:
-        typer.echo("Setup is complete; use Settings → Passkeys to add a device.")
-        raise typer.Exit(code=0)
-    typer.echo(
-        enrollment_message(
-            settings.rp_origin,
-            issued.token,
-            title=f"First-run setup is open (link valid {settings.setup_token_ttl_hours}h).",
-        )
-    )
-
-
-async def _passkeys_list(settings: Settings) -> list[dict[str, Any]]:
-    async with connect(settings.database_url) as conn:
-        return await conn.fetch(
-            """
-            SELECT c.id, c.name, c.created_at, c.last_used_at, u.display_name
-            FROM webauthn_credentials c
-            JOIN users u ON u.id = c.user_id
-            ORDER BY c.created_at
-            """
-        )
-
-
-@passkeys_app.command("list")
-def passkeys_list() -> None:
-    """List registered passkeys."""
-    settings = _settings()
-    rows = asyncio.run(_passkeys_list(settings))
-    if not rows:
-        typer.echo("No passkeys are registered.")
-        return
-    for row in rows:
-        used = row["last_used_at"].isoformat() if row["last_used_at"] else "never"
-        typer.echo(f"{row['id']}  {row['name']}  created {row['created_at']}  last used {used}")
-
-
-async def _passkeys_reset(settings: Settings) -> tuple[int, int, Any]:
-    async with connect(settings.database_url) as conn:
-        async with conn.transaction():
-            status_str = await conn.execute("DELETE FROM webauthn_credentials")
-            deleted = int(status_str.split()[-1])
-            await conn.execute("DELETE FROM webauthn_challenges")
-        revoked = await revoke_all_sessions(conn)
-        if await setup_required(conn):
-            issued = await issue_setup_token(conn, ttl_hours=settings.setup_token_ttl_hours)
-        else:
-            issued = None
-    return deleted, revoked, issued
-
-
-@passkeys_app.command("reset")
-def passkeys_reset() -> None:
-    """Delete every passkey and session, then reopen setup with a fresh enrollment link."""
-    settings = _settings()
-    deleted, revoked, issued = asyncio.run(_passkeys_reset(settings))
-
-    typer.echo(f"Deleted {deleted} passkey(s) and revoked {revoked} session(s).")
-    if issued:
-        typer.echo(
-            enrollment_message(
-                settings.rp_origin,
-                issued.token,
-                title=(
-                    "First-run setup is open. Scan this QR code or open the link "
-                    f"(valid {settings.setup_token_ttl_hours}h)."
-                ),
-            )
-        )
 
 
 async def _export(settings: Settings, *, format: str) -> Any:

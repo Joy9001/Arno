@@ -13,7 +13,6 @@ import asyncio
 import hashlib
 import ipaddress
 import os
-import secrets
 import shlex
 import socket
 import tempfile
@@ -83,8 +82,6 @@ def _per_worker_env() -> None:
 _per_worker_env()
 
 # Set before importing arno, so Settings.from_env sees them.
-os.environ.setdefault("ARNO_RP_ID", "localhost")
-os.environ.setdefault("ARNO_RP_ORIGIN", "http://localhost:8000")
 os.environ.setdefault("ARNO_COOKIE_SECURE", "0")
 for _role in ("CHAT", "VISION", "STT"):
     os.environ.setdefault(f"{_role}_BASE_URL", "http://127.0.0.1:9/v1")
@@ -108,8 +105,6 @@ from pydantic_ai import models  # noqa: E402
 
 from arno import config as arno_config  # noqa: E402
 from arno.api.app import create_app  # noqa: E402
-from arno.auth.sessions import COOKIE_NAME, create_session  # noqa: E402
-from arno.auth.setup import issue_setup_token  # noqa: E402
 from arno.config import Settings, get_settings  # noqa: E402
 from arno.db.bootstrap import set_agent_ro_password, set_backup_password  # noqa: E402
 from arno.db.conn import (  # noqa: E402
@@ -127,16 +122,14 @@ from arno.demo.template import (  # noqa: E402
     database_dsn,
     drop_database,
 )
-from arno.importers.passwords import PASSWORDS  # noqa: E402
-from arno.importers.seed_rules import ensure_seed_rules  # noqa: E402
-from arno.jobs.schedules import ensure_builtin_schedules  # noqa: E402
 from arno.ledger.accounts import ensure_system_accounts  # noqa: E402
 from arno.ledger.categories import ensure_default_categories  # noqa: E402
-from arno.notifications import ensure_vapid_keys  # noqa: E402
-from tests.software_authenticator import SoftwareAuthenticator  # noqa: E402
 
 # A module-level `bool` flag the library itself rebinds; its inferred type is `Literal[True]`.
 models.ALLOW_MODEL_REQUESTS = False  # pyrefly: ignore[bad-assignment]
+
+OWNER_EMAIL = "owner@example.com"
+PASSPHRASE = "correct horse battery staple"
 
 # Ordinary cases reset in place. Demo cases keep native template cloning.
 RESET_TABLES = (
@@ -145,10 +138,6 @@ RESET_TABLES = (
     "llm_usage",
     "schedule_payments",
     "schedule_occurrences",
-    "users",
-    "setup_tokens",
-    "webauthn_challenges",
-    "sessions",
     "pgledger_idempotency_keys",
     "pgledger_entries",
     "pgledger_transfers",
@@ -161,15 +150,12 @@ RESET_TABLES = (
     "captures",
     "imports",
     "statement_lines",
-    "statement_layouts",
-    "parser_versions",
     "attachments",
     "schedules",
     "series_detections",
     "goals",
     "scheduled_questions",
     "category_rules",
-    "categorize_runs",
     "baselines",
     "conversations",
     "messages",
@@ -177,31 +163,21 @@ RESET_TABLES = (
     "audit_log",
     "notifications",
     "recap_views",
-    "push_subscriptions",
-    "jobs",
-    "job_schedules",
     "backup_runs",
-    "vapid_keys",
-    "risk_state",
 )
 _TRUNCATE = "TRUNCATE " + ", ".join(RESET_TABLES) + " RESTART IDENTITY CASCADE"
-_API_CATALOG = ("categories", "category_rules", "job_schedules", "vapid_keys")
+_API_CATALOG = ("categories", "category_rules")
 _TRUNCATE_API = (
     "TRUNCATE "
-    + ", ".join(
-        table for table in RESET_TABLES if table not in (*_API_CATALOG, "scheduled_questions")
-    )
+    + ", ".join(table for table in RESET_TABLES if table not in _API_CATALOG)
     + " RESTART IDENTITY CASCADE"
 )
 
 # Insert order: every FK target precedes its children.
 _STATIC_TABLES = (
     "settings",
-    "risk_state",
     "pgledger_accounts",
     "categories",
-    "job_schedules",
-    "vapid_keys",
     "category_rules",
     "accounts",
 )
@@ -301,9 +277,6 @@ async def _ensure_template(kind: str) -> str:
                 else:
                     await ensure_default_categories(conn)
                     await ensure_system_accounts(conn)
-                    await ensure_seed_rules(conn)
-                    await ensure_vapid_keys(conn)
-                    await ensure_builtin_schedules(conn)
         except BaseException:
             await drop_database(base, name)
             raise
@@ -353,18 +326,14 @@ async def _mutable_reset(*, api: bool) -> None:
         await conn.execute(_TRUNCATE_API if api else _TRUNCATE)
         # `settings` is not in RESET_TABLES; clear it before restoring its baseline row.
         await conn.execute("DELETE FROM settings")
-        # Both rows come from the migrations, so every test kind needs them.
         await _restore_table(conn, "settings")
-        await _restore_table(conn, "risk_state")
         if api:
-            # DELETE follows the FK only for user-created schedules and keeps the builtins.
-            await conn.execute("DELETE FROM scheduled_questions")
             categories_dirty = await _catalog_changed(conn, "categories")
             if categories_dirty:
                 await conn.execute("DELETE FROM category_rules; DELETE FROM categories")
                 await _restore_table(conn, "categories")
                 await _restore_table(conn, "category_rules")
-            for table in ("category_rules", "job_schedules", "vapid_keys"):
+            for table in ("category_rules",):
                 # Category repair already restored the rules; keep the standalone dirty-rules pass.
                 if table == "category_rules" and categories_dirty:
                     continue
@@ -463,11 +432,9 @@ def block_external_network(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def clean_process_state(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Keep cached settings and statement passwords local to each test."""
+    """Keep cached settings local to each test."""
     monkeypatch.setattr(arno_config, "_cached", None)
-    PASSWORDS.clear()
     yield
-    PASSWORDS.clear()
 
 
 @pytest.fixture
@@ -493,12 +460,15 @@ async def clean_database(migrated: list[int], request: pytest.FixtureRequest) ->
 def settings() -> Settings:
     # App startup must not ALTER ROLE: the roles are cluster-wide and `migrated` already set
     # both passwords. Role connections read them from the global settings.
-    return replace(get_settings(refresh=True), agent_ro_password=None, backup_password=None)
-
-
-@pytest.fixture
-def secure_settings(settings: Settings) -> Settings:
-    return replace(settings, cookie_secure=True)
+    return replace(
+        get_settings(refresh=True),
+        agent_ro_password=None,
+        backup_password=None,
+        owner_email=OWNER_EMAIL,
+        passphrase=PASSPHRASE,
+        cookie_secure=False,
+        sandbox_subnet=None,
+    )
 
 
 @pytest.fixture
@@ -511,12 +481,6 @@ def app(settings: Settings, clean_database: None):
 def client(app) -> Iterator[TestClient]:
     with TestClient(app) as test_client:
         yield test_client
-
-
-@pytest.fixture
-async def setup_token(client: TestClient) -> str:
-    async with connect(_dsn()) as conn:
-        return (await issue_setup_token(conn, ttl_hours=1)).token
 
 
 @pytest.fixture
@@ -541,41 +505,7 @@ def demo_ledger(db: Connection) -> Connection:
 
 
 @pytest.fixture
-async def session_client(client: TestClient, settings: Settings) -> TestClient:
-    """A TestClient holding a real session cookie, without a WebAuthn ceremony.
-
-    Use `authed_client` when the test is about passkeys, step-up, or the credential list; this one
-    is for the many tests that only need an authenticated request.
-    """
-    async with connect(_dsn()) as conn:
-        user = await conn.fetchrow_required(
-            "INSERT INTO users (webauthn_user_handle) VALUES ($1) RETURNING id",
-            secrets.token_bytes(16),
-        )
-        token, _ = await create_session(conn, user["id"], ttl_days=settings.session_ttl_days)
-        await conn.execute("UPDATE sessions SET reverified_at = now() WHERE revoked_at IS NULL")
-    client.cookies.set(COOKIE_NAME, token)
+def session_client(client: TestClient) -> TestClient:
+    """A TestClient the way `tailscale serve` presents the owner."""
+    client.headers["Tailscale-User-Login"] = OWNER_EMAIL
     return client
-
-
-@pytest.fixture
-async def authed_client(
-    client: TestClient, setup_token: str, settings: Settings
-) -> AsyncIterator[TestClient]:
-    """A TestClient with a registered passkey, a session, and a fresh passkey check.
-
-    The L8 step-up wall is tested separately in `test_l8_ship.py`; most tests are about ledger
-    behavior, so this fixture marks the session as freshly reverified.
-    """
-    authenticator = SoftwareAuthenticator(settings.rp_id, settings.rp_origin)
-    begin = client.post("/api/auth/setup/begin", json={"token": setup_token})
-    assert begin.status_code == 200, begin.text
-    credential = authenticator.registration_credential(begin.json()["options"])
-    verified = client.post(
-        "/api/auth/setup/verify",
-        json={"challenge_id": begin.json()["challenge_id"], "credential": credential},
-    )
-    assert verified.status_code == 200, verified.text
-    async with connect(_dsn()) as conn:
-        await conn.execute("UPDATE sessions SET reverified_at = now() WHERE revoked_at IS NULL")
-    yield client

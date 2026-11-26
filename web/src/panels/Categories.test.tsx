@@ -58,7 +58,7 @@ describe("Settings → Categories creation", () => {
           notification_time: "09:00",
           weekly_briefing_dow: 0,
           reminder_lead_days: 3,
-          profile: { user_id: "usr_1", display_name: "You" },
+          profile: { display_name: "You" },
           last_model_error_type: null,
           last_model_error_at: null,
           updated_at: null,

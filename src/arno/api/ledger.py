@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, ConfigDict, Field
 
-from arno.api.deps import Database, FreshSession, current_session
+from arno.api.deps import Database, current_session
 from arno.engine.money import MAX_PAISE
 from arno.engine.projection import Projection, ProjectionInput
 from arno.ledger import (
@@ -784,8 +784,7 @@ def get_export_scope() -> dict[str, list[str]]:
 
 
 @router.get("/export/json")
-async def get_export_json(conn: Database, fresh: FreshSession) -> JSONResponse:
-    del fresh
+async def get_export_json(conn: Database) -> JSONResponse:
     stamp = datetime.now().strftime("%Y%m%d")
     return JSONResponse(
         await export.export_json(conn),
@@ -794,8 +793,7 @@ async def get_export_json(conn: Database, fresh: FreshSession) -> JSONResponse:
 
 
 @router.get("/export/csv")
-async def get_export_csv(conn: Database, fresh: FreshSession) -> Response:
-    del fresh
+async def get_export_csv(conn: Database) -> Response:
     stamp = datetime.now().strftime("%Y%m%d")
     return Response(
         await export.export_csv_zip(conn),
@@ -805,8 +803,8 @@ async def get_export_csv(conn: Database, fresh: FreshSession) -> Response:
 
 
 @router.get("/export/pg_dump")
-def get_export_pg_dump(conn: Database, fresh: FreshSession) -> Response:
-    del conn, fresh
+def get_export_pg_dump(conn: Database) -> Response:
+    del conn
     from arno.config import get_settings
 
     stamp = datetime.now().strftime("%Y%m%d")

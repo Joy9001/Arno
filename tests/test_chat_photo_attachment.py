@@ -294,7 +294,7 @@ async def test_mixed_photo_and_statement_carries_both(session_client, demo_ledge
             "SELECT count(*) FROM imports WHERE attachment_id = $1",
             statement.json()["id"],
         )
-        == 0
+        == 1
     )
     thread = session_client.get("/api/threads/thread_photo_mixed/messages").json()
     user = next(message for message in thread["messages"] if message["role"] == "user")

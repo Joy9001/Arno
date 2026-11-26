@@ -1,4 +1,4 @@
-"""Recoverable ingestion: replays and failed refreshes."""
+"""Recoverable ingestion: replayed uploads and failed refreshes."""
 
 from __future__ import annotations
 
@@ -7,13 +7,14 @@ from datetime import date
 
 import pytest
 
-from arno.agent.parser import submit_parser_code
 from arno.importers.commit import commit_import
+from arno.importers.extract import finalize_extracted
 from arno.importers.pipeline import create_import
 from arno.ledger.accounts import create_account, set_statement_balance
 from arno.ledger.audit import new_id
 from arno.ledger.errors import InvalidLedgerError
-from tests.import_fixtures import SBI_PARSER, sbi_csv
+from tests.fixtures import import_helpers as helpers
+from tests.import_fixtures import sbi_csv, statement_from_csv
 
 
 async def _attachment(
@@ -78,8 +79,7 @@ async def test_replaying_the_same_statement_bytes_books_one_import_and_one_set_o
     assert replay["id"] == first["id"]
     assert await ledger.fetchval("SELECT count(*) FROM imports") == 1
 
-    result = await submit_parser_code(ledger, import_ids=[first["id"]], code=SBI_PARSER)
-    assert result["status"] == "parser_submitted", result
+    assert await helpers.read_csv(ledger, first["id"]) == "review"
     await commit_import(ledger, first["id"])
     booked = await ledger.fetchval("SELECT count(*) FROM movements")
 
@@ -109,11 +109,12 @@ async def test_a_failed_refresh_keeps_the_old_statement_date_visible_and_reconci
         await create_import(ledger, attachment_id=attachment_id, account_id=account["id"])
     )["id"]
 
-    broken = SBI_PARSER.replace("'closing': closing", "'closing': 1")
+    data = sbi_csv()
+    extracted = statement_from_csv(data, **helpers.PROFILES["sbi"])
+    extracted.closing = 1
     booked = await ledger.fetchval("SELECT count(*) FROM movements")
-    result = await submit_parser_code(ledger, import_ids=[import_id], code=broken)
-    assert result["status"] == "failed", result
-    assert result["reason"] == "DISCREPANCY"
+    status = await finalize_extracted(ledger, import_id, extracted, text=data.decode())
+    assert status == "failed"
     with pytest.raises(InvalidLedgerError):
         await commit_import(ledger, import_id)
 

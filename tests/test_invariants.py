@@ -776,8 +776,8 @@ async def test_each_invariant_is_caught(ledger):
     async def uncommitted_import():
         import_row = await ledger.fetchrow(
             """
-            INSERT INTO imports (file_hash, parser, account_id, status)
-            VALUES ($1, 'synthetic', $2, 'review') RETURNING *
+            INSERT INTO imports (file_hash, account_id, status)
+            VALUES ($1, $2, 'review') RETURNING *
             """,
             f"case-{uuid.uuid4().hex}",
             bank["id"],
@@ -812,8 +812,8 @@ async def test_each_invariant_is_caught(ledger):
     async def unverified_import():
         await ledger.execute(
             """
-            INSERT INTO imports (file_hash, parser, account_id, status)
-            VALUES ($1, 'synthetic', $2, 'committed')
+            INSERT INTO imports (file_hash, account_id, status)
+            VALUES ($1, $2, 'committed')
             """,
             f"case-{uuid.uuid4().hex}",
             bank["id"],
