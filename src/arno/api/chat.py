@@ -289,6 +289,9 @@ async def post_chat(
     approval_ids = _approval_responses(messages)
     # A confirm answer ends on the assistant's own message, with no new user turn after it.
     approval_turn = bool(approval_ids and messages and messages[-1].get("role") == "assistant")
+    has_approval_edits = "approval_edits" in body and body["approval_edits"] != {}
+    if has_approval_edits and not approval_turn:
+        raise HTTPException(status_code=422, detail="Approval edits require an approval.")
     last = _last_user(messages)
     if last is None and not approval_turn:
         raise HTTPException(status_code=422, detail="A chat request needs a user message.")
@@ -346,8 +349,6 @@ async def post_chat(
 
     history = history_mod.load_history(thread)
     overrides: dict[str, ToolApproved] = {}
-    if "approval_edits" in body and not approval_turn:
-        raise HTTPException(status_code=422, detail="Approval edits require an approval.")
     if approval_turn:
         if set(approval_ids) <= _answered_tool_calls(history):
             # A retry or a duplicate POST of a tap that already landed. Replaying its reply keeps
@@ -356,7 +357,7 @@ async def post_chat(
             if replay is not None:
                 return replay
         _check_approvals(history, approval_ids)
-        if "approval_edits" in body:
+        if has_approval_edits:
             overrides = _approval_edits(body["approval_edits"], messages, history)
         user_row = await conn.fetchrow(
             "SELECT id FROM messages WHERE conversation_id = $1 AND role = 'user' "

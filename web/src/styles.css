@@ -1175,6 +1175,23 @@ button.chip.reducible {
   font-size: 14px;
 }
 
+.metric-hero {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+  background: linear-gradient(rgba(246, 247, 240, .8), rgba(246, 247, 240, .8)), var(--mesh);
+  color: var(--lime-ink);
+}
+
+.metric-hero p { margin: 0; }
+.metric-hero button {
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 8px 15px;
+  background: transparent;
+  color: inherit;
+}
+
 .chat-card.confirm {
   border-color: rgba(255, 159, 10, 0.45);
   background: rgba(255, 159, 10, 0.07);

@@ -249,9 +249,11 @@ export const ChatToolFallback: ToolCallMessagePartComponent = (props) => {
             setAnswering(false);
             return;
           }
-          surface.onApprovalEdit?.(props.toolCallId, {
-            category: category.trim(),
-          });
+          if (category.trim() !== String(changes.category).trim()) {
+            surface.onApprovalEdit?.(props.toolCallId, {
+              category: category.trim(),
+            });
+          }
         }
         if (approved && floorEditable) {
           const value = Number(floor);
@@ -268,7 +270,9 @@ export const ChatToolFallback: ToolCallMessagePartComponent = (props) => {
             setAnswering(false);
             return;
           }
-          surface.onApprovalEdit?.(props.toolCallId, { floor_rupees: value });
+          if (value !== data.floor_rupees) {
+            surface.onApprovalEdit?.(props.toolCallId, { floor_rupees: value });
+          }
         }
         await respondToApproval({ approved });
       } catch (caught) {
@@ -296,7 +300,7 @@ export const ChatToolFallback: ToolCallMessagePartComponent = (props) => {
         )}
         {floorEditable && (
           <label className="text-sm">
-            Floor (?)
+            Floor (₹)
             <input
               className="ml-2 rounded border border-white/20 bg-transparent p-2"
               inputMode="decimal"

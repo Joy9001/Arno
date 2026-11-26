@@ -222,7 +222,13 @@ async def test_a_message_after_an_approval_is_kept_and_answered(session_client, 
             "id": thread_id,
             "trigger": "submit-message",
             "messages": [_user("client-after-1", "thanks")],
+            "approval_edits": {},
         }
+        for invalid in (None, [], "", {"call_pref_1": {"category": "Food"}}):
+            refused = session_client.post(
+                "/api/chat", json={**follow_up, "approval_edits": invalid}
+            )
+            assert refused.status_code == 422
         answer = session_client.post("/api/chat", json=follow_up)
         assert answer.status_code == 200, answer.text
 
@@ -285,7 +291,7 @@ async def test_setup_asks_first_and_the_server_runs_the_call_it_stored(session_c
                 },
             ],
         }
-        second = session_client.post("/api/chat", json=approval)
+        second = session_client.post("/api/chat", json={**approval, "approval_edits": {}})
         assert second.status_code == 200
         assert "Saved." in second.text
 
@@ -316,7 +322,8 @@ async def test_edited_approval_uses_only_the_stored_action(session_client, demo_
         }
         before = await demo_ledger.fetchval("SELECT floor_paise FROM settings WHERE id = 1")
         for edits in (
-            {},
+            None,
+            [],
             {"call_edit": {"floor_rupees": True}},
             {"call_edit": {"floor_rupees": 1, "entity": "account"}},
             {"other": {"floor_rupees": 1}},

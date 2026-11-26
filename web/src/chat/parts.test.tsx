@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { ChatToolFallback } from "./parts";
+import { ChatSurfaceContext } from "./surface";
 
 type Props = ComponentProps<typeof ChatToolFallback>;
 
@@ -19,6 +20,24 @@ function pending(respondToApproval: (answer: { approved: boolean }) => Promise<v
 }
 
 describe("a pending confirm card", () => {
+  it.each([
+    { toolName: "correct_movement", args: { changes: { category: "Food" } }, label: "Category", unchanged: " Food ", changed: "Travel", edit: { category: "Travel" } },
+    { toolName: "update_setup", args: { entity: "settings", data: { floor_rupees: 100 } }, label: "Floor (₹)", unchanged: "100.00", changed: "200.50", edit: { floor_rupees: 200.5 } },
+  ])("sends only a changed $label", ({ toolName, args, label, unchanged, changed, edit }) => {
+    const onApprovalEdit = vi.fn();
+    const respond = vi.fn(async () => {});
+    const props = { ...pending(respond), toolName, args: args as Props["args"] };
+    const view = render(<ChatSurfaceContext.Provider value={{ capture: null, onApprovalEdit }}><ChatToolFallback {...props} /></ChatSurfaceContext.Provider>);
+    fireEvent.change(screen.getByLabelText(label), { target: { value: unchanged } });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    expect(onApprovalEdit).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith({ approved: true });
+    view.unmount();
+    render(<ChatSurfaceContext.Provider value={{ capture: null, onApprovalEdit }}><ChatToolFallback {...props} /></ChatSurfaceContext.Provider>);
+    fireEvent.change(screen.getByLabelText(label), { target: { value: changed } });
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    expect(onApprovalEdit).toHaveBeenCalledWith("call_1", edit);
+  });
   it("sends a denial without running the tool", async () => {
     const respond = vi.fn(async () => {});
     render(<ChatToolFallback {...pending(respond)} />);

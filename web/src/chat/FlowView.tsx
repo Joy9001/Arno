@@ -3,6 +3,7 @@ import { useAuiState } from "@assistant-ui/react";
 import {
   Background,
   Controls,
+  Position,
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
@@ -117,7 +118,7 @@ function Graph({
           const output = `${id}-output`;
           nodes.push({
             id: output,
-            position: { x: column * 440, y: turn * 700 + 180 },
+            position: { x: column * 440 + 240, y: turn * 700 + 180 },
             style: { width: 380 },
             data: {
               label: (
@@ -202,7 +203,7 @@ function Graph({
         previous = id;
       }
     }
-    return { nodes, edges };
+    return { nodes: nodes.map((node) => ({ ...node, sourcePosition: Position.Right, targetPosition: Position.Left })), edges };
   }, [messages, onOpenChat, reducedMotion]);
   useEffect(() => {
     void fitView({ padding: 0.2 });

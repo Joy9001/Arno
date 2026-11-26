@@ -43,16 +43,20 @@ export class ApprovalEdits {
     this.edits.set(threadId, thread);
   }
 
-  approved(threadId: string, messages: ChatMessage[]): Record<string, ApprovalEdit> {
+  approved(threadId: string, messages: ChatMessage[]): Record<string, ApprovalEdit> | undefined {
     const thread = this.edits.get(threadId);
     const result: Record<string, ApprovalEdit> = {};
-    if (!thread) return result;
+    if (!thread) return undefined;
     for (const message of messages) for (const part of message.parts) {
       if (!part.type.startsWith("tool-") || !("state" in part) || part.state !== "approval-responded" || !("approval" in part) || !part.approval?.approved || !("toolCallId" in part)) continue;
       const edit = thread.get(part.toolCallId);
-      if (edit) result[part.toolCallId] = edit;
+      if (edit) {
+        result[part.toolCallId] = edit;
+        thread.delete(part.toolCallId);
+      }
     }
-    return result;
+    if (thread.size === 0) this.edits.delete(threadId);
+    return Object.keys(result).length ? result : undefined;
   }
 }
 
@@ -110,7 +114,7 @@ export class ChatTransport extends AssistantChatTransport<ChatMessage> {
             trigger,
             messageId,
             voice_attachment_id: voiceAttachment ?? undefined,
-            approval_edits: config.approvalEdits?.approved(id, messages),
+            approval_edits: config.approvalEdits?.approved(id, messages.slice(-1)),
             // The server holds the thread's history; it only needs this turn's message.
             messages: attachmentPrompt(messages.slice(-1)),
           },

@@ -22,6 +22,17 @@ it("renders a ledger metric through the allowed registry", () => {
   render(<ToolWidgets toolName="run_query" args={{}} result={{ columns: ["label", "metric_paise"], rows: [["Rent", 120000]], truncated: false }} />);
   expect(screen.getAllByText("Rent").length).toBeGreaterThan(0);
   expect(screen.getAllByText("₹1,200").length).toBeGreaterThan(0);
+  const details = screen.getByText("View query results").closest("details")!;
+  expect(details.open).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "View ledger query" }));
+  expect(details.open).toBe(true);
+});
+
+it("hides movement identifiers while retaining the inspect action", () => {
+  render(<ToolWidgets toolName="run_query" args={{}} result={{ columns: ["movement_id", "amount_paise"], rows: [["private-id", 120000]], truncated: false }} />);
+  expect(screen.queryByText("private-id")).toBeNull();
+  expect(screen.getByRole("button", { name: "Inspect" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "amount" })).toBeTruthy();
 });
 
 it("does not render a component outside the widget allowlist", () => {

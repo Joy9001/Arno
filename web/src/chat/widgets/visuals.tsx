@@ -14,10 +14,10 @@ export function MetricHero({ label, amount, baseline, queryId }: { label: string
     const animation = animate(0, amount, { duration: 0.6, onUpdate: (next) => setValue(Math.round(next)) });
     return () => animation.stop();
   }, [amount, reduced]);
-  return <section className="chat-card" style={{ background: "var(--mesh)", color: "var(--lime-ink)" }}>
+  return <section className="chat-card metric-hero">
     <p>{displayText(label)}</p><strong className="text-3xl">{formatPaise(reduced ? amount : value)}</strong>
     {baseline != null && <p>{formatPaise(amount - baseline)} change from baseline</p>}
-    <button type="button" aria-controls={queryId} className="rounded-full border border-current px-2 text-sm text-[var(--lime-ink)]" onClick={() => document.getElementById(queryId)?.scrollIntoView({ block: "center" })}>View ledger query</button>
+    <button type="button" aria-controls={queryId} onClick={() => { const details = document.getElementById(queryId); if (details instanceof HTMLDetailsElement) { details.open = true; details.scrollIntoView?.({ block: "center" }); } }}>View ledger query</button>
   </section>;
 }
 
