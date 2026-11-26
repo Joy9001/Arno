@@ -222,7 +222,9 @@ async def test_a_card_finance_terms_update_is_one_undo_group(ledger):
         ledger, card["id"], finance_rate_bps=4_800, min_due_bps=1_000, min_due_floor_paise=50_000
     )
     audits = await ledger.fetch(
-        "SELECT table_name FROM audit_log WHERE group_id = $1", updated["undo_id"]
+        "SELECT e ->> 'table' AS table_name FROM undo_log, jsonb_array_elements(snapshot) e "
+        "WHERE id = $1",
+        updated["undo_id"],
     )
     assert [row["table_name"] for row in audits] == ["accounts"]
 
@@ -464,11 +466,11 @@ async def test_archive_and_undo_restore_an_account(ledger):
 
     archive_group = (
         await ledger.fetchrow(
-            "SELECT group_id FROM audit_log WHERE table_name = 'accounts' AND row_id = $1 "
+            "SELECT id FROM undo_log WHERE snapshot @> $1::jsonb "
             "ORDER BY created_at DESC, id DESC LIMIT 1",
-            account["id"],
+            [{"table": "accounts", "key": account["id"]}],
         )
-    )["group_id"]
+    )["id"]
     await undo_group(ledger, archive_group)
     assert (await get_account(ledger, account["id"]))["active"] is True
 
@@ -479,11 +481,11 @@ async def test_undo_account_creation_archives_it(ledger):
     )
     create_group = (
         await ledger.fetchrow(
-            "SELECT group_id FROM audit_log WHERE table_name = 'accounts' AND row_id = $1 "
-            "AND before IS NULL ORDER BY created_at ASC, id ASC LIMIT 1",
-            account["id"],
+            "SELECT id FROM undo_log WHERE snapshot @> $1::jsonb "
+            "ORDER BY created_at ASC, id ASC LIMIT 1",
+            [{"table": "accounts", "key": account["id"]}],
         )
-    )["group_id"]
+    )["id"]
 
     await undo_group(ledger, create_group)
 

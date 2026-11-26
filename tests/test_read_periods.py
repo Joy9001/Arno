@@ -1,7 +1,7 @@
 """Read periods: coverage, literal search, and corrected-row baselines.
 
 Every dataset is built through the real write functions or the real import path, so the rows,
-labels, and reversals are exactly what the app produces.
+labels, and corrections are exactly what the app produces.
 """
 
 from __future__ import annotations

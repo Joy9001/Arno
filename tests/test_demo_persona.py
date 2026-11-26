@@ -119,7 +119,7 @@ async def test_demo_seed_is_deterministic_and_can_be_reseeded(db):
     assert first["schedules"] == second["schedules"]
     assert first["imports"] == second["imports"]
     assert first["statement_coverage"] == second["statement_coverage"]
-    assert (await db.fetchrow("SELECT count(*) AS n FROM audit_log"))["n"] > 0
+    assert (await db.fetchrow("SELECT count(*) AS n FROM undo_log"))["n"] > 0
 
 
 @pytest.mark.xdist_group("cluster")

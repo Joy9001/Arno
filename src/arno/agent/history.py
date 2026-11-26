@@ -516,7 +516,7 @@ async def recover_crashed_runs(conn: Connection) -> list[dict[str, Any]]:
             writes = int(
                 (
                     await conn.fetchrow_required(
-                        "SELECT count(*) AS n FROM audit_log WHERE created_at >= $1", started
+                        "SELECT count(*) AS n FROM undo_log WHERE created_at >= $1", started
                     )
                 )["n"]
             )

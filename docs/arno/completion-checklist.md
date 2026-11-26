@@ -75,7 +75,7 @@ Start these gates after owner deployment, durability, and backfill items above a
 
 - [ ] **Four weeks of daily real-money use (milestone 41).** Use Arno daily for four weeks without
       falling back to a spreadsheet or mental math.
-- [ ] **Measure live categorizer accuracy.** Confirm from `audit_log` during the four-week window
+- [ ] **Measure live categorizer accuracy.** Confirm from `undo_log` during the four-week window
       that at least 90% of LLM-assigned categories remain uncorrected.
 - [ ] **Second-person installation from documentation alone (milestone 40).** Have someone else
       install Arno using only [`operations/self-hosting.md`](operations/self-hosting.md) and fix

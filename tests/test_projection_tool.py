@@ -1129,19 +1129,11 @@ async def test_the_project_tool_echoes_the_request_it_was_asked(demo_ledger):
 
 
 @pytest.mark.usefixtures("small_projection_runs")
-async def test_cut_scenario_is_shared_by_projection_and_workbook(session_client, demo_ledger):
+async def test_cut_scenario_is_validated_by_the_projection_endpoint(session_client, demo_ledger):
     invalid = session_client.get("/api/projection", params={"cut_percent": 51})
     assert invalid.status_code == 422
     cut = session_client.get("/api/projection", params={"cut_percent": 25})
     assert cut.status_code == 200
-    workbook = session_client.get("/api/projection/workbook", params={"cut_percent": 25})
-    assert workbook.status_code == 200
-    from io import BytesIO
-    from zipfile import ZipFile
-
-    with ZipFile(BytesIO(workbook.content)) as archive:
-        strings = archive.read("xl/sharedStrings.xml").decode()
-    assert "request.cut_percent" in strings
 
 
 def test_precut_affordability_never_proposes_a_second_cut():

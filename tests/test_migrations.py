@@ -1,37 +1,88 @@
 from __future__ import annotations
 
-import json
 import os
 import re
-from datetime import UTC, date, datetime, timedelta
+from collections.abc import AsyncGenerator
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import asyncpg
 import pytest
 
+from arno.db.bootstrap import set_agent_ro_password, set_backup_password
 from arno.db.conn import Connection, connect, conninfo_to_dict, make_conninfo
-from arno.db.migrate import applied, current_version, discover, run_migrations
-from tests.conftest import fresh_database
-from tests.invariants import check_ledger
+from arno.db.migrate import (
+    MigrationError,
+    applied,
+    current_version,
+    discover,
+    pending,
+    run_migrations,
+)
+from tests.conftest import cluster_lock, fresh_database
 
 EXPECTED_TABLES = {
-    "settings",
-    "pgledger_accounts",
-    "pgledger_transfers",
-    "pgledger_entries",
-    "pgledger_idempotency_keys",
     "accounts",
-    "movements",
-    "movement_legs",
-    "captures",
-    "imports",
-    "statement_lines",
     "attachments",
+    "backup_runs",
+    "baselines",
+    "captures",
+    "categories",
+    "category_rules",
+    "conversations",
+    "goals",
+    "imports",
+    "llm_usage",
+    "messages",
+    "movement_legs",
+    "movements",
+    "notifications",
+    "payees",
+    "preferences",
+    "recap_views",
+    "schedule_occurrences",
+    "schedule_payments",
     "schedules",
+    "scheduled_questions",
+    "series_detections",
+    "settings",
+    "statement_lines",
+    "undo_log",
+}
+
+VIEW_COLUMNS = {
+    "v_accounts": (
+        "id kind name institution last4 statement_balance_paise statement_balance_as_of liquid "
+        "credit_limit_paise statement_day due_day rate_bps tenure_months emi_schedule_id active "
+        "created_at updated_at balance_paise emi_rate_bps emi_fee_paise finance_rate_bps "
+        "min_due_bps min_due_floor_paise"
+    ),
+    "v_balances": "account_id name kind liquid as_of balance_paise",
+    "v_legs": (
+        "movement_id transfer_id date movement_kind description from_account_id "
+        "from_account_name from_account_kind from_account_liquid to_account_id to_account_name "
+        "to_account_kind to_account_liquid amount_paise category_id category_name payee_id "
+        "payee_name note expected_date"
+    ),
+    "v_owed": "payee_id display_name account_id balance_paise direction next_expected_date",
+    "v_spending": (
+        "movement_id date description transfer_id category_id category_name payee_id payee_name "
+        "amount_paise"
+    ),
+}
+
+# What agent_ro may read: the views and the tables the agent's SQL tool documents.
+AGENT_RO_READABLE = {
+    *VIEW_COLUMNS,
+    "movements",
+    "captures",
+    "schedules",
+    "schedule_occurrences",
+    "schedule_payments",
     "series_detections",
     "goals",
     "scheduled_questions",
+    "imports",
+    "statement_lines",
     "payees",
     "categories",
     "category_rules",
@@ -39,1245 +90,260 @@ EXPECTED_TABLES = {
     "preferences",
     "conversations",
     "messages",
-    "audit_log",
-    "notifications",
-    "backup_runs",
-}
-
-EXPECTED_VIEWS = {
-    "v_accounts",
-    "v_legs",
-    "v_movement_state",
-    "v_spending",
-    "v_balances",
-    "v_owed",
+    "settings",
 }
 
 
-def _agent_ro_dsn() -> str:
-    info = conninfo_to_dict(os.environ["DATABASE_URL"])
-    info["user"] = "agent_ro"
-    info["password"] = os.environ["AGENT_RO_PASSWORD"]
+def _role_dsn(dsn: str, role: str, password_env: str) -> str:
+    info = conninfo_to_dict(dsn)
+    info["user"] = role
+    info["password"] = os.environ[password_env]
     return make_conninfo(**info)
 
 
-async def test_every_migration_is_recorded_once(db):
-    rows = await applied(db)
-    versions = [row["version"] for row in rows]
-
-    assert versions == list(range(1, len(discover()) + 1))
-    assert await current_version(db) == len(discover())
-    names = [row["name"] for row in rows]
-    assert names[0] == "pgledger"
-    assert {
-        "views",
-        "grants",
-        "ledger_l1",
-        "enrollment_tokens",
-        "measured_indexes",
-        "schema_integrity",
-        "movement_legs",
-        "movement_reversal_state",
-        "account_identity",
-        "agent_read_model",
-        "reference_integrity",
-    } <= set(names)
+@pytest.fixture
+async def scratch() -> AsyncGenerator[str]:
+    """A scratch database with the baseline applied; yields its DSN. Needs no ledger code."""
+    async with fresh_database("arno_baseline") as dsn:
+        async with cluster_lock(), connect(dsn) as conn:
+            await run_migrations(conn)
+            await set_agent_ro_password(conn, os.environ["AGENT_RO_PASSWORD"])
+            await set_backup_password(conn, os.environ["BACKUP_PASSWORD"])
+        yield dsn
 
 
-async def test_migrations_are_idempotent(db):
-    assert await run_migrations(db) == []
-    assert await current_version(db) == len(discover())
+@pytest.fixture
+async def db(scratch: str) -> AsyncGenerator[Connection]:
+    async with connect(scratch) as conn:
+        yield conn
 
 
-async def test_measured_indexes_match_query_expressions(db):
-    async with db.transaction():
-        await db.execute("SET LOCAL enable_seqscan = off")
-        audit_plan = await db.fetchval(
-            "EXPLAIN (FORMAT JSON) SELECT count(*) AS n FROM audit_log WHERE created_at > $1",
-            datetime(2026, 1, 1, tzinfo=UTC),
-        )
-
-    audit_text = audit_plan if isinstance(audit_plan, str) else json.dumps(audit_plan)
-    assert "audit_log_created_at_idx" in audit_text
-
-
-async def test_schema_v1_has_every_designed_table_and_view(db):
-    tables = {
-        row["table_name"]
-        for row in await db.fetch(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
-        )
-    }
-    views = {
-        row["table_name"]
-        for row in await db.fetch(
-            "SELECT table_name FROM information_schema.views WHERE table_schema = 'public'"
-        )
-    }
-
-    assert EXPECTED_TABLES <= tables
-    assert EXPECTED_VIEWS <= views
-    assert "v_cashflow" not in views
-    assert {
-        "pgledger_accounts_view",
-        "pgledger_transfers_view",
-        "pgledger_entries_view",
-        "pgledger_idempotency_keys_view",
-    } <= views
-
-
-async def test_money_columns_are_whole_paise_bigints(db):
-    columns = await db.fetch(
-        """
-        SELECT table_name, column_name, data_type
-        FROM information_schema.columns
-        WHERE table_schema = 'public' AND column_name LIKE '%_paise'
-        """
-    )
-
-    assert columns, "expected *_paise columns"
-    assert {row["data_type"] for row in columns} == {"bigint"}
-
-
-async def test_pgledger_ids_are_prefixed_ulids(db):
-    row = await db.fetchrow("SELECT pgledger_generate_id('acc') AS id")
-
-    assert row["id"].startswith("acc_")
-    assert len(row["id"].split("_", 1)[1]) == 26
-
-
-async def test_agent_ro_can_read_the_ledger_but_not_auth_tables(clean_database):
-    async with connect(_agent_ro_dsn()) as conn:
-        assert (await conn.fetchrow_required("SELECT current_user AS who"))["who"] == "agent_ro"
-        for readable in (
-            "v_accounts",
-            "v_legs",
-            "v_movement_state",
-            "v_spending",
-            "v_balances",
-            "v_owed",
-            "schedule_occurrences",
-            "schedule_payments",
-            "series_detections",
-        ):
-            assert await conn.fetchval(f"SELECT count(*) FROM {readable}") == 0
-
-        for forbidden in (
-            "accounts",
-            "movement_legs",
-            "pgledger_accounts_view",
-            "pgledger_transfers_view",
-            "pgledger_entries_view",
-            "pgledger_idempotency_keys_view",
-        ):
-            with pytest.raises(asyncpg.InsufficientPrivilegeError):
-                await conn.execute(f"SELECT count(*) FROM {forbidden}")
-
-
-async def test_agent_ro_cannot_write_or_create_temp_tables(clean_database):
-    async with connect(_agent_ro_dsn()) as conn:
-        with pytest.raises(asyncpg.ReadOnlySQLTransactionError):
-            await conn.execute("INSERT INTO categories (name) VALUES ('x')")
-
-        temp_allowed = (
-            await conn.fetchrow_required(
-                "SELECT has_database_privilege(current_user, current_database(), 'TEMP') AS allowed"
-            )
-        )["allowed"]
-        assert temp_allowed is False
-        with pytest.raises(asyncpg.PostgresError):
-            await conn.execute("CREATE TEMP TABLE scratch (id int)")
-
-
-async def test_agent_ro_has_read_only_and_two_second_defaults(clean_database):
-    async with connect(_agent_ro_dsn()) as conn:
-        row = await conn.fetchrow_required(
-            "SELECT current_setting('default_transaction_read_only') AS ro, "
-            "current_setting('statement_timeout') AS timeout"
-        )
-
-    assert row["ro"] == "on"
-    assert row["timeout"] == "2s"
-
-
-async def test_schema_integrity_rejects_fractional_transfer_amount(db):
-    from decimal import Decimal
-
-    async with db.transaction():
-        a1 = await db.fetchval(
-            "SELECT id FROM pgledger_create_account('Frac From', 'INR', true, true, NULL)"
-        )
-        a2 = await db.fetchval(
-            "SELECT id FROM pgledger_create_account('Frac To', 'INR', true, true, NULL)"
-        )
-        with pytest.raises(asyncpg.CheckViolationError) as exc:
-            await db.execute(
-                "SELECT * FROM pgledger_create_transfer($1, $2, $3, NULL, NULL)",
-                a1,
-                a2,
-                Decimal("10.50"),
-            )
-    assert getattr(exc.value, "constraint_name", None) == "pgledger_transfers_amount_integer_check"
-
-
-async def test_schema_integrity_rejects_reversal_polarity_violation(db):
-    async with db.transaction():
-        mov_id = await db.fetchval(
-            "INSERT INTO movements (date, description, kind) "
-            "VALUES ('2026-01-01', 'Coffee', 'expense') RETURNING id"
-        )
-        with pytest.raises(asyncpg.CheckViolationError) as exc:
-            await db.execute(
-                "INSERT INTO movements (date, description, kind, reverses_id) "
-                "VALUES ('2026-01-01', 'Not reversal', 'expense', $1)",
-                mov_id,
-            )
-    assert getattr(exc.value, "constraint_name", None) == "movements_reversal_pair_check"
-
-
-async def test_schema_integrity_rejects_self_reversal_and_function_handles_cycle(db):
-    with pytest.raises(asyncpg.CheckViolationError) as exc:
-        async with db.transaction():
-            await db.execute(
-                "INSERT INTO movements (id, date, description, kind, reverses_id) "
-                "VALUES ('mov_self', '2026-01-01', 'Self', 'reversal', 'mov_self')"
-            )
-    assert getattr(exc.value, "constraint_name", None) == "movements_check1"
-
-    tx = db.transaction()
-    await tx.start()
-    try:
-        m0 = await db.fetchval(
-            "INSERT INTO movements (date, description, kind) "
-            "VALUES ('2026-01-01', 'Seed', 'expense') RETURNING id"
-        )
-        r1 = await db.fetchval(
-            "INSERT INTO movements (date, description, kind, reverses_id) "
-            "VALUES ('2026-01-02', 'R1', 'reversal', $1) RETURNING id",
-            m0,
-        )
-        r2 = await db.fetchval(
-            "INSERT INTO movements (date, description, kind, reverses_id) "
-            "VALUES ('2026-01-03', 'R2', 'reversal', $1) RETURNING id",
-            r1,
-        )
-        await db.execute("UPDATE movements SET reverses_id = $1 WHERE id = $2", r2, r1)
-        rows = await db.fetch("SELECT movement_id, is_reversed FROM movement_reversal_state()")
-        assert {row["movement_id"] for row in rows} >= {r1, r2}
-    finally:
-        await tx.rollback()
-
-
-async def test_schema_integrity_rejects_case_variant_category(db):
-    async with db.transaction():
-        await db.execute("INSERT INTO categories (name) VALUES ('Food')")
-        with pytest.raises(asyncpg.UniqueViolationError) as exc:
-            await db.execute("INSERT INTO categories (name) VALUES ('food')")
-    assert getattr(exc.value, "constraint_name", None) == "categories_lower_name_idx"
-
-
-async def test_payee_rename_updates_views_without_touching_accounts(db):
-    from arno.ledger.accounts import create_account
-    from arno.ledger.movements import record_lending
-    from arno.ledger.payees import create_payee, update_payee
-
-    acc = await create_account(db, kind="bank", name="HDFC Bank", opening_balance_paise=10_000)
-    payee = await create_payee(db, display_name="Ravi Old", kind="person")
-    await record_lending(
-        db, account_id=acc["id"], payee_id=payee["id"], amount_paise=5_000, direction="i_lent"
-    )
-
-    person_acc_id = payee["person_account_id"]
-    before_acc = await db.fetchrow_required(
-        "SELECT name, updated_at FROM accounts WHERE id = $1", person_acc_id
-    )
-    assert before_acc["name"] is None
-    acc_audits_before = await db.fetchval(
-        "SELECT count(*) FROM audit_log WHERE table_name = 'accounts' AND row_id = $1",
-        person_acc_id,
-    )
-
-    await update_payee(db, payee["id"], display_name="Ravi Renamed")
-
-    after_acc = await db.fetchrow_required(
-        "SELECT name, updated_at FROM accounts WHERE id = $1", person_acc_id
-    )
-    assert after_acc["name"] is None
-    assert after_acc["updated_at"] == before_acc["updated_at"]
-    acc_audits_after = await db.fetchval(
-        "SELECT count(*) FROM audit_log WHERE table_name = 'accounts' AND row_id = $1",
-        person_acc_id,
-    )
-    assert acc_audits_after == acc_audits_before
-
-    async with connect(_agent_ro_dsn()) as ro:
-        assert (
-            await ro.fetchval("SELECT name FROM v_accounts WHERE id = $1", person_acc_id)
-            == "Ravi Renamed"
-        )
-        assert (
-            await ro.fetchval(
-                "SELECT DISTINCT name FROM v_balances WHERE account_id = $1", person_acc_id
-            )
-            == "Ravi Renamed"
-        )
-        assert (
-            await ro.fetchval("SELECT display_name FROM v_owed WHERE payee_id = $1", payee["id"])
-            == "Ravi Renamed"
-        )
-
-
-async def test_goal_rename_updates_goal_account_view(db):
-    from arno.ledger.accounts import create_account, update_account
-    from arno.ledger.audit import undo_group
-    from arno.ledger.goals import create_goal, update_goal
-    from arno.ledger.movements import record_goal_contribution
-
-    bank = await create_account(db, kind="bank", name="Savings Bank", opening_balance_paise=50_000)
-    goal = await create_goal(db, name="Emergency Fund", target_paise=100_000)
-    await record_goal_contribution(
-        db, account_id=bank["id"], goal_account_id=goal["account_id"], amount_paise=10_000
-    )
-
-    acc_audits_before = await db.fetchval(
-        "SELECT count(*) FROM audit_log WHERE table_name = 'accounts' AND row_id = $1",
-        goal["account_id"],
-    )
-    await update_goal(db, goal["id"], name="Rainy Day")
-
-    assert await db.fetchval("SELECT name FROM accounts WHERE id = $1", goal["account_id"]) is None
-    assert (
-        await db.fetchval(
-            "SELECT count(*) FROM audit_log WHERE table_name = 'accounts' AND row_id = $1",
-            goal["account_id"],
-        )
-        == acc_audits_before
-    )
-    async with connect(_agent_ro_dsn()) as ro:
-        assert (
-            await ro.fetchval("SELECT name FROM v_accounts WHERE id = $1", goal["account_id"])
-            == "Rainy Day goal"
-        )
-        assert (
-            await ro.fetchval(
-                "SELECT DISTINCT name FROM v_balances WHERE account_id = $1", goal["account_id"]
-            )
-            == "Rainy Day goal"
-        )
-
-    renamed = await update_account(db, goal["account_id"], name="Japan Trip goal")
-    assert await db.fetchval("SELECT name FROM goals WHERE id = $1", goal["id"]) == "Japan Trip"
-    assert (
-        await db.fetchval("SELECT name FROM v_accounts WHERE id = $1", goal["account_id"])
-        == "Japan Trip goal"
-    )
-    await undo_group(db, renamed["undo_id"])
-    assert await db.fetchval("SELECT name FROM goals WHERE id = $1", goal["id"]) == "Rainy Day"
-    assert (
-        await db.fetchval("SELECT name FROM v_accounts WHERE id = $1", goal["account_id"])
-        == "Rainy Day goal"
-    )
-
-
-async def test_person_account_rename_updates_payee_and_undoes(db):
-    from arno.ledger.accounts import update_account
-    from arno.ledger.audit import undo_group
-    from arno.ledger.payees import create_payee
-
-    payee = await create_payee(db, display_name="Meera Old", kind="person")
-    person_acc_id = payee["person_account_id"]
-
-    renamed = await update_account(db, person_acc_id, name="Meera New")
-    assert renamed["name"] == "Meera New"
-    assert (
-        await db.fetchval("SELECT display_name FROM payees WHERE id = $1", payee["id"])
-        == "Meera New"
-    )
-    assert (
-        await db.fetchval("SELECT name FROM v_accounts WHERE id = $1", person_acc_id) == "Meera New"
-    )
-    audit_tables = [
-        row["table_name"]
-        for row in await db.fetch(
-            "SELECT table_name FROM audit_log WHERE group_id = $1", renamed["undo_id"]
-        )
-    ]
-    assert audit_tables == ["payees"]
-
-    await undo_group(db, renamed["undo_id"])
-    assert (
-        await db.fetchval("SELECT display_name FROM payees WHERE id = $1", payee["id"])
-        == "Meera Old"
-    )
-    assert (
-        await db.fetchval("SELECT name FROM v_accounts WHERE id = $1", person_acc_id) == "Meera Old"
-    )
-
-
-async def test_account_name_kind_check_enforced(db):
-    async with db.transaction():
-        pg_person = await db.fetchval(
-            "SELECT id FROM pgledger_create_account('acc_check_p', 'INR', true, true, NULL)"
-        )
-        with pytest.raises(asyncpg.CheckViolationError) as exc_person:
-            await db.execute(
-                "INSERT INTO accounts (id, kind, ledger_account_id, name, liquid) "
-                "VALUES ('acc_check_p', 'person', $1, 'Forbidden', false)",
-                pg_person,
-            )
-    assert getattr(exc_person.value, "constraint_name", None) == "accounts_name_kind_check"
-
-    async with db.transaction():
-        pg_bank = await db.fetchval(
-            "SELECT id FROM pgledger_create_account('acc_check_b', 'INR', true, true, NULL)"
-        )
-        with pytest.raises(asyncpg.CheckViolationError) as exc_bank:
-            await db.execute(
-                "INSERT INTO accounts (id, kind, ledger_account_id, name, liquid) "
-                "VALUES ('acc_check_b', 'bank', $1, NULL, true)",
-                pg_bank,
-            )
-    assert getattr(exc_bank.value, "constraint_name", None) == "accounts_name_kind_check"
-
-
-async def test_card_finance_terms_are_bounded_and_card_only(db):
-    from arno.ledger.accounts import create_account
-
-    card = await create_account(
-        db,
-        kind="card",
-        name="Terms card",
-        credit_limit_paise=100_000,
-        statement_day=5,
-        due_day=25,
-    )
-    bank = await create_account(db, kind="bank", name="Terms bank")
-
-    for column, value in (
-        ("finance_rate_bps", -1),
-        ("finance_rate_bps", 10_001),
-        ("min_due_bps", -1),
-        ("min_due_bps", 10_001),
-        ("min_due_floor_paise", -1),
-    ):
-        async with db.transaction():
-            with pytest.raises(asyncpg.CheckViolationError):
-                await db.execute(
-                    f"UPDATE accounts SET {column} = $1 WHERE id = $2", value, card["id"]
-                )
-
-    for column, value in (
-        ("finance_rate_bps", 4_200),
-        ("min_due_bps", 500),
-        ("min_due_floor_paise", 20_000),
-    ):
-        async with db.transaction():
-            with pytest.raises(asyncpg.CheckViolationError) as exc:
-                await db.execute(
-                    f"UPDATE accounts SET {column} = $1 WHERE id = $2", value, bank["id"]
-                )
-        assert getattr(exc.value, "constraint_name", None) == "accounts_finance_terms_card_check"
-
+async def _two_accounts(db: Connection) -> None:
     await db.execute(
-        "UPDATE accounts SET finance_rate_bps = 4200, min_due_bps = 500, "
-        "min_due_floor_paise = 20000 WHERE id = $1",
-        card["id"],
-    )
-    async with connect(_agent_ro_dsn()) as ro:
-        terms = await ro.fetchrow_required(
-            "SELECT finance_rate_bps, min_due_bps, min_due_floor_paise "
-            "FROM v_accounts WHERE id = $1",
-            card["id"],
-        )
-        bank_terms = await ro.fetchrow_required(
-            "SELECT finance_rate_bps, min_due_bps, min_due_floor_paise "
-            "FROM v_accounts WHERE id = $1",
-            bank["id"],
-        )
-    assert dict(terms) == {
-        "finance_rate_bps": 4_200,
-        "min_due_bps": 500,
-        "min_due_floor_paise": 20_000,
-    }
-    assert dict(bank_terms) == {
-        "finance_rate_bps": None,
-        "min_due_bps": None,
-        "min_due_floor_paise": None,
-    }
-
-
-async def test_subtype_foreign_keys_and_single_user_guard(db):
-    cols = {
-        (row["table_name"], row["column_name"])
-        for row in await db.fetch(
-            """
-            SELECT table_name, column_name
-            FROM information_schema.columns
-            WHERE table_schema = 'public' AND table_name IN ('goals', 'payees')
-            """
-        )
-    }
-    assert ("goals", "account_kind") not in cols
-    assert ("payees", "person_account_kind") not in cols
-
-    constraints = {
-        row["conname"]
-        for row in await db.fetch(
-            """
-            SELECT c.conname
-            FROM pg_constraint c
-            JOIN pg_namespace n ON n.oid = c.connamespace
-            WHERE n.nspname = 'public'
-              AND c.conrelid IN ('accounts'::regclass, 'goals'::regclass, 'payees'::regclass)
-            """
-        )
-    }
-    assert "accounts_id_kind_key" not in constraints
-    assert "goals_account_id_fkey" in constraints
-    assert "payees_person_account_id_fkey" in constraints
-
-    async with db.transaction():
-        with pytest.raises(asyncpg.ForeignKeyViolationError) as exc_goal:
-            await db.execute(
-                "INSERT INTO goals (name, target_paise, account_id) "
-                "VALUES ('Bad Goal', 10000, 'acc_missing_00000000000000')"
-            )
-    assert getattr(exc_goal.value, "constraint_name", None) == "goals_account_id_fkey"
-
-    async with db.transaction():
-        with pytest.raises(asyncpg.ForeignKeyViolationError) as exc_payee:
-            await db.execute(
-                "INSERT INTO payees (display_name, kind, person_account_id) "
-                "VALUES ('Bad Person', 'person', 'acc_missing_00000000000000')"
-            )
-    assert getattr(exc_payee.value, "constraint_name", None) == "payees_person_account_id_fkey"
-
-
-async def test_pgledger_accounts_name_equals_account_id_for_every_kind(db):
-    from arno.ledger.accounts import create_account, ensure_system_accounts, update_account
-    from arno.ledger.goals import create_goal, update_goal
-    from arno.ledger.payees import create_payee, update_payee
-
-    await ensure_system_accounts(db)
-    bank = await create_account(db, kind="bank", name="All Kinds Bank")
-    await create_account(
-        db,
-        kind="card",
-        name="All Kinds Card",
-        credit_limit_paise=100_000,
-        statement_day=5,
-        due_day=25,
-    )
-    await create_account(db, kind="cash", name="All Kinds Cash")
-    await create_account(db, kind="wallet", name="All Kinds Wallet")
-    await create_account(db, kind="loan", name="All Kinds Loan")
-    await create_account(db, kind="asset", name="All Kinds Asset")
-    goal = await create_goal(db, name="All Kinds Goal", target_paise=100_000)
-    payee = await create_payee(db, display_name="All Kinds Person", kind="person")
-
-    await update_account(db, bank["id"], name="All Kinds Bank Renamed")
-    await update_goal(db, goal["id"], name="All Kinds Goal Renamed")
-    await update_payee(db, payee["id"], display_name="All Kinds Person Renamed")
-
-    rows = await db.fetch(
-        """
-        SELECT a.id, a.kind, pg.name AS pg_name, pgv.name AS pg_view_name
-        FROM accounts a
-        JOIN pgledger_accounts pg ON pg.id = a.ledger_account_id
-        JOIN pgledger_accounts_view pgv ON pgv.id = a.ledger_account_id
-        ORDER BY a.id
-        """
-    )
-    assert len(rows) == 11
-    assert {row["kind"] for row in rows} == {
-        "bank",
-        "card",
-        "cash",
-        "wallet",
-        "loan",
-        "asset",
-        "goal",
-        "person",
-        "spending",
-        "income",
-        "equity",
-    }
-    for row in rows:
-        assert row["pg_name"] == row["id"]
-        assert row["pg_view_name"] == row["id"]
-
-
-async def test_movement_legs_rejects_legless_transfer_on_commit(db):
-    with pytest.raises(asyncpg.ForeignKeyViolationError) as exc:
-        async with db.transaction():
-            a1 = await db.fetchval(
-                "SELECT id FROM pgledger_create_account('Legless From', 'INR', true, true, NULL)"
-            )
-            a2 = await db.fetchval(
-                "SELECT id FROM pgledger_create_account('Legless To', 'INR', true, true, NULL)"
-            )
-            await db.execute(
-                "SELECT * FROM pgledger_create_transfer($1, $2, 100, NULL, NULL)",
-                a1,
-                a2,
-            )
-    assert getattr(exc.value, "constraint_name", None) == "pgledger_transfers_leg_fkey"
-
-
-async def test_movement_legs_rejects_deleting_leg(db):
-    from arno.ledger.accounts import create_account, ensure_system_accounts
-    from arno.ledger.movements import record_expense
-
-    await ensure_system_accounts(db)
-    bank = await create_account(db, kind="bank", name="Delete Leg Bank")
-    exp = await record_expense(db, account_id=bank["id"], amount_paise=5_000, description="Tea")
-    transfer_id = await db.fetchval(
-        "SELECT transfer_id FROM movement_legs WHERE movement_id = $1", exp["id"]
-    )
-    assert transfer_id is not None
-
-    with pytest.raises(asyncpg.ForeignKeyViolationError) as exc:
-        async with db.transaction():
-            await db.execute("DELETE FROM movement_legs WHERE transfer_id = $1", transfer_id)
-    assert getattr(exc.value, "constraint_name", None) == "pgledger_transfers_leg_fkey"
-    still_there = await db.fetchval(
-        "SELECT 1 FROM movement_legs WHERE transfer_id = $1", transfer_id
-    )
-    assert still_there == 1
-
-
-async def test_label_set_change_and_undo_keeps_leg(db):
-    from arno.ledger.accounts import create_account, ensure_system_accounts
-    from arno.ledger.audit import undo_group
-    from arno.ledger.categories import ensure_default_categories
-    from arno.ledger.movements import correct_movement, record_expense
-
-    await ensure_system_accounts(db)
-    await ensure_default_categories(db)
-    bank = await create_account(db, kind="bank", name="Label Undo Bank")
-    food = await db.fetchval("SELECT id FROM categories WHERE name = 'Food & Dining'")
-    groceries = await db.fetchval("SELECT id FROM categories WHERE name = 'Groceries'")
-    exp = await record_expense(db, account_id=bank["id"], amount_paise=12_000, description="Snack")
-
-    first = await correct_movement(db, exp["id"], changes={"category_id": food})
-    leg = await db.fetchrow_required(
-        "SELECT transfer_id, category_id FROM movement_legs WHERE movement_id = $1", exp["id"]
-    )
-    assert leg["category_id"] == food
-
-    await undo_group(db, first["undo_id"])
-    leg_after_undo = await db.fetchrow_required(
-        "SELECT transfer_id, category_id FROM movement_legs WHERE transfer_id = $1",
-        leg["transfer_id"],
-    )
-    assert leg_after_undo["category_id"] is None
-
-    await correct_movement(db, exp["id"], changes={"category_id": food})
-    second = await correct_movement(db, exp["id"], changes={"category_id": groceries})
-    assert (
-        await db.fetchval(
-            "SELECT category_id FROM movement_legs WHERE transfer_id = $1", leg["transfer_id"]
-        )
-        == groceries
-    )
-    await undo_group(db, second["undo_id"])
-    assert (
-        await db.fetchval(
-            "SELECT category_id FROM movement_legs WHERE transfer_id = $1", leg["transfer_id"]
-        )
-        == food
+        "INSERT INTO accounts (id, kind, name, liquid) VALUES "
+        "('acc_a', 'bank', 'Bank A', true), ('acc_b', 'bank', 'Bank B', true), "
+        "('acc_sp', 'spending', 'Spending', false)"
     )
 
 
-async def test_undo_of_pre_migration_label_journal_works(db):
-    from pathlib import Path
-
-    from arno.ledger.accounts import create_account, ensure_system_accounts
-    from arno.ledger.audit import jsonable, new_id, undo_group
-    from arno.ledger.categories import ensure_default_categories
-    from arno.ledger.movements import record_expense
-
-    await ensure_system_accounts(db)
-    await ensure_default_categories(db)
-    bank = await create_account(db, kind="bank", name="Pre-0033 Bank")
-    food = await db.fetchval("SELECT id FROM categories WHERE name = 'Food & Dining'")
-    groceries = await db.fetchval("SELECT id FROM categories WHERE name = 'Groceries'")
-    exp = await record_expense(db, account_id=bank["id"], amount_paise=8_000, description="Coffee")
-    leg = dict(
-        await db.fetchrow_required("SELECT * FROM movement_legs WHERE movement_id = $1", exp["id"])
-    )
-
-    migration_sql = Path("src/arno/db/migrations/0033_movement_legs.sql").read_text(
-        encoding="utf-8"
-    )
-    audit_stmt = next(
-        stmt
-        for stmt in migration_sql.split(";")
-        if "UPDATE audit_log a" in stmt and "WHERE a.table_name = 'transfer_labels'" in stmt
-    )
-
-    # 1. Pre-migration standalone label creation (before=NULL, no movements creation in group)
-    g_create = await new_id(db, "audg")
-    food_row = {**leg, "category_id": food}
-    await db.execute(
-        "UPDATE movement_legs SET category_id = $1 WHERE transfer_id = $2",
-        food,
-        leg["transfer_id"],
-    )
-    await db.execute(
-        """
-        INSERT INTO audit_log (id, group_id, actor, table_name, row_id, before, after)
-        VALUES ($1, $2, 'user', 'transfer_labels', $3, NULL, $4::jsonb)
-        """,
-        await new_id(db, "aud"),
-        g_create,
-        leg["transfer_id"],
-        json.dumps(jsonable(food_row)),
-    )
-    await db.execute(audit_stmt)
-    await undo_group(db, g_create)
-    assert (
-        await db.fetchval(
-            "SELECT category_id FROM movement_legs WHERE transfer_id = $1", leg["transfer_id"]
-        )
-        is None
-    )
-
-    # 2. Pre-migration label update
-    g_update = await new_id(db, "audg")
-    groceries_row = {**leg, "category_id": groceries}
-    await db.execute(
-        "UPDATE movement_legs SET category_id = $1 WHERE transfer_id = $2",
-        groceries,
-        leg["transfer_id"],
-    )
-    await db.execute(
-        """
-        INSERT INTO audit_log (id, group_id, actor, table_name, row_id, before, after)
-        VALUES ($1, $2, 'user', 'transfer_labels', $3, $4::jsonb, $5::jsonb)
-        """,
-        await new_id(db, "aud"),
-        g_update,
-        leg["transfer_id"],
-        json.dumps(jsonable(food_row)),
-        json.dumps(jsonable(groceries_row)),
-    )
-    await db.execute(audit_stmt)
-    await undo_group(db, g_update)
-    assert (
-        await db.fetchval(
-            "SELECT category_id FROM movement_legs WHERE transfer_id = $1", leg["transfer_id"]
-        )
-        == food
-    )
-
-    # 3. Pre-migration label deletion (before=row, after=NULL)
-    g_delete = await new_id(db, "audg")
-    await db.execute(
-        "UPDATE movement_legs SET category_id = NULL WHERE transfer_id = $1",
-        leg["transfer_id"],
-    )
-    await db.execute(
-        """
-        INSERT INTO audit_log (id, group_id, actor, table_name, row_id, before, after)
-        VALUES ($1, $2, 'user', 'transfer_labels', $3, $4::jsonb, NULL)
-        """,
-        await new_id(db, "aud"),
-        g_delete,
-        leg["transfer_id"],
-        json.dumps(jsonable(food_row)),
-    )
-    await db.execute(audit_stmt)
-    await undo_group(db, g_delete)
-    assert (
-        await db.fetchval(
-            "SELECT category_id FROM movement_legs WHERE transfer_id = $1", leg["transfer_id"]
-        )
-        == food
-    )
-
-
-async def test_run_query_description_matches_agent_ro_catalog(db):
-    from arno.agent.toolset import run_query
-
-    doc = run_query.__doc__
-    assert doc is not None
-    described = re.findall(r"^\s*-\s+([a-z_][a-z0-9_]*):", doc, flags=re.MULTILINE)
-    assert len(described) == len(set(described)), "duplicate object in run_query description"
-
-    granted_rows = await db.fetch(
-        """
-        SELECT c.relname
-        FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'public'
-          AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
-          AND has_table_privilege('agent_ro', c.oid, 'SELECT')
-        ORDER BY c.relname
-        """
-    )
-    granted = {str(row["relname"]) for row in granted_rows}
-    assert set(described) == granted
-
-    public_rows = await db.fetch(
-        """
-        SELECT c.relname
-        FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        WHERE n.nspname = 'public'
-          AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
-        """
-    )
-    public_names = {str(row["relname"]) for row in public_rows}
-    tokens = set(re.findall(r"\b[a-z_][a-z0-9_]*\b", doc))
-    ungranted_mentions = (tokens & public_names) - granted
-    assert not ungranted_mentions, (
-        f"run_query description names ungranted catalog object(s): {sorted(ungranted_mentions)}"
-    )
-
-
-async def test_v_legs_uses_account_ids_and_positive_paise(db):
-    from arno.ledger.accounts import create_account, ensure_system_accounts
-    from arno.ledger.audit import write_group
-    from arno.ledger.categories import ensure_default_categories
-    from arno.ledger.movements import record_expense, record_split, reverse_movement
-    from arno.ledger.payees import create_payee
-
-    await ensure_system_accounts(db)
-    await ensure_default_categories(db)
-    bank = await create_account(db, kind="bank", name="Leg View Bank")
-    food = await db.fetchval("SELECT id FROM categories WHERE name = 'Food & Dining'")
-    friend = await create_payee(db, display_name="Neha", kind="person")
-    merchant = await create_payee(db, display_name="Cafe", kind="merchant")
-
-    exp = await record_expense(
-        db,
-        account_id=bank["id"],
-        amount_paise=15_000,
-        description="Lunch",
-        category_id=food,
-        payee_id=merchant["id"],
-    )
-    async with write_group(db, actor="user") as group:
-        rev = await reverse_movement(group, exp["id"], note="wrong entry")
-    split = await record_split(
-        db,
-        account_id=bank["id"],
-        total_paise=20_000,
-        my_share_paise=10_000,
-        people=[{"payee_id": friend["id"], "amount_paise": 10_000}],
-        description="Dinner",
-        category_id=food,
-    )
-
-    cols = [
-        row["column_name"]
-        for row in await db.fetch(
-            """
-            SELECT column_name
-            FROM information_schema.columns
-            WHERE table_schema = 'public' AND table_name = 'v_legs'
-            ORDER BY ordinal_position
-            """
-        )
-    ]
-    assert cols[cols.index("from_account_kind") + 1] == "from_account_liquid"
-    assert cols[cols.index("to_account_kind") + 1] == "to_account_liquid"
-
-    col_type = await db.fetchval(
-        """
-        SELECT data_type FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'v_legs' AND column_name = 'amount_paise'
-        """
-    )
-    assert col_type == "bigint"
-
-    async with connect(_agent_ro_dsn()) as ro:
-        rows = await ro.fetch("SELECT * FROM v_legs ORDER BY movement_id, transfer_id")
-    assert len(rows) == 4
-    for row in rows:
-        assert str(row["from_account_id"]).startswith("acc_")
-        assert str(row["to_account_id"]).startswith("acc_")
-        assert isinstance(row["amount_paise"], int)
-        assert row["amount_paise"] > 0
-
-    by_mov = {}
-    for row in rows:
-        by_mov.setdefault(str(row["movement_id"]), []).append(row)
-    assert by_mov[exp["id"]][0]["is_reversal"] is False
-    assert by_mov[exp["id"]][0]["is_reversed"] is True
-    assert by_mov[exp["id"]][0]["from_account_liquid"] is True
-    assert by_mov[exp["id"]][0]["to_account_liquid"] is False
-    assert by_mov[rev.id][0]["is_reversal"] is True
-    assert by_mov[rev.id][0]["is_reversed"] is False
-    assert by_mov[rev.id][0]["from_account_kind"] == "spending"
-    assert by_mov[rev.id][0]["from_account_liquid"] is False
-    assert by_mov[rev.id][0]["to_account_id"] == bank["id"]
-    assert by_mov[rev.id][0]["to_account_liquid"] is True
-    assert {r["to_account_name"] for r in by_mov[split["id"]]} == {"Spending", "Neha"}
-
-
-async def test_v_owed_and_v_balances_use_ist_today_regardless_of_session_timezone(db):
-    from arno.ledger.accounts import create_account, ensure_system_accounts
-    from arno.ledger.movements import record_lending
-    from arno.ledger.payees import create_payee
-
-    await ensure_system_accounts(db)
-    bank = await create_account(db, kind="bank", name="TZ Bank")
-    payee = await create_payee(db, display_name="TZ Friend", kind="person")
-    ist_today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
-    yesterday = ist_today - timedelta(days=1)
-
-    await record_lending(
-        db,
-        account_id=bank["id"],
-        payee_id=payee["id"],
-        amount_paise=5_000,
-        direction="i_lent",
-        expected_date=yesterday,
-        date=yesterday,
-    )
-    await record_lending(
-        db,
-        account_id=bank["id"],
-        payee_id=payee["id"],
-        amount_paise=7_000,
-        direction="i_lent",
-        expected_date=ist_today,
-        date=ist_today,
-    )
-
-    async with connect(_agent_ro_dsn()) as ro:
-        for tz in ("Asia/Kolkata", "Pacific/Pago_Pago", "Pacific/Kiritimati"):
-            await ro.execute(f"SET TIME ZONE '{tz}'")
-            owed_date = await ro.fetchval(
-                "SELECT next_expected_date FROM v_owed WHERE payee_id = $1", payee["id"]
-            )
-            assert owed_date == ist_today, f"v_owed drifted under session TZ {tz}: {owed_date}"
-
-            bal_dates = [
-                row["as_of"]
-                for row in await ro.fetch(
-                    "SELECT as_of FROM v_balances WHERE account_id = $1 ORDER BY as_of",
-                    bank["id"],
-                )
-            ]
-            assert bal_dates == [yesterday, ist_today], f"v_balances drifted under {tz}"
-
-
-def _migrations_through(directory: Path, last: int) -> Path:
-    """A migration directory with the expanded copies up to `last`, checksums unchanged."""
-    directory.mkdir()
-    for migration in discover():
-        if migration.version > last:
-            continue
-        path = directory / f"{migration.version:04d}_{migration.name}.sql"
-        path.write_text(migration.sql, encoding="utf-8")
-    return directory
-
-
-async def _ledger_account(conn: Connection, name: str) -> str:
-    return str(
-        await conn.fetchval(
-            "SELECT id FROM pgledger_create_account($1, 'INR', true, true, NULL)", name
-        )
-    )
-
-
-async def _legacy_ledger(conn: Connection) -> None:
-    """Rows a pre-0032 install could hold: legal under 0003, awkward under 0032."""
-    spending = await _ledger_account(conn, "Spending")
-    income = await _ledger_account(conn, "Income")
-    equity = await _ledger_account(conn, "Equity")
-    bank = await _ledger_account(conn, "Legacy Bank")
-    card = await _ledger_account(conn, "Legacy Card")
-    for account_id, kind, ledger_id, name, liquid in (
-        ("acc_legacy_spending", "spending", spending, "Spending", False),
-        ("acc_legacy_income", "income", income, "Income", False),
-        ("acc_legacy_equity", "equity", equity, "Equity", False),
-        ("acc_legacy_bank", "bank", bank, "Legacy Bank", True),
-        ("acc_legacy_card", "card", card, "Legacy Card", False),
-    ):
-        await conn.execute(
-            "INSERT INTO accounts (id, kind, ledger_account_id, name, liquid) "
-            "VALUES ($1, $2, $3, $4, $5)",
-            account_id,
-            kind,
-            ledger_id,
-            name,
-            liquid,
-        )
-    # A card with no terms and a statement date with no balance: both legal before 0032.
-    await conn.execute(
-        "UPDATE accounts SET statement_balance_as_of = DATE '2026-01-31' "
-        "WHERE id = 'acc_legacy_bank'"
-    )
-
-    # Three "food" categories and two "travel" categories before the case-insensitive index
-    # exists. Active wins before the created_at/id tie-break: Food stays canonical even though the
-    # inactive FOOD is older, and the newer active TRAVEL displaces the older inactive Travel.
-    await conn.execute(
-        "INSERT INTO categories (id, name, active, created_at, updated_at) VALUES "
-        "('cat_legacy_food', 'Food', true, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'), "
-        "('cat_legacy_food_lower', 'food', true, '2026-01-02T00:00:00Z', '2026-01-02T00:00:00Z'), "
-        "('cat_legacy_food_upper', 'FOOD', false, '2025-12-01T00:00:00Z', '2025-12-01T00:00:00Z'), "
-        "('cat_legacy_travel', 'Travel', false, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z'), "
-        "('cat_legacy_travel_active', 'TRAVEL', true, '2026-05-01T00:00:00Z', "
-        "'2026-05-01T00:00:00Z')"
-    )
-    # One baseline per case variant in the food group plus one on the losing travel category: the
-    # canonical food baseline must survive three competitors, and the travel one must follow the
-    # active category it was merged into.
-    await conn.execute(
-        "INSERT INTO baselines (id, category_id, amount_per_day_paise, source, "
-        "created_at, updated_at) VALUES "
-        "('bas_legacy_food', 'cat_legacy_food', 10000, 'computed', "
-        "'2026-02-01T00:00:00Z', '2026-02-01T00:00:00Z'), "
-        "('bas_legacy_food_lower', 'cat_legacy_food_lower', 20000, 'estimated', "
-        "'2026-02-02T00:00:00Z', '2026-02-02T00:00:00Z'), "
-        "('bas_legacy_food_upper', 'cat_legacy_food_upper', 30000, 'estimated', "
-        "'2026-02-03T00:00:00Z', '2026-02-03T00:00:00Z'), "
-        "('bas_legacy_travel', 'cat_legacy_travel', 40000, 'computed', "
-        "'2026-02-04T00:00:00Z', '2026-02-04T00:00:00Z')"
-    )
-    # References through every table the preflight repoints, all on losing case variants.
-    await conn.execute(
-        "INSERT INTO category_rules (id, pattern, category_id, source) VALUES "
-        "('rul_legacy_food', 'OLD CAFE', 'cat_legacy_food_lower', 'llm')"
-    )
-    await conn.execute(
-        "INSERT INTO schedules (id, kind, name, rule, starts, category_id) VALUES "
-        "('sch_legacy_food', 'obligation', 'Legacy food plan', 'FREQ=MONTHLY', "
-        "DATE '2026-01-01', 'cat_legacy_food_lower')"
-    )
-    await conn.execute(
-        "INSERT INTO schedule_occurrences (id, schedule_id, due_date, name, kind, category_id) "
-        "VALUES ('occ_legacy_food', 'sch_legacy_food', DATE '2026-02-01', "
-        "'Legacy food plan', 'obligation', 'cat_legacy_food_lower')"
-    )
-    # The same UPI entered on two payees with different capitalisation. The active payee keeps the
-    # identifier even though the inactive one wrote it first.
-    await conn.execute(
-        "INSERT INTO payees (id, display_name, kind, upi_id, default_category_id, active, "
-        "created_at, updated_at) VALUES "
-        "('pay_legacy_a', 'Ravi', 'person', 'ravi@okhdfcbank', NULL, true, "
-        "'2026-03-01T00:00:00Z', '2026-03-01T00:00:00Z'), "
-        "('pay_legacy_b', 'Ravi Kumar', 'merchant', 'RAVI@OKHDFCBANK', 'cat_legacy_food_lower', "
-        "false, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')"
-    )
-
-    async def transfer(from_ledger: str, to_ledger: str, amount: int, movement_id: str) -> str:
-        return str(
-            await conn.fetchval(
-                "SELECT id FROM pgledger_create_transfer($1, $2, $3, NULL, $4, $5)",
-                from_ledger,
-                to_ledger,
-                amount,
-                {"movement_id": movement_id},
-                f"legacy-transfer:{movement_id}",
-            )
-        )
-
-    # An expense, its reversal (recorded with kind='expense': legal before 0032), and a second
-    # expense labelled with the lower-case duplicate category.
-    for movement_id, day, description, kind, reverses in (
-        ("mov_legacy_expense", date(2026, 1, 5), "Legacy lunch", "expense", None),
-        (
-            "mov_legacy_reversal",
-            date(2026, 1, 6),
-            "Legacy reversal",
-            "expense",
-            "mov_legacy_expense",
-        ),
-        ("mov_legacy_travel", date(2026, 2, 10), "Legacy train", "expense", None),
-    ):
-        await conn.execute(
-            "INSERT INTO movements (id, date, description, kind, reverses_id, idempotency_key) "
-            "VALUES ($1, $2, $3, $4, $5, $6)",
-            movement_id,
-            day,
-            description,
-            kind,
-            reverses,
-            f"legacy:{movement_id}",
-        )
-    for movement_id, leg_category, amount in (
-        ("mov_legacy_expense", "cat_legacy_food", 50_000),
-        ("mov_legacy_reversal", "cat_legacy_food", 50_000),
-        ("mov_legacy_travel", "cat_legacy_food_lower", 20_000),
-    ):
-        is_reversal = movement_id == "mov_legacy_reversal"
-        transfer_id = await transfer(
-            spending if is_reversal else bank,
-            bank if is_reversal else spending,
-            amount,
-            movement_id,
-        )
-        await conn.execute(
-            "INSERT INTO transfer_labels (transfer_id, movement_id, category_id) "
-            "VALUES ($1, $2, $3)",
-            transfer_id,
-            movement_id,
-            leg_category,
-        )
-
-    # A case-variant statement layout the preflight cannot merge safely.
-    await conn.execute(
-        "INSERT INTO statement_layouts (id, institution, kind) VALUES "
-        "('lay_legacy_a', 'HDFC', 'credit_card'), "
-        "('lay_legacy_b', 'hdfc', 'credit_card')"
-    )
+# The baseline ---------------------------------------------------------------------------------
 
 
 @pytest.mark.xdist_group("cluster")
-async def test_a_populated_pre_0032_database_upgrades_and_keeps_its_ledger(tmp_path):
-    """The upgrade path for real data: repaired where there is one answer, refused otherwise."""
-    legacy = _migrations_through(tmp_path / "migrations", 31)
+async def test_fresh_database_applies_the_baseline_once():
+    async with fresh_database("arno_baseline") as dsn, cluster_lock(), connect(dsn) as conn:
+        assert await run_migrations(conn) == [1]
+        assert await run_migrations(conn) == []
+        assert [(r["version"], r["name"]) for r in await applied(conn)] == [(1, "baseline")]
+        assert await pending(conn) == []
 
-    async with fresh_database("arno_upgrade") as dsn:
-        async with connect(dsn) as conn:
-            assert await run_migrations(conn, legacy) == list(range(1, 32))
-            await _legacy_ledger(conn)
 
-            # No truthful repair for a card with no terms: name it and leave the schema alone.
-            with pytest.raises(asyncpg.RaiseError, match="0032 preflight: .*card account"):
-                await run_migrations(conn)
-            assert await current_version(conn) == 31
+async def test_the_migrated_database_is_at_the_baseline(db):
+    assert [m.version for m in discover()] == [1]
+    assert await current_version(db) == 1
+    assert await run_migrations(db) == []
 
-            await conn.execute(
-                "UPDATE accounts SET credit_limit_paise = 100000, statement_day = 5, "
-                "due_day = 25 WHERE id = 'acc_legacy_card'"
-            )
-            with pytest.raises(asyncpg.RaiseError, match="0032 preflight: .*statement layout"):
-                await run_migrations(conn)
-            assert await current_version(conn) == 31
 
-            await conn.execute("DELETE FROM statement_layouts WHERE id = 'lay_legacy_b'")
+async def test_a_changed_migration_is_refused(db, tmp_path: Path):
+    changed = tmp_path / "0001_baseline.sql"
+    changed.write_text(discover()[0].sql + "\n-- edited\n", encoding="utf-8")
 
-            # An occurrence kind the closed set never allowed: refuse it too, then remove it.
-            await conn.execute(
-                "INSERT INTO schedules (id, kind, name, rule, starts) "
-                "VALUES ('sch_legacy', 'obligation', 'Legacy rent', 'FREQ=MONTHLY', "
-                "DATE '2026-01-01')"
-            )
-            await conn.execute(
-                "INSERT INTO schedule_occurrences (id, schedule_id, due_date, name, kind) "
-                "VALUES ('occ_legacy', 'sch_legacy', DATE '2026-02-01', 'Legacy rent', 'nonsense')"
-            )
-            with pytest.raises(asyncpg.RaiseError, match="0032 preflight: .*schedule occurrence"):
-                await run_migrations(conn)
-            assert await current_version(conn) == 31
-            await conn.execute("DELETE FROM schedule_occurrences WHERE id = 'occ_legacy'")
+    with pytest.raises(MigrationError, match="changed after it was applied"):
+        await run_migrations(db, tmp_path)
 
+
+async def test_the_schema_has_exactly_the_designed_tables_and_views(db):
+    tables = {
+        r["table_name"]
+        for r in await db.fetch(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"
+        )
+    }
+    assert tables - {"schema_version"} == EXPECTED_TABLES
+
+    for view, columns in VIEW_COLUMNS.items():
+        got = await db.fetchval(
+            "SELECT string_agg(column_name, ' ' ORDER BY ordinal_position) "
+            "FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1",
+            view,
+        )
+        assert got == columns, view
+    views = {
+        r["table_name"]
+        for r in await db.fetch("SELECT table_name FROM information_schema.views")
+        if r["table_name"].startswith("v_")
+    }
+    assert views == set(VIEW_COLUMNS)
+
+
+# A database from before the squash moves to a fresh one --------------------------------------
+
+
+@pytest.mark.xdist_group("cluster")
+async def test_a_database_with_the_old_version_1_is_refused():
+    async with fresh_database("arno_legacy") as dsn, connect(dsn) as conn:
+        await conn.execute(
+            "CREATE TABLE schema_version (version integer PRIMARY KEY, name text NOT NULL, "
+            "checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now());"
+            "INSERT INTO schema_version (version, name, checksum) VALUES (1, 'pgledger', 'x')"
+        )
+        with pytest.raises(MigrationError, match="pre-baseline schema"):
             await run_migrations(conn)
-            assert await current_version(conn) == len(discover())
+        with pytest.raises(MigrationError, match="legacy-upgrades.md"):
+            await pending(conn)
 
-            # The repairs the preflight could make without guessing.
-            assert (
-                await conn.fetchval("SELECT kind FROM movements WHERE id = 'mov_legacy_reversal'")
-                == "reversal"
-            )
-            assert (
-                await conn.fetchval(
-                    "SELECT statement_balance_as_of FROM accounts WHERE id = 'acc_legacy_bank'"
-                )
-                is None
-            )
-            assert (
-                await conn.fetchval("SELECT count(*) FROM categories WHERE lower(name) = 'food'")
-                == 1
-            )
-            assert (
-                await conn.fetchval(
-                    "SELECT category_id FROM movement_legs WHERE movement_id = 'mov_legacy_travel'"
-                )
-                == "cat_legacy_food"
-            )
-            assert (
-                await conn.fetchval("SELECT upi_id FROM payees WHERE id = 'pay_legacy_a'")
-                == "ravi@okhdfcbank"
-            )
-            assert (
-                await conn.fetchval("SELECT upi_id FROM payees WHERE id = 'pay_legacy_b'") is None
-            )
 
-            # Active beats older/inactive for both identities: the active Food and the newer active
-            # TRAVEL survive, and every case variant of each is gone.
-            assert await conn.fetchval("SELECT count(*) FROM categories") == 2
-            assert (
-                await conn.fetchval(
-                    "SELECT count(*) FROM categories WHERE id IN "
-                    "('cat_legacy_food', 'cat_legacy_travel_active')"
-                )
-                == 2
-            )
-            assert (
-                await conn.fetchval(
-                    "SELECT count(*) FROM categories WHERE id IN "
-                    "('cat_legacy_food_lower', 'cat_legacy_food_upper', 'cat_legacy_travel')"
-                )
-                == 0
-            )
+@pytest.mark.xdist_group("cluster")
+async def test_a_database_with_a_pgledger_table_is_refused():
+    async with fresh_database("arno_legacy") as dsn, connect(dsn) as conn:
+        await conn.execute("CREATE TABLE pgledger_accounts (id text PRIMARY KEY)")
+        with pytest.raises(MigrationError, match="pre-baseline schema"):
+            await run_migrations(conn)
 
-            # With three case variants, the canonical baseline is retained, its competitors are
-            # deleted, and the lone baseline on a losing variant follows its merged category.
-            assert await conn.fetchval("SELECT count(*) FROM baselines") == 2
-            assert (
-                await conn.fetchval(
-                    "SELECT category_id FROM baselines WHERE id = 'bas_legacy_food'"
-                )
-                == "cat_legacy_food"
-            )
-            assert (
-                await conn.fetchval(
-                    "SELECT count(*) FROM baselines WHERE id IN "
-                    "('bas_legacy_food_lower', 'bas_legacy_food_upper')"
-                )
-                == 0
-            )
-            assert (
-                await conn.fetchval(
-                    "SELECT category_id FROM baselines WHERE id = 'bas_legacy_travel'"
-                )
-                == "cat_legacy_travel_active"
-            )
 
-            # The same one map repointed every reference table, not just the movement leg.
-            for table, row_id, column in (
-                ("payees", "pay_legacy_b", "default_category_id"),
-                ("category_rules", "rul_legacy_food", "category_id"),
-                ("schedules", "sch_legacy_food", "category_id"),
-                ("schedule_occurrences", "occ_legacy_food", "category_id"),
-            ):
-                assert (
-                    await conn.fetchval(f"SELECT {column} FROM {table} WHERE id = $1", row_id)
-                    == "cat_legacy_food"
-                )
+# Roles ----------------------------------------------------------------------------------------
 
-            # 0032's own constraints and indexes are the ones on disk, byte for byte.
-            recorded = {row["version"]: row["checksum"] for row in await applied(conn)}
-            assert recorded == {m.version: m.checksum for m in discover()}
-            constraints = {
-                row["conname"]
-                for row in await conn.fetch(
-                    "SELECT conname FROM pg_constraint WHERE connamespace = 'public'::regnamespace"
-                )
-            }
-            assert {
-                "pgledger_transfers_amount_integer_check",
-                "movements_reversal_pair_check",
-                "accounts_card_fields_check",
-                "accounts_statement_balance_pair_check",
-            } <= constraints
-            indexes = {
-                row["indexname"]
-                for row in await conn.fetch(
-                    "SELECT indexname FROM pg_indexes WHERE schemaname = 'public'"
-                )
-            }
-            assert {
-                "categories_lower_name_idx",
-                "payees_lower_upi_id_idx",
-            } <= indexes
 
-            assert await check_ledger(conn) == []
+async def test_the_boundary_roles_are_unprivileged(db):
+    rows = await db.fetch(
+        "SELECT rolname, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls "
+        "FROM pg_roles WHERE rolname IN ('agent_ro', 'backup')"
+    )
+    assert {r["rolname"] for r in rows} == {"agent_ro", "backup"}
+    for row in rows:
+        assert not any(v for k, v in row.items() if k != "rolname"), row["rolname"]
+
+
+async def test_agent_ro_reads_the_views_and_listed_tables_only(scratch):
+    async with connect(_role_dsn(scratch, "agent_ro", "AGENT_RO_PASSWORD")) as conn:
+        assert (await conn.fetchrow_required("SELECT current_user AS who"))["who"] == "agent_ro"
+        for relation in sorted(AGENT_RO_READABLE):
+            await conn.fetch(f"SELECT * FROM {relation} LIMIT 1")
+        for relation in ("undo_log", "accounts", "movement_legs", "attachments", "notifications"):
+            with pytest.raises(asyncpg.InsufficientPrivilegeError):
+                await conn.fetch(f"SELECT * FROM {relation} LIMIT 1")
+
+
+async def test_agent_ro_cannot_write_or_create_temp_tables(scratch):
+    async with connect(_role_dsn(scratch, "agent_ro", "AGENT_RO_PASSWORD")) as conn:
+        for sql in (
+            "INSERT INTO settings (id) VALUES (2)",
+            "UPDATE settings SET display_name = 'x'",
+            "DELETE FROM categories",
+            "CREATE TEMP TABLE scratch (id int)",
+            "CREATE TABLE scratch (id int)",
+        ):
+            with pytest.raises((asyncpg.PostgresError, asyncpg.InterfaceError)):
+                await conn.execute(sql)
+
+
+async def test_agent_ro_is_read_only_with_a_two_second_timeout(scratch):
+    async with connect(_role_dsn(scratch, "agent_ro", "AGENT_RO_PASSWORD")) as conn:
+        assert await conn.fetchval("SHOW default_transaction_read_only") == "on"
+        assert await conn.fetchval("SHOW statement_timeout") == "2s"
+        with pytest.raises(asyncpg.QueryCanceledError):
+            await conn.execute("SELECT pg_sleep(3)")
+
+
+async def test_backup_reads_everything_and_writes_only_backup_runs(scratch):
+    async with connect(_role_dsn(scratch, "backup", "BACKUP_PASSWORD")) as conn:
+        for relation in ("undo_log", "accounts", "attachments", "schema_version", "v_accounts"):
+            await conn.fetch(f"SELECT * FROM {relation} LIMIT 1")
+        await conn.execute("INSERT INTO backup_runs (started_at, status) VALUES (now(), 'success')")
+        for sql in ("UPDATE backup_runs SET status = 'failed'", "DELETE FROM backup_runs"):
+            with pytest.raises(asyncpg.InsufficientPrivilegeError):
+                await conn.execute(sql)
+        with pytest.raises(asyncpg.InsufficientPrivilegeError):
+            await conn.execute("INSERT INTO settings (id) VALUES (2)")
+
+
+# Ids and the ledger shape ---------------------------------------------------------------------
+
+
+async def test_new_id_is_prefixed_time_sortable_and_matches_the_citation_pattern(db):
+    ids = [await db.fetchval("SELECT new_id('mov')") for _ in range(3)]
+
+    assert all(re.fullmatch(r"mov_[0-9a-f]{32}", i) for i in ids)
+    assert ids == sorted(ids)
+    assert len(set(ids)) == 3
+
+
+async def test_a_leg_moves_a_positive_amount_between_two_different_accounts(db):
+    await _two_accounts(db)
+    await db.execute(
+        "INSERT INTO movements (id, date, description, kind) "
+        "VALUES ('mov_x', DATE '2026-01-01', 'Test', 'transfer')"
+    )
+    insert = (
+        "INSERT INTO movement_legs (movement_id, from_account_id, to_account_id, amount_paise) "
+        "VALUES ('mov_x', $1, $2, $3)"
+    )
+
+    for args in (("acc_a", "acc_b", 0), ("acc_a", "acc_b", -5), ("acc_a", "acc_a", 5)):
+        with pytest.raises(asyncpg.CheckViolationError):
+            await db.execute(insert, *args)
+    await db.execute(insert, "acc_a", "acc_b", 5)
+
+
+async def test_references_are_checked_at_commit_so_restore_order_is_free(db):
+    await _two_accounts(db)
+    async with db.transaction():
+        # The leg precedes its movement; the foreign key is checked when the transaction ends.
+        await db.execute(
+            "INSERT INTO movement_legs (movement_id, from_account_id, to_account_id, amount_paise) "
+            "VALUES ('mov_late', 'acc_a', 'acc_b', 5)"
+        )
+        await db.execute(
+            "INSERT INTO movements (id, date, description, kind) "
+            "VALUES ('mov_late', DATE '2026-01-01', 'Late', 'transfer')"
+        )
+    with pytest.raises(asyncpg.ForeignKeyViolationError):
+        await db.execute(
+            "INSERT INTO movement_legs (movement_id, from_account_id, to_account_id, "
+            "amount_paise) VALUES ('mov_none', 'acc_a', 'acc_b', 5)"
+        )
+
+
+async def test_views_compute_balances_spending_and_legs_from_the_legs(db):
+    await _two_accounts(db)
+    await db.execute(
+        "INSERT INTO movements (id, date, description, kind) VALUES "
+        "('mov_in', DATE '2026-01-01', 'Salary', 'income'), "
+        "('mov_out', DATE '2026-01-02', 'Lunch', 'expense')"
+    )
+    await db.execute("INSERT INTO accounts (id, kind, name) VALUES ('acc_inc', 'income', 'Income')")
+    await db.execute(
+        "INSERT INTO movement_legs (movement_id, from_account_id, to_account_id, amount_paise) "
+        "VALUES ('mov_in', 'acc_inc', 'acc_a', 10000), ('mov_out', 'acc_a', 'acc_sp', 2500)"
+    )
+
+    balances = {
+        r["id"]: r["balance_paise"]
+        for r in await db.fetch("SELECT id, balance_paise FROM v_accounts")
+    }
+    assert balances == {"acc_a": 7500, "acc_b": 0, "acc_sp": 2500, "acc_inc": -10000}
+    assert await db.fetchval("SELECT sum(balance_paise) FROM v_accounts") == 0
+
+    running = await db.fetch(
+        "SELECT as_of, balance_paise FROM v_balances WHERE account_id = 'acc_a' ORDER BY as_of"
+    )
+    assert [r["balance_paise"] for r in running] == [10000, 7500]
+    assert await db.fetchval("SELECT sum(amount_paise) FROM v_spending") == 2500
+    leg = await db.fetchrow_required(
+        "SELECT from_account_name, to_account_name, movement_kind FROM v_legs "
+        "WHERE movement_id = 'mov_out'"
+    )
+    assert (leg["from_account_name"], leg["to_account_name"], leg["movement_kind"]) == (
+        "Bank A",
+        "Spending",
+        "expense",
+    )
+
+
+async def test_undo_log_rejects_a_snapshot_that_is_not_an_array(db):
+    insert = "INSERT INTO undo_log (actor, summary, snapshot) VALUES ('user', 'x', $1::jsonb)"
+
+    await db.execute(insert, [])
+    with pytest.raises(asyncpg.CheckViolationError):
+        await db.execute(insert, {"table": "movements"})

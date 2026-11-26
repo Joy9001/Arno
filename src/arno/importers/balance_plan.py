@@ -16,11 +16,10 @@ from pydantic import BaseModel, Field, field_validator
 
 from arno.db.conn import Connection
 from arno.india.formatting import format_paise
-from arno.ledger import movements as movements_mod
 from arno.ledger.audit import write_group
 from arno.ledger.common import system_account
 from arno.ledger.errors import ConflictLedgerError, InvalidLedgerError
-from arno.ledger.postings import TransferSpec, create_movement_in_group
+from arno.ledger.movements import TransferSpec, create_movement_in_group, delete_movement_in_group
 
 
 class BalanceWindow(BaseModel):
@@ -107,19 +106,19 @@ class BalanceReviewSnapshot(BaseModel):
 
 
 async def _account_balance_at(
-    conn: Connection, ledger_account_id: str, day: date, *, before: bool = False
+    conn: Connection, account_id: str, day: date, *, before: bool = False
 ) -> int:
     comparison = "<" if before else "<="
     row = await conn.fetchrow(
         f"""
-        SELECT coalesce(sum(e.amount), 0)::bigint AS balance
-        FROM pgledger_entries e
-        JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
+        SELECT coalesce(sum(CASE WHEN ml.to_account_id = $1 THEN ml.amount_paise
+                                 ELSE -ml.amount_paise END), 0)::bigint AS balance
+        FROM movement_legs ml
         JOIN movements m ON m.id = ml.movement_id
-        WHERE e.account_id = $1
+        WHERE (ml.to_account_id = $1 OR ml.from_account_id = $1)
           AND m.date {comparison} $2
         """,  # noqa: S608 - the comparison is a constant of this module
-        ledger_account_id,
+        account_id,
         day,
     )
     return int(row["balance"]) if row else 0
@@ -286,26 +285,25 @@ def resolve_balance_window(row: dict[str, Any], lines: list[dict[str, Any]]) -> 
 
 
 async def _superseded_anchors(
-    conn: Connection, ledger_account_id: str, start: date, end: date
+    conn: Connection, account_id: str, start: date, end: date
 ) -> list[dict[str, Any]]:
     """The balance adjustments a statement's own dates now explain, oldest first."""
     rows = await conn.fetch(
         """
         SELECT m.id, m.date,
-               sum(CASE WHEN t.to_account_id = $1 THEN t.amount ELSE -t.amount END)::bigint AS net
+               sum(CASE WHEN ml.to_account_id = $1 THEN ml.amount_paise
+                   ELSE -ml.amount_paise END)::bigint AS net
         FROM movements m
-        JOIN v_movement_state ms ON ms.movement_id = m.id
         JOIN movement_legs ml ON ml.movement_id = m.id
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         WHERE m.kind = 'adjustment'
-          AND ms.is_effective
           AND m.date BETWEEN $2 AND $3
-          AND (t.from_account_id = $1 OR t.to_account_id = $1)
+          AND (ml.from_account_id = $1 OR ml.to_account_id = $1)
         GROUP BY m.id, m.date
-        HAVING sum(CASE WHEN t.to_account_id = $1 THEN t.amount ELSE -t.amount END) <> 0
+        HAVING sum(CASE WHEN ml.to_account_id = $1 THEN ml.amount_paise
+                      ELSE -ml.amount_paise END) <> 0
         ORDER BY m.date, m.id
         """,
-        ledger_account_id,
+        account_id,
         start,
         end,
     )
@@ -321,7 +319,7 @@ def _reanchor_description(account: dict[str, Any]) -> str:
 
 
 async def _import_adjustments(
-    conn: Connection, ledger_account_id: str, day: date, *, opening_of: str | None
+    conn: Connection, account_id: str, day: date, *, opening_of: str | None
 ) -> list[dict[str, Any]]:
     """Live import adjustments on one day, with their net on the account.
 
@@ -332,14 +330,12 @@ async def _import_adjustments(
     rows = await conn.fetch(
         """
         SELECT m.id,
-               sum(CASE WHEN t.to_account_id = $1 THEN t.amount ELSE -t.amount END)::bigint AS net
+               sum(CASE WHEN ml.to_account_id = $1 THEN ml.amount_paise
+                   ELSE -ml.amount_paise END)::bigint AS net
         FROM movements m
         JOIN imports i ON i.id = m.import_id
-        JOIN v_movement_state ms ON ms.movement_id = m.id
         JOIN movement_legs ml ON ml.movement_id = m.id
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         WHERE m.kind = 'adjustment'
-          AND ms.is_effective
           AND m.date = $2
           AND CASE WHEN $3::text IS NULL
                    THEN m.date > coalesce(
@@ -349,11 +345,11 @@ async def _import_adjustments(
                        (SELECT max(sl.date) FROM statement_lines sl WHERE sl.import_id = i.id)
                    )
                    ELSE i.id = $3 END
-          AND (t.from_account_id = $1 OR t.to_account_id = $1)
+          AND (ml.from_account_id = $1 OR ml.to_account_id = $1)
         GROUP BY m.id
         ORDER BY m.id
         """,
-        ledger_account_id,
+        account_id,
         day,
         opening_of,
     )
@@ -370,14 +366,14 @@ async def _rebook(
     opening_of: str | None,
     wanted: int,
 ) -> list[str]:
-    """Make this day's adjustments of one kind net to `wanted`: reverse them and book it once."""
-    rows = await _import_adjustments(conn, account["ledger_account_id"], day, opening_of=opening_of)
+    """Make this day's adjustments of one kind net to `wanted`: delete them and book it once."""
+    rows = await _import_adjustments(conn, account["id"], day, opening_of=opening_of)
     if sum(int(row["net"]) for row in rows) == wanted:
         return []
     groups: list[str] = []
     for row in rows:
         async with write_group(conn, actor="user") as group:
-            await movements_mod.reverse_movement(group, str(row["id"]))
+            await delete_movement_in_group(group, str(row["id"]))
         groups.append(group.group_id)
     if wanted:
         groups.append(
@@ -421,7 +417,7 @@ async def _rebalance_later_openings(
         if opening is None:
             continue
         day = row["period_start"]
-        before = await _account_balance_at(conn, account["ledger_account_id"], day, before=True)
+        before = await _account_balance_at(conn, account["id"], day, before=True)
         groups.extend(
             await _rebook(
                 conn,
@@ -471,12 +467,10 @@ async def _hold_later_anchor(
     anchor_paise = account["statement_balance_paise"]
     if period_end is None or anchor_day is None or anchor_paise is None or anchor_day <= period_end:
         return [], 0
-    current = await _account_balance_at(conn, account["ledger_account_id"], anchor_day)
+    current = await _account_balance_at(conn, account["id"], anchor_day)
     held = sum(
         int(row["net"])
-        for row in await _import_adjustments(
-            conn, account["ledger_account_id"], anchor_day, opening_of=None
-        )
+        for row in await _import_adjustments(conn, account["id"], anchor_day, opening_of=None)
     )
     wanted = int(anchor_paise) - (current - held)
     groups = await _rebook(
@@ -492,7 +486,7 @@ async def _hold_later_anchor(
 
 
 async def _forecast_delta(
-    conn: Connection, ledger_account_id: str, lines: list[dict[str, Any]], period_end: date
+    conn: Connection, account_id: str, lines: list[dict[str, Any]], period_end: date
 ) -> int:
     """What the statement's rows would add to the account by `period_end`.
 
@@ -505,16 +499,15 @@ async def _forecast_delta(
         rows = await conn.fetch(
             """
             SELECT m.id, m.date,
-                   coalesce(sum(CASE WHEN t.from_account_id = $1 THEN -t.amount
-                                     WHEN t.to_account_id = $1 THEN t.amount
+                   coalesce(sum(CASE WHEN ml.from_account_id = $1 THEN -ml.amount_paise
+                                     WHEN ml.to_account_id = $1 THEN ml.amount_paise
                                      ELSE 0 END), 0)::bigint AS net
             FROM movements m
             LEFT JOIN movement_legs ml ON ml.movement_id = m.id
-            LEFT JOIN pgledger_transfers t ON t.id = ml.transfer_id
             WHERE m.id = ANY($2::text[])
             GROUP BY m.id, m.date
             """,
-            ledger_account_id,
+            account_id,
             sorted(matched),
         )
         found = {str(row["id"]): (row["date"], int(row["net"])) for row in rows}
@@ -553,20 +546,20 @@ async def plan_balances(
     window = resolve_balance_window(row, lines)
     check = row["check_result"] or {}
     closing, start, end = window.closing, window.period_start, window.period_end
-    ledger_id = account["ledger_account_id"]
+    account_id = account["id"]
     opening = statement_opening(check)
     opening_delta = 0
     superseded: list[dict[str, Any]] = []
     if opening is not None and start is not None:
-        superseded = await _superseded_anchors(conn, ledger_id, start, end or start)
-        opening_delta = opening - await _account_balance_at(conn, ledger_id, start, before=True)
+        superseded = await _superseded_anchors(conn, account_id, start, end or start)
+        opening_delta = opening - await _account_balance_at(conn, account_id, start, before=True)
 
     if not book:
         adjustment = 0
         if closing is not None and end is not None:
-            delta = await _forecast_delta(conn, ledger_id, lines, end)
+            delta = await _forecast_delta(conn, account_id, lines, end)
             delta += opening_delta - sum(int(item["net"]) for item in superseded)
-            adjustment = int(closing) - (await _account_balance_at(conn, ledger_id, end) + delta)
+            adjustment = int(closing) - (await _account_balance_at(conn, account_id, end) + delta)
         conflict = await stated_balance_conflict(
             conn,
             account=account,
@@ -609,12 +602,12 @@ async def plan_balances(
         )
     for item in superseded:
         async with write_group(conn, actor="user") as group:
-            await movements_mod.reverse_movement(group, str(item["id"]))
+            await delete_movement_in_group(group, str(item["id"]))
         groups.append(group.group_id)
 
     adjustment = 0
     if closing is not None and end is not None:
-        difference = int(closing) - await _account_balance_at(conn, ledger_id, end)
+        difference = int(closing) - await _account_balance_at(conn, account_id, end)
         # A statement whose closing disagrees with the ledger is a real difference, not a rounding.
         # It is the user's call: the review says the amount, and commit books it only when the
         # review screen carried that confirmation.

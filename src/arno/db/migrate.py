@@ -1,11 +1,8 @@
 """Numbered SQL migrations with a `schema_version` table.
 
-Each file runs in its own transaction. A file may pull in a vendored SQL file with a psql-style
-include line on its own line:
-
-    \\i ../vendor/pgledger/pgledger.sql
-
-The include is expanded before checksumming, so the recorded checksum covers exactly what ran.
+Each file runs in its own transaction and its checksum is recorded, so an applied file never
+changes. Version 1 is the squashed baseline. A database from before it (migrations 1–50) is
+refused; `docs/arno/operations/legacy-upgrades.md` moves it to a fresh database.
 """
 
 from __future__ import annotations
@@ -19,10 +16,7 @@ from typing import Any
 from arno.db.conn import Connection, connect
 
 MIGRATIONS_DIR = Path(__file__).resolve().parent / "migrations"
-PREFLIGHT_DIR = Path(__file__).resolve().parent / "preflight"
-INCLUDE_RE = re.compile(r"^\s*\\i\s+(\S+)\s*$")
 NAME_RE = re.compile(r"^(\d{4})_([a-z0-9_]+)\.sql$")
-ALLOWED_INCLUDE_ROOT = Path(__file__).resolve().parent
 
 SCHEMA_VERSION_DDL = """
 CREATE TABLE IF NOT EXISTS schema_version (
@@ -50,23 +44,6 @@ class Migration:
         return hashlib.sha256(self.sql.encode("utf-8")).hexdigest()
 
 
-def _expand(path: Path, seen: tuple[Path, ...] = ()) -> str:
-    resolved = path.resolve()
-    if resolved in seen:
-        raise MigrationError(f"Include cycle at {resolved}")
-    lines: list[str] = []
-    for line in resolved.read_text(encoding="utf-8").splitlines():
-        match = INCLUDE_RE.match(line)
-        if match:
-            included = (resolved.parent / match.group(1)).resolve()
-            if ALLOWED_INCLUDE_ROOT not in included.parents:
-                raise MigrationError(f"Include escapes the db directory: {included}")
-            lines.append(_expand(included, (*seen, resolved)))
-        else:
-            lines.append(line)
-    return "\n".join(lines) + "\n"
-
-
 def discover(directory: Path = MIGRATIONS_DIR) -> list[Migration]:
     migrations: list[Migration] = []
     for path in sorted(directory.glob("*.sql")):
@@ -78,7 +55,7 @@ def discover(directory: Path = MIGRATIONS_DIR) -> list[Migration]:
                 version=int(match.group(1)),
                 name=match.group(2),
                 path=path,
-                sql=_expand(path),
+                sql=path.read_text(encoding="utf-8"),
             )
         )
     versions = [m.version for m in migrations]
@@ -103,34 +80,23 @@ async def applied(conn: Connection) -> list[dict[str, Any]]:
     )
 
 
-_SUPERUSER_ROLE_ATTRS = "NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"
-_NON_SUPERUSER_ROLE_ATTRS = "NOCREATEDB NOCREATEROLE"
+LEGACY_MESSAGE = (
+    "This database uses the pre-baseline schema (migrations 1–50). "
+    "Follow docs/arno/operations/legacy-upgrades.md to move it to a fresh database."
+)
 
 
-def _executable_sql(migration: Migration, *, is_superuser: bool) -> str:
-    """Adapt historical role-hardening DDL for a non-superuser CREATEROLE owner.
-
-    PostgreSQL 18 rejects `ALTER ROLE ... NOSUPERUSER/NOREPLICATION/NOBYPASSRLS` from a
-    non-superuser even when those attributes are already false. Applied migration files cannot
-    be edited without breaking `schema_version` checksums on existing clusters, so strip only
-    those three attributes at execution time while still hashing the original file.
-    """
-    if is_superuser or _SUPERUSER_ROLE_ATTRS not in migration.sql:
-        return migration.sql
-    return migration.sql.replace(_SUPERUSER_ROLE_ATTRS, _NON_SUPERUSER_ROLE_ATTRS)
-
-
-def legacy_preflight(version: int) -> str | None:
-    """Repair SQL that runs in the transaction of a pending migration, keyed by its version.
-
-    A data shape an older release wrote cannot be fixed by editing an applied migration without
-    breaking its recorded checksum, so the repair lives in `db/preflight/` and runs only while
-    that migration is still pending.
-    """
-    matches = sorted(PREFLIGHT_DIR.glob(f"{version:04d}_*.sql"))
-    if len(matches) > 1:
-        raise MigrationError(f"More than one preflight for migration {version}: {matches}")
-    return _expand(matches[0]) if matches else None
+async def _refuse_legacy(conn: Connection) -> None:
+    """Version 1 was `pgledger` before the squash; a `pgledger_accounts` table is the same tell."""
+    await conn.execute(SCHEMA_VERSION_DDL)
+    legacy = await conn.fetchval(
+        """
+        SELECT EXISTS (SELECT 1 FROM schema_version WHERE version = 1 AND name <> 'baseline')
+            OR to_regclass('pgledger_accounts') IS NOT NULL
+        """
+    )
+    if legacy:
+        raise MigrationError(LEGACY_MESSAGE)
 
 
 async def run_migrations(
@@ -139,7 +105,7 @@ async def run_migrations(
     """Apply pending migrations. Returns the versions applied in this call."""
 
     async def _run(conn: Connection) -> list[int]:
-        await conn.execute(SCHEMA_VERSION_DDL)
+        await _refuse_legacy(conn)
 
         migrations = discover(directory)
         by_version = {m.version: m for m in migrations}
@@ -155,33 +121,23 @@ async def run_migrations(
                     f"Migration {version} ({by_version[version].name}) changed after it was applied"
                 )
 
-        is_superuser = bool(
-            await conn.fetchval("SELECT rolsuper FROM pg_roles WHERE rolname = current_user")
-        )
         newly_applied: list[int] = []
         for migration in migrations:
             if migration.version in recorded:
                 continue
-            sql = _executable_sql(migration, is_superuser=is_superuser)
-            preflight = legacy_preflight(migration.version)
             async with conn.transaction():
-                if preflight is not None:
-                    await conn.execute(preflight)
-                await conn.execute(sql)
-                if sql != migration.sql:
-                    elevated = await conn.fetchval(
-                        """
-                        SELECT array_agg(rolname ORDER BY rolname)
-                        FROM pg_roles
-                        WHERE rolname IN ('agent_ro', 'backup')
-                          AND (rolsuper OR rolreplication OR rolbypassrls)
-                        """
-                    )
-                    if elevated:
-                        raise MigrationError(
-                            f"Role(s) {elevated} hold privileged attributes that a non-superuser "
-                            "cannot clear"
-                        )
+                await conn.execute(migration.sql)
+                # Trust boundary: the model's and the backup sidecar's roles stay unprivileged.
+                elevated = await conn.fetchval(
+                    """
+                    SELECT array_agg(rolname ORDER BY rolname)
+                    FROM pg_roles
+                    WHERE rolname IN ('agent_ro', 'backup')
+                      AND (rolsuper OR rolreplication OR rolbypassrls)
+                    """
+                )
+                if elevated:
+                    raise MigrationError(f"Role(s) {elevated} hold privileged attributes")
                 await conn.execute(
                     "INSERT INTO schema_version (version, name, checksum) VALUES ($1, $2, $3)",
                     migration.version,
@@ -199,6 +155,6 @@ async def run_migrations(
 
 async def pending(conn: Connection, directory: Path = MIGRATIONS_DIR) -> list[Migration]:
     """Return the migrations this database has not applied yet, without applying anything."""
-    await conn.execute(SCHEMA_VERSION_DDL)
+    await _refuse_legacy(conn)
     recorded = {int(row["version"]) for row in await applied(conn)}
     return [migration for migration in discover(directory) if migration.version not in recorded]

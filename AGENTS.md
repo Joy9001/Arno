@@ -37,8 +37,6 @@ this file holds only what you can't read off the code.
 - Schema changes are a new numbered file in `src/arno/db/migrations/` (`NNNN_name.sql`, plain
   SQL, one transaction each). A migration's checksum is recorded when it runs: **never edit an
   applied migration**, add the next one.
-- `src/arno/db/vendor/pgledger/` is vendored unmodified at a pinned commit. Don't edit it; its
-  licence notice is in `THIRD_PARTY_NOTICES.md`.
 - Four roles: `postgres` (bootstrap superuser, password `NULL`, local socket only), `app`
   (database owner, `CREATEDB CREATEROLE`, `pg_signal_backend`, no superuser), `agent_ro` (agent's
   `run_query`: SELECT only on ledger-side tables and views, no auth tables, 2 s timeout), and

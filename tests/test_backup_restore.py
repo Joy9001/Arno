@@ -263,7 +263,7 @@ async def test_an_unexpected_backup_error_is_recorded_generically_and_the_alert_
 @pytest.mark.xdist_group("cluster")
 @pytest.mark.skipif(RESTIC_SKIP is not None, reason=RESTIC_SKIP or "")
 async def test_a_restored_dump_keeps_the_agents_read_boundary(ledger, tmp_path: Path):
-    """Migration 0036's boundary comes from the dump's own grants, not a second copy in code."""
+    """The baseline's boundary comes from the dump's own grants, not a second copy in code."""
     dump_database(tmp_path / "fin_agent.dump", os.environ["DATABASE_URL"], privileges=True)
 
     repo = _repo_holding(tmp_path / "fin_agent.dump", tmp_path)
@@ -277,7 +277,7 @@ async def test_a_restored_dump_keeps_the_agents_read_boundary(ledger, tmp_path: 
                 for table in (
                     "v_accounts",
                     "v_legs",
-                    "v_movement_state",
+                    "v_balances",
                     "movements",
                     "payees",
                     "preferences",
@@ -286,7 +286,7 @@ async def test_a_restored_dump_keeps_the_agents_read_boundary(ledger, tmp_path: 
                 )
             }
             assert all(reads.values()), reads
-            # Nothing from auth, secrets, jobs, raw ledger views/tables, or the audit trail.
+            # Nothing from auth, secrets, jobs, raw ledger tables, or the undo trail.
             hidden = {
                 table: await restored.fetchval(
                     "SELECT has_table_privilege('agent_ro', $1, 'SELECT')", table
@@ -294,11 +294,7 @@ async def test_a_restored_dump_keeps_the_agents_read_boundary(ledger, tmp_path: 
                 for table in (
                     "accounts",
                     "movement_legs",
-                    "pgledger_accounts_view",
-                    "pgledger_transfers_view",
-                    "pgledger_entries_view",
-                    "pgledger_idempotency_keys_view",
-                    "audit_log",
+                    "undo_log",
                     "backup_runs",
                     "attachments",
                 )

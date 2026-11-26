@@ -1,10 +1,15 @@
-"""Tests for the API asyncpg connection cache, outage handling, and uncertain commits."""
+"""The per-loop asyncpg pool behind `connect()`, and the direct connections that bypass it.
+
+Pool tests use a migrated scratch database and need no ledger code; the API tests below drive the
+real app.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import contextlib
 import logging
+import os
 import threading
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -15,6 +20,7 @@ from urllib.parse import urlsplit, urlunsplit
 import asyncpg
 import httpx
 import pytest
+from asyncpg.pool import PoolConnectionProxy
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
@@ -24,39 +30,212 @@ from arno.agent.builder import build_agent
 from arno.agent.deps import AgentDeps
 from arno.api.app import create_app
 from arno.config import Settings
-from arno.db import conn as db_conn
+from arno.db.bootstrap import set_agent_ro_password
 from arno.db.conn import (
-    API_POOL_MAX_IDLE,
     Connection,
-    bind_connection_cache,
-    close_connection_cache,
+    close_pool,
     connect,
+    open_pool,
+    reset_database_url,
     use_database_url,
 )
+from arno.db.migrate import run_migrations
 from arno.ledger import audit as ledger_audit
 from arno.ledger.accounts import create_account
 from arno.ledger.audit import write_group
 from arno.ledger.errors import CommitOutcomeUnknownError
-from tests.conftest import _dsn, _mutable_reset
+from tests.conftest import _dsn, _mutable_reset, cluster_lock, fresh_database
 
 
-@pytest.mark.usefixtures("app")
-async def test_api_reset_repairs_edited_seed_rows_and_keeps_unchanged_ones():
-    async with connect(_dsn()) as conn:
-        category = await conn.fetchrow_required(
-            "SELECT id, name FROM categories ORDER BY id LIMIT 1"
-        )
-        await conn.execute(
-            "UPDATE categories SET name = 'Edited category' WHERE id = $1", category["id"]
-        )
+@pytest.fixture
+async def scratch() -> AsyncGenerator[str]:
+    """A migrated scratch database that `connect()` targets for the test."""
+    async with fresh_database("arno_pool") as dsn:
+        async with cluster_lock(), connect(dsn) as owner:
+            await run_migrations(owner)
+            await set_agent_ro_password(owner, os.environ["AGENT_RO_PASSWORD"])
+        token = use_database_url(dsn)
+        try:
+            yield dsn
+        finally:
+            reset_database_url(token)
 
-    await _mutable_reset(api=True)
 
-    async with connect(_dsn()) as conn:
-        assert (
-            await conn.fetchval("SELECT name FROM categories WHERE id = $1", category["id"])
-            == category["name"]
-        )
+@pytest.fixture
+async def pool(scratch: str) -> AsyncGenerator[asyncpg.Pool]:
+    opened = await open_pool(scratch)
+    try:
+        yield opened
+    finally:
+        await close_pool(opened)
+
+
+async def _pid(conn: Connection) -> int:
+    return int(str(await conn.fetchval("SELECT pg_backend_pid()")))
+
+
+async def test_connect_reuses_pooled_connections(pool: asyncpg.Pool) -> None:
+    async with connect() as first:
+        pid = await _pid(first)
+        assert isinstance(first, PoolConnectionProxy)
+
+    async with connect() as second:
+        assert await _pid(second) == pid
+    assert pool.get_size() == 1
+
+
+async def test_leaving_the_context_releases_the_connection(pool: asyncpg.Pool) -> None:
+    async with connect() as conn:
+        pid = await _pid(conn)
+        assert pool.get_idle_size() == 0
+
+    assert pool.get_idle_size() == 1
+    async with connect() as again:
+        assert await _pid(again) == pid
+
+
+async def test_concurrent_acquisitions_use_distinct_connections(
+    pool: asyncpg.Pool,
+) -> None:
+    async with connect() as one, connect() as two:
+        assert await _pid(one) != await _pid(two)
+    assert pool.get_size() == 2
+
+
+async def test_release_resets_session_state_and_json_is_decoded(
+    pool: asyncpg.Pool,
+) -> None:
+    async with connect() as first:
+        pid = await _pid(first)
+        await first.execute("SET statement_timeout = '1234ms'")
+        await first.execute("BEGIN")
+
+    async with connect() as second:
+        assert await _pid(second) == pid
+        assert await second.fetchval("SHOW statement_timeout") != "1234ms"
+        assert not second.is_in_transaction()
+        assert await second.fetchval("SELECT '{\"a\": [1, 2]}'::jsonb") == {"a": [1, 2]}
+        assert await second.fetchval("SELECT $1::jsonb", {"b": 1}) == {"b": 1}
+
+
+async def test_a_terminated_idle_backend_is_replaced_on_the_next_acquisition(
+    scratch: str, pool: asyncpg.Pool
+) -> None:
+    async with connect() as conn:
+        pid = await _pid(conn)
+    async with connect(scratch) as admin:
+        await admin.execute("SELECT pg_terminate_backend($1)", pid)
+
+    async with connect() as after:
+        assert await _pid(after) != pid
+
+
+async def test_explicit_dsn_and_other_trial_databases_bypass_the_pool(
+    scratch: str, pool: asyncpg.Pool
+) -> None:
+    async with connect() as pooled:
+        pooled_pid = await _pid(pooled)
+
+    async with connect(scratch) as explicit:
+        assert not isinstance(explicit, PoolConnectionProxy)
+        assert await _pid(explicit) != pooled_pid
+
+    async with fresh_database("arno_pool_trial") as trial_dsn:
+        token = use_database_url(trial_dsn)
+        try:
+            async with connect() as trial:
+                assert not isinstance(trial, PoolConnectionProxy)
+                name = await trial.fetchval("SELECT current_database()")
+        finally:
+            reset_database_url(token)
+        assert name != await _database(scratch)
+    assert pool.get_size() == 1
+
+
+async def _database(dsn: str) -> str:
+    async with connect(dsn) as conn:
+        return str(await conn.fetchval("SELECT current_database()"))
+
+
+async def test_agent_ro_connects_directly_never_from_the_pool(
+    pool: asyncpg.Pool,
+) -> None:
+    size = pool.get_size()
+    async with connect(role="agent_ro") as ro:
+        assert not isinstance(ro, PoolConnectionProxy)
+        assert await ro.fetchval("SELECT current_user") == "agent_ro"
+    assert pool.get_size() == size
+
+
+async def test_a_pool_serves_only_the_event_loop_that_opened_it(
+    scratch: str, pool: asyncpg.Pool
+) -> None:
+    seen: dict[str, Any] = {}
+
+    def other_loop() -> None:
+        async def run() -> None:
+            use_database_url(scratch)  # a new thread starts with an empty context
+            async with connect() as conn:
+                seen["pooled"] = isinstance(conn, PoolConnectionProxy)
+                seen["rows"] = await conn.fetchval("SELECT 1")
+
+        asyncio.run(run())
+
+    thread = threading.Thread(target=other_loop)
+    thread.start()
+    await asyncio.to_thread(thread.join, 10)
+
+    assert seen == {"pooled": False, "rows": 1}
+    assert pool.get_size() == 1
+
+
+@pytest.mark.usefixtures("scratch")
+async def test_without_a_pool_connections_are_direct_and_close_for_real() -> None:
+    async with connect() as conn:
+        assert not isinstance(conn, PoolConnectionProxy)
+
+    assert conn.is_closed()
+
+
+async def test_shutdown_terminates_a_pool_that_a_detached_task_still_holds(scratch: str) -> None:
+    pool = await open_pool(scratch)
+    holder = connect()
+    held = await holder.__aenter__()
+    pid = await _pid(held)
+
+    await asyncio.wait_for(close_pool(pool, timeout=0.2), timeout=5)
+
+    assert pool.is_closing()
+    async with connect(scratch) as admin:
+        gone = await admin.fetchval("SELECT count(*) FROM pg_stat_activity WHERE pid = $1", pid)
+    assert gone == 0
+    async with connect() as after:  # the pool is unbound again, so this one is direct
+        assert not isinstance(after, PoolConnectionProxy)
+
+
+async def test_shutdown_closes_an_idle_pool_gracefully(scratch: str) -> None:
+    pool = await open_pool(scratch)
+    async with connect() as conn:
+        await conn.fetchval("SELECT 1")
+
+    await close_pool(pool)
+
+    assert pool.is_closing()
+    assert pool.get_size() == 0
+
+
+async def test_connect_timeout_becomes_connection_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def hang_connect(*args: Any, **kwargs: Any) -> Connection:
+        raise TimeoutError("connect timed out")
+
+    monkeypatch.setattr(asyncpg, "connect", hang_connect)
+    with pytest.raises(ConnectionError) as exc_info:
+        async with connect(role="agent_ro"):
+            pass
+    assert isinstance(exc_info.value, OSError)
+
+
+# API behaviour over the pool ------------------------------------------------------------
 
 
 @asynccontextmanager
@@ -156,17 +335,26 @@ class _TcpProxy:
             self._writers.discard(up_writer)
 
 
-# Every pool test opens a real Postgres connection (even the ones that fake a slow model or a
-# closed port), so each needs the in-place reset when run on its own.
-@pytest.fixture(autouse=True)
-async def _pool_clean_database(clean_database: None) -> None:
-    del clean_database
+@pytest.mark.usefixtures("app")
+async def test_api_reset_repairs_edited_seed_rows_and_keeps_unchanged_ones():
+    async with connect(_dsn()) as conn:
+        category = await conn.fetchrow_required(
+            "SELECT id, name FROM categories ORDER BY id LIMIT 1"
+        )
+        await conn.execute(
+            "UPDATE categories SET name = 'Edited category' WHERE id = $1", category["id"]
+        )
+
+    await _mutable_reset(api=True)
+
+    async with connect(_dsn()) as conn:
+        assert (
+            await conn.fetchval("SELECT name FROM categories WHERE id = $1", category["id"])
+            == category["name"]
+        )
 
 
-# 1. Idle backend termination --------------------------------------------------------------------
-
-
-async def test_idle_cached_backend_termination_recovers_on_next_request(
+async def test_idle_backend_termination_recovers_on_next_request(
     session_client: TestClient, db: Connection
 ) -> None:
     warm = session_client.get("/api/accounts")
@@ -185,30 +373,14 @@ async def test_idle_cached_backend_termination_recovers_on_next_request(
     for row in rows:
         await db.execute("SELECT pg_terminate_backend($1)", row["pid"])
 
-    after = session_client.get("/api/accounts")
-    assert after.status_code == 200
+    # The first request may land on a connection the pool has not yet seen die (503, which
+    # discards it); the next one is served by a fresh connection.
+    first = session_client.get("/api/accounts")
+    assert first.status_code in {200, 503}
+    assert session_client.get("/api/accounts").status_code == 200
 
 
-async def test_idle_cached_connection_with_zero_delay_after_terminate(db: Connection) -> None:
-    dsn = _dsn()
-    cache = bind_connection_cache(dsn)
-    try:
-        async with connect() as conn:
-            pid1 = await conn.fetchval("SELECT pg_backend_pid()")
-
-        await db.execute("SELECT pg_terminate_backend($1)", pid1)
-
-        # Immediately acquire without yielding for extra timers: must still succeed.
-        async with connect() as conn2:
-            assert isinstance(conn2, Connection)
-            assert await conn2.fetchval("SELECT 1") == 1
-            pid2 = await conn2.fetchval("SELECT pg_backend_pid()")
-            assert pid2 != pid1
-    finally:
-        await close_connection_cache(cache)
-
-
-# 2. Mid-read termination ------------------------------------------------------------------------
+# Mid-read termination ------------------------------------------------------------------------
 
 
 async def test_mid_read_termination_returns_503_and_next_request_succeeds(
@@ -246,14 +418,14 @@ async def test_mid_read_termination_returns_503_and_next_request_succeeds(
         assert recovered.status_code == 200
 
 
-# 3. Mid-write termination before commit ---------------------------------------------------------
+# Mid-write termination before commit ---------------------------------------------------------
 
 
 async def test_mid_write_before_commit_raises_ordinary_error_with_no_retry(
     db: Connection,
 ) -> None:
     dsn = _dsn()
-    cache = bind_connection_cache(dsn)
+    pool = await open_pool(dsn)
     attempts = 0
     try:
         with pytest.raises(
@@ -275,16 +447,16 @@ async def test_mid_write_before_commit_raises_ordinary_error_with_no_retry(
         assert not isinstance(exc_info.value, CommitOutcomeUnknownError)
         assert attempts == 1
         assert await db.fetchval("SELECT count(*) FROM categories WHERE id = 'cat_lost'") == 0
-        assert await db.fetchval("SELECT count(*) FROM audit_log") == 0
+        assert await db.fetchval("SELECT count(*) FROM undo_log") == 0
     finally:
-        await close_connection_cache(cache)
+        await close_pool(pool)
 
 
 async def test_mid_write_closed_before_commit_block_raises_connection_does_not_exist(
     db: Connection,
 ) -> None:
     dsn = _dsn()
-    cache = bind_connection_cache(dsn)
+    pool = await open_pool(dsn)
     try:
         with pytest.raises(asyncpg.ConnectionDoesNotExistError) as exc_info:
             async with connect() as conn:
@@ -300,8 +472,10 @@ async def test_mid_write_closed_before_commit_block_raises_connection_does_not_e
                     await db.execute("SELECT pg_terminate_backend($1)", pid)
 
                     async def _until_closed() -> None:
-                        while not conn.is_closed():
-                            await asyncio.sleep(0.001)
+                        # The pool detaches a lost connection from its proxy.
+                        with contextlib.suppress(asyncpg.InterfaceError):
+                            while not conn.is_closed():
+                                await asyncio.sleep(0.001)
 
                     # Wait for the transport to observe EOF, not a fixed nap.
                     await asyncio.wait_for(_until_closed(), timeout=5)
@@ -309,10 +483,10 @@ async def test_mid_write_closed_before_commit_block_raises_connection_does_not_e
         assert not isinstance(exc_info.value, CommitOutcomeUnknownError)
         assert await db.fetchval("SELECT count(*) FROM categories WHERE id = 'cat_closed'") == 0
     finally:
-        await close_connection_cache(cache)
+        await close_pool(pool)
 
 
-# 4. Mid-write loss during commit ----------------------------------------------------------------
+# Mid-write loss during commit ----------------------------------------------------------------
 
 
 async def test_commit_loss_raises_commit_outcome_unknown_error(
@@ -417,12 +591,13 @@ async def test_commit_loss_agent_write_tool_reports_unknown_without_retry(
     assert "do not call this write tool again" in payload["message"].lower()
 
 
-# 5. Database down and recovery ------------------------------------------------------------------
+# Database down and recovery ------------------------------------------------------------------
 
 
-async def test_cache_created_against_closed_port_recovers_when_listener_returns(
-    settings: Settings,
+async def test_open_pool_fails_fast_on_a_closed_port_and_works_when_the_listener_returns(
+    settings: Settings, clean_database: None
 ) -> None:
+    del clean_database
     parts = urlsplit(settings.database_url)
     assert parts.hostname and parts.port
     proxy = _TcpProxy(parts.hostname, parts.port)
@@ -436,25 +611,25 @@ async def test_cache_created_against_closed_port_recovers_when_listener_returns(
     )
     proxy_dsn = urlunsplit(parts._replace(netloc=f"{auth}127.0.0.1:{proxy_port}"))
 
-    cache = bind_connection_cache(proxy_dsn)
+    with pytest.raises(OSError):
+        await open_pool(proxy_dsn)
+
+    await proxy.start(port=proxy_port)
+    pool = await open_pool(proxy_dsn)
     token = use_database_url(proxy_dsn)
     try:
-        with pytest.raises(OSError):
-            async with connect() as conn:
-                await conn.fetchval("SELECT 1")
-
-        await proxy.start(port=proxy_port)
         async with connect() as conn:
             assert await conn.fetchval("SELECT 1") == 1
     finally:
-        db_conn.reset_database_url(token)
-        await close_connection_cache(cache)
+        reset_database_url(token)
+        await close_pool(pool)
         await proxy.stop()
 
 
 async def test_app_survives_full_database_outage_and_recovers_without_restart(
-    settings: Settings, monkeypatch: pytest.MonkeyPatch
+    settings: Settings, clean_database: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    del clean_database
     from arno.config import get_settings
 
     parts = urlsplit(settings.database_url)
@@ -497,204 +672,6 @@ async def test_app_survives_full_database_outage_and_recovers_without_restart(
         get_settings(refresh=True)
 
 
-# 6. Overflow, nested acquisition, idle cap, double close, cancelled release, identity ----------
-
-
-async def test_overflow_and_nested_acquisition_under_full_cache_load(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dsn = _dsn()
-    cache = bind_connection_cache(dsn, max_idle=API_POOL_MAX_IDLE)
-    real_open = db_conn._open_connection
-    direct_opens = 0
-
-    async def spy_open(*args: Any, **kwargs: Any) -> Connection:
-        nonlocal direct_opens
-        direct_opens += 1
-        return await real_open(*args, **kwargs)
-
-    monkeypatch.setattr(db_conn, "_open_connection", spy_open)
-
-    held: list[Connection] = []
-    try:
-        for _ in range(API_POOL_MAX_IDLE):
-            held.append(await connect())
-
-        assert len(cache.idle) == 0
-        opens_before_overflow = direct_opens
-
-        # 9th concurrent connection opens immediately without waiting on capacity.
-        async with connect() as overflow:
-            assert isinstance(overflow, Connection)
-            assert await overflow.fetchval("SELECT 1") == 1
-            # Nested acquisition under full load also succeeds promptly without deadlock.
-            async with connect() as nested:
-                assert isinstance(nested, Connection)
-                assert await nested.fetchval("SELECT 2") == 2
-        assert direct_opens == opens_before_overflow + 2
-        assert len(cache.idle) == 2
-    finally:
-        for conn in held:
-            await conn.close()
-        assert len(cache.idle) == API_POOL_MAX_IDLE
-        await close_connection_cache(cache)
-
-
-async def test_idle_deque_never_exceeds_max_idle() -> None:
-    dsn = _dsn()
-    cache = bind_connection_cache(dsn, max_idle=API_POOL_MAX_IDLE)
-    held: list[Connection] = []
-    try:
-        for _ in range(API_POOL_MAX_IDLE + 3):
-            held.append(await connect())
-
-        for conn in held[:API_POOL_MAX_IDLE]:
-            await conn.close()
-        assert len(cache.idle) == API_POOL_MAX_IDLE
-
-        for extra in held[API_POOL_MAX_IDLE:]:
-            await extra.close()
-            assert extra.is_closed()
-        assert len(cache.idle) == API_POOL_MAX_IDLE
-    finally:
-        await close_connection_cache(cache)
-
-
-async def test_reused_connection_same_pid_and_overflow_different_pid() -> None:
-    dsn = _dsn()
-    cache = bind_connection_cache(dsn)
-    try:
-        async with connect() as first:
-            assert type(first) is Connection
-            pid1 = await first.fetchval("SELECT pg_backend_pid()")
-
-        async with connect() as reused:
-            assert isinstance(reused, Connection)
-            assert type(reused) is Connection
-            assert await reused.fetchval("SELECT pg_backend_pid()") == pid1
-            async with connect() as overflow:
-                assert type(overflow) is Connection
-                pid_overflow = await overflow.fetchval("SELECT pg_backend_pid()")
-                assert pid_overflow != pid1
-    finally:
-        await close_connection_cache(cache)
-
-
-async def test_double_close_enqueues_once() -> None:
-    dsn = _dsn()
-    cache = bind_connection_cache(dsn)
-    try:
-        conn = await connect()
-        pid1 = await conn.fetchval("SELECT pg_backend_pid()")
-        await conn.close()
-        assert len(cache.idle) == 1
-        await conn.close()
-        assert len(cache.idle) == 1
-        assert not conn.is_closed()
-
-        async with connect() as next_conn:
-            assert await next_conn.fetchval("SELECT pg_backend_pid()") == pid1
-    finally:
-        await close_connection_cache(cache)
-
-
-async def test_cancelled_release_terminates_connection(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dsn = _dsn()
-    cache = bind_connection_cache(dsn)
-    try:
-        conn = await connect()
-
-        async def cancel_reset(*args: Any, **kwargs: Any) -> None:
-            raise asyncio.CancelledError
-
-        monkeypatch.setattr(conn, "reset", cancel_reset)
-        with pytest.raises(asyncio.CancelledError):
-            await conn.close()
-        assert conn.is_closed()
-        assert len(cache.idle) == 0
-    finally:
-        await close_connection_cache(cache)
-
-
-# 7. Binding rules, release semantics, sequential lifespans, timeout conversion ------------------
-
-
-async def test_binding_bypasses_and_awaitable_release_semantics(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    dsn = _dsn()
-    cache = bind_connection_cache(dsn)
-    real_open = db_conn._open_connection
-    direct_calls: list[dict[str, Any]] = []
-
-    async def spy_open(
-        arg_dsn: str | None = None, *, role: Any = None, **kwargs: Any
-    ) -> Connection:
-        direct_calls.append({"dsn": arg_dsn, "role": role})
-        return await real_open(arg_dsn, role=role, **kwargs)
-
-    monkeypatch.setattr(db_conn, "_open_connection", spy_open)
-    try:
-        # Warm the cache via context manager, then verify awaitable connect() reuses and returns it.
-        async with connect() as c1:
-            pid1 = await c1.fetchval("SELECT pg_backend_pid()")
-        assert len(cache.idle) == 1
-
-        c2 = await connect()
-        assert isinstance(c2, Connection)
-        assert await c2.fetchval("SELECT pg_backend_pid()") == pid1
-        await c2.close()
-        assert len(cache.idle) == 1
-
-        c3 = await connect()
-        async with c3:
-            assert isinstance(c3, Connection)
-            assert await c3.fetchval("SELECT pg_backend_pid()") == pid1
-        assert len(cache.idle) == 1
-
-        direct_calls.clear()
-
-        # Explicit dsn bypasses the cache.
-        async with connect(dsn) as explicit:
-            assert await explicit.fetchval("SELECT 1") == 1
-        assert len(direct_calls) == 1
-
-        # role= bypasses the cache.
-        async with connect(role="agent_ro") as ro:
-            assert await ro.fetchval("SELECT 1") == 1
-        assert len(direct_calls) == 2
-
-        # use_database_url override bypasses the cache (even when pointing at a different DSN).
-        other_dsn = dsn + (
-            "&application_name=eval_trial" if "?" in dsn else "?application_name=eval_trial"
-        )
-        token = use_database_url(other_dsn)
-        try:
-            async with connect() as trial_conn:
-                assert await trial_conn.fetchval("SELECT 1") == 1
-        finally:
-            db_conn.reset_database_url(token)
-        assert len(direct_calls) == 3
-
-        # A different event loop bypasses the cache.
-        def run_in_other_loop() -> None:
-            async def _inner() -> None:
-                async with connect() as other_loop_conn:
-                    assert await other_loop_conn.fetchval("SELECT 1") == 1
-
-            asyncio.run(_inner())
-
-        t = threading.Thread(target=run_in_other_loop)
-        t.start()
-        t.join(timeout=10)
-        assert not t.is_alive()
-        assert len(direct_calls) == 4
-    finally:
-        await close_connection_cache(cache)
-
-
 def test_two_sequential_testclient_lifespans_both_work(settings: Settings) -> None:
     with TestClient(create_app(settings)) as first:
         assert first.get("/api/health").status_code == 200
@@ -702,71 +679,7 @@ def test_two_sequential_testclient_lifespans_both_work(settings: Settings) -> No
         assert second.get("/api/health").status_code == 200
 
 
-async def test_connect_timeout_becomes_connection_error(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    async def hang_connect(*args: Any, **kwargs: Any) -> Connection:
-        raise TimeoutError("connect timed out")
-
-    monkeypatch.setattr(asyncpg, "connect", hang_connect)
-    with pytest.raises(ConnectionError) as exc_info:
-        async with connect():
-            pass
-    assert isinstance(exc_info.value, OSError)
-
-    # Also verify a timed-out pre-ping discards the idle connection and falls back to open,
-    # converting the connect timeout to ConnectionError.
-    monkeypatch.undo()
-    dsn = _dsn()
-    cache = bind_connection_cache(dsn)
-    try:
-        async with connect() as warm:
-            assert await warm.fetchval("SELECT 1") == 1
-        cached = cache.idle[-1]
-
-        async def hang_ping(*args: Any, **kwargs: Any) -> str:
-            raise TimeoutError("ping timed out")
-
-        monkeypatch.setattr(cached, "execute", hang_ping)
-        monkeypatch.setattr(asyncpg, "connect", hang_connect)
-        with pytest.raises(ConnectionError):
-            async with connect():
-                pass
-        assert cached.is_closed()
-        assert len(cache.idle) == 0
-    finally:
-        await close_connection_cache(cache)
-
-
-# 8. Session hygiene and jsonb decoding ----------------------------------------------------------
-
-
-async def test_cached_connection_resets_session_state_and_decodes_jsonb(
-    db: Connection,
-) -> None:
-    dsn = _dsn()
-    cache = bind_connection_cache(dsn)
-    try:
-        async with connect() as c1:
-            pid1 = await c1.fetchval("SELECT pg_backend_pid()")
-            await c1.execute("SET statement_timeout = '1234ms'")
-            await c1.execute("BEGIN")
-            await c1.execute("INSERT INTO categories (id, name) VALUES ('cat_leak', 'Leak')")
-
-        async with connect() as c2:
-            assert isinstance(c2, Connection)
-            assert await c2.fetchval("SELECT pg_backend_pid()") == pid1
-            assert await c2.fetchval("SHOW statement_timeout") != "1234ms"
-            assert not c2.is_in_transaction()
-            decoded = await c2.fetchval("SELECT '{\"hello\": [1, 2]}'::jsonb")
-            assert decoded == {"hello": [1, 2]}
-
-        assert await db.fetchval("SELECT count(*) FROM categories WHERE id = 'cat_leak'") == 0
-    finally:
-        await close_connection_cache(cache)
-
-
-# 9. The 503 handler itself ----------------------------------------------------------------------
+# The 503 handler itself ----------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(

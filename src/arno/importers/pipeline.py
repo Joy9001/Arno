@@ -297,7 +297,7 @@ async def import_payload(conn: Connection, import_id: str) -> dict[str, Any]:
     if row["account_id"]:
         fetched = await conn.fetchrow(
             """
-            SELECT id, name, kind, institution, last4, ledger_account_id,
+            SELECT id, name, kind, institution, last4,
                    statement_balance_paise, statement_balance_as_of
             FROM v_accounts WHERE id = $1
             """,

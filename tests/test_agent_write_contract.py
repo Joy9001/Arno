@@ -106,13 +106,12 @@ async def test_expense_uses_amount_rupees_and_payee(demo_ledger):
     assert result.output == "Logged."
     row = await demo_ledger.fetchrow(
         """
-        SELECT m.id, m.kind, m.date, t.amount::bigint AS amount_paise,
+        SELECT m.id, m.kind, m.date, ml.amount_paise::bigint AS amount_paise,
                p.display_name AS payee, c.name AS category
         FROM movements m
         JOIN movement_legs ml ON ml.movement_id = m.id
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
-        JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
-        JOIN accounts ta ON ta.ledger_account_id = t.to_account_id
+        JOIN accounts fa ON fa.id = ml.from_account_id
+        JOIN accounts ta ON ta.id = ml.to_account_id
         LEFT JOIN payees p ON p.id = ml.payee_id
         LEFT JOIN categories c ON c.id = ml.category_id
         WHERE m.kind = 'expense' AND ta.kind = 'spending'
@@ -145,10 +144,9 @@ async def test_expense_without_a_payee_is_a_row_with_no_payee(demo_ledger):
     assert tool_return is not None and tool_return.get("movement_id"), tool_return
     row = await demo_ledger.fetchrow(
         """
-        SELECT t.amount::bigint AS amount_paise, p.display_name AS payee
+        SELECT ml.amount_paise::bigint AS amount_paise, p.display_name AS payee
         FROM movements m
         JOIN movement_legs ml ON ml.movement_id = m.id
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         LEFT JOIN payees p ON p.id = ml.payee_id
         WHERE m.kind = 'expense' ORDER BY m.created_at DESC LIMIT 1
         """
@@ -172,10 +170,9 @@ async def test_hinglish_expense_uses_the_same_contract(demo_ledger):
     await _run(script, "Auto bhaiya ko 150 diye abhi.", deps)
     row = await demo_ledger.fetchrow(
         """
-        SELECT t.amount::bigint AS amount_paise, p.display_name AS payee
+        SELECT ml.amount_paise::bigint AS amount_paise, p.display_name AS payee
         FROM movements m
         JOIN movement_legs ml ON ml.movement_id = m.id
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         LEFT JOIN payees p ON p.id = ml.payee_id
         WHERE m.kind = 'expense' ORDER BY m.created_at DESC LIMIT 1
         """
@@ -225,17 +222,14 @@ async def test_correction_takes_amount_rupees(demo_ledger):
     assert result.output == "Corrected."
     row = await demo_ledger.fetchrow(
         """
-        SELECT t.amount::bigint AS amount_paise
+        SELECT ml.amount_paise::bigint AS amount_paise
         FROM movements m
         JOIN movement_legs ml ON ml.movement_id = m.id
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         WHERE m.kind = 'expense'
         ORDER BY m.created_at DESC LIMIT 1
         """
     )
     assert row["amount_paise"] == 48000
-    reversal = await demo_ledger.fetchval("SELECT count(*) FROM movements WHERE kind = 'reversal'")
-    assert reversal >= 1
 
 
 async def test_split_takes_people_and_shares(demo_ledger):
@@ -258,10 +252,9 @@ async def test_split_takes_people_and_shares(demo_ledger):
     await _run(script, "Split a ₹1,200 dinner with Ravi and Amit equally.", deps)
     row = await demo_ledger.fetchrow(
         """
-        SELECT m.kind, sum(t.amount)::bigint AS total
+        SELECT m.kind, sum(ml.amount_paise)::bigint AS total
         FROM movements m
         JOIN movement_legs ml ON ml.movement_id = m.id
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         WHERE m.kind = 'split'
         GROUP BY m.id, m.kind
         ORDER BY max(m.created_at) DESC LIMIT 1
@@ -359,12 +352,11 @@ async def test_card_transfer_uses_from_and_to_accounts(demo_ledger):
     await _run(script, "I paid ₹5,000 to my Slice card from HDFC.", deps)
     row = await demo_ledger.fetchrow(
         """
-        SELECT fa.name AS from_name, ta.name AS to_name, t.amount::bigint AS amount_paise
+        SELECT fa.name AS from_name, ta.name AS to_name, ml.amount_paise::bigint AS amount_paise
         FROM movements m
         JOIN movement_legs ml ON ml.movement_id = m.id
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
-        JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
-        JOIN accounts ta ON ta.ledger_account_id = t.to_account_id
+        JOIN accounts fa ON fa.id = ml.from_account_id
+        JOIN accounts ta ON ta.id = ml.to_account_id
         WHERE m.kind = 'transfer' ORDER BY m.created_at DESC LIMIT 1
         """
     )

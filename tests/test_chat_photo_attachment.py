@@ -257,10 +257,9 @@ async def test_multi_row_screenshot_batch_logs_all_items_and_undoes_atomically(
     assert undo.status_code == 200, undo.text
     assert await demo_ledger.fetchval("SELECT count(*) FROM payees WHERE active") == before_payees
     for item in card["items"]:
-        reversed_row = await demo_ledger.fetchval(
-            "SELECT count(*) FROM movements WHERE reverses_id = $1", item["movement_id"]
+        assert not await demo_ledger.fetchval(
+            "SELECT count(*) FROM movements WHERE id = $1", item["movement_id"]
         )
-        assert reversed_row == 1
 
 
 async def test_mixed_photo_and_statement_carries_both(session_client, demo_ledger):

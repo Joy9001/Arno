@@ -65,7 +65,6 @@ async def uncategorized_rows(conn: Connection) -> list[dict[str, Any]]:
                spend.amount_paise AS spend_amount_paise,
                payee.kind AS payee_kind, payee.display_name AS payee_name
         FROM movements m
-        JOIN v_movement_state ms ON ms.movement_id = m.id
         LEFT JOIN statement_lines sl ON sl.movement_id = m.id
         JOIN spend ON spend.movement_id = m.id
         LEFT JOIN label ON label.movement_id = m.id
@@ -78,7 +77,6 @@ async def uncategorized_rows(conn: Connection) -> list[dict[str, Any]]:
         ) payee ON true
         WHERE NOT coalesce(label.labeled, false)
           AND m.kind NOT IN ('transfer', 'adjustment')
-          AND ms.is_effective
         ORDER BY m.id, m.date DESC
         """,
     )
@@ -167,11 +165,9 @@ async def answer(
                 """
                 SELECT ml.*
                 FROM movement_legs ml
-                JOIN pgledger_transfers t ON t.id = ml.transfer_id
                 JOIN accounts sp ON sp.kind = 'spending'
                 WHERE ml.movement_id = $1
-                  AND (t.from_account_id = sp.ledger_account_id
-                       OR t.to_account_id = sp.ledger_account_id)
+                  AND sp.id IN (ml.from_account_id, ml.to_account_id)
                 ORDER BY ml.transfer_id
                 """,
                 movement_id,

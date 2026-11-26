@@ -9,7 +9,7 @@ import { KIND_LABELS, markNotificationRead, openNotification } from "../notifica
 import { lowAmount, projectionReadiness } from "../projectionData";
 import { SafeToSpend } from "../SafeToSpend";
 import { PriceChange } from "../PriceChange";
-import { WorkbookLink, type ProjectionPayload } from "../projection";
+import { type ProjectionPayload } from "../projection";
 import { parseProjectionReceipt } from "../projectionReceipt";
 import type { CashQuality, Movement, NotificationItem } from "../types";
 import { useApi } from "../useApi";
@@ -246,9 +246,6 @@ export function NoticedView({
               {formatDate(projection.median_low.date)}.
             </p>
             {safeLine}
-            <p>
-              <WorkbookLink />
-            </p>
             <button type="button" className="pill-button light" onClick={() => goTo("money", "timeline")}>
               Open the timeline
             </button>
@@ -262,9 +259,6 @@ export function NoticedView({
               I&apos;ll check every purchase against it.
             </p>
             {safeLine}
-            <p>
-              <WorkbookLink />
-            </p>
             <button type="button" className="pill-button light" onClick={() => goTo("settings", "profile")}>
               Set a floor
             </button>

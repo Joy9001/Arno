@@ -67,8 +67,7 @@ async def _counts(conn: Connection, import_id: str) -> tuple[int, int]:
             )::int AS uncategorized
         FROM statement_lines sl
         JOIN movements m ON m.id = sl.movement_id
-        JOIN v_movement_state ms ON ms.movement_id = m.id
-        WHERE sl.import_id = $1 AND sl.match_state = 'merged' AND ms.is_effective
+        WHERE sl.import_id = $1 AND sl.match_state = 'merged'
         """,
         import_id,
     )

@@ -489,9 +489,8 @@ async def test_rupees_become_paise_exactly_once(demo_ledger):
     )
     paise = await demo_ledger.fetchval(
         """
-        SELECT t.amount::bigint FROM movements m
+        SELECT ml.amount_paise::bigint FROM movements m
         JOIN movement_legs ml ON ml.movement_id = m.id
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         WHERE m.id = $1
         """,
         result["movement_id"],

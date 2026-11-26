@@ -7,6 +7,7 @@ import pytest
 from arno.ledger.accounts import create_account, get_account
 from arno.ledger.audit import undo_group
 from arno.ledger.categories import resolve_category, upsert_rule
+from arno.ledger.common import ledger_balance
 from arno.ledger.errors import ConflictLedgerError, InvalidLedgerError
 from arno.ledger.movements import (
     correct_movement,
@@ -99,16 +100,8 @@ async def test_income_comes_from_the_income_account(ledger):
     assert result["amount_paise"] == 12_000_000
     assert (await get_account(ledger, bank["id"]))["balance_paise"] == 12_000_000
     assert await _spending(ledger) == 0
-    assert (
-        await ledger.fetchrow(
-            """
-            SELECT balance::bigint AS b
-            FROM pgledger_accounts a
-            JOIN accounts x ON x.ledger_account_id = a.id
-            WHERE x.kind = 'income'
-            """
-        )
-    )["b"] == -12_000_000
+    income = await ledger.fetchval("SELECT id FROM accounts WHERE kind = 'income'")
+    assert await ledger_balance(ledger, income) == -12_000_000
 
 
 async def test_split_moves_each_persons_share_to_their_ledger_account(ledger):
@@ -197,7 +190,7 @@ async def test_loan_payment_splits_principal_and_interest(ledger):
     assert await _spending(ledger) == 500_000
 
 
-async def test_amount_correction_appends_reversal_and_corrected_movement(ledger):
+async def test_amount_correction_updates_the_movement_in_place(ledger):
     bank = await _bank(ledger)
     food = await _category(ledger, "Food & Dining")
     original = await record_expense(
@@ -207,7 +200,7 @@ async def test_amount_correction_appends_reversal_and_corrected_movement(ledger)
     corrected = await correct_movement(ledger, original["id"], changes={"amount_paise": 250_000})
 
     assert corrected["status"] == "corrected"
-    assert corrected["reversal_id"] is not None
+    assert corrected["movement_id"] == original["id"]
     assert corrected["movement"]["amount_paise"] == 250_000
     assert await _spending(ledger) == 250_000
     assert (await get_account(ledger, bank["id"]))["balance_paise"] == 9_750_000
@@ -316,7 +309,7 @@ async def test_idempotency_key_returns_the_same_movement(ledger):
     assert (await get_account(ledger, bank["id"]))["balance_paise"] == 9_900_000
 
 
-async def test_delete_reverses_and_hides_the_movement(ledger):
+async def test_delete_removes_the_movement_and_its_legs(ledger):
     bank = await _bank(ledger)
     food = await _category(ledger, "Food & Dining")
     movement = await record_expense(
@@ -326,6 +319,16 @@ async def test_delete_reverses_and_hides_the_movement(ledger):
     deleted = await correct_movement(ledger, movement["id"], changes={"delete": True})
 
     assert deleted["status"] == "deleted"
+    assert deleted["movement"]["amount_paise"] == 100_000
+    assert (
+        await ledger.fetchval("SELECT count(*) FROM movements WHERE id = $1", movement["id"]) == 0
+    )
+    assert (
+        await ledger.fetchval(
+            "SELECT count(*) FROM movement_legs WHERE movement_id = $1", movement["id"]
+        )
+        == 0
+    )
     assert (await list_movements(ledger, kind="expense"))["items"] == []
     assert await _spending(ledger) == 0
     assert (await get_account(ledger, bank["id"]))["balance_paise"] == 10_000_000

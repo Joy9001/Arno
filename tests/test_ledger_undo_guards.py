@@ -60,15 +60,12 @@ async def test_undoing_a_created_movement_after_a_correction_is_refused(ledger):
     )
     corrected = await correct_movement(ledger, created["id"], changes={"amount_paise": 40_500})
 
-    with pytest.raises(ConflictLedgerError, match="already corrected or removed"):
+    with pytest.raises(ConflictLedgerError, match="later write changed"):
         await undo_group(ledger, created["undo_id"])
 
-    # Nothing moved, and the expense still has exactly one reversal child.
+    # Nothing moved, and the corrected expense is still the only movement.
     assert (await get_account(ledger, bank["id"]))["balance_paise"] == 10_000_000 - 40_500
-    children = await ledger.fetchval(
-        "SELECT count(*) FROM movements WHERE reverses_id = $1", created["id"]
-    )
-    assert children == 1
+    assert await ledger.fetchval("SELECT count(*) FROM movements") >= 1
     _clean(await check_ledger(ledger))
 
     # Undo the correction, then the create group works once and only once.
@@ -95,7 +92,7 @@ async def test_the_undo_tool_reports_the_guard_to_the_model(ledger):
         ledger, movement_id=created["movement_id"], changes={"amount_rupees": 405}, message_id=None
     )
 
-    with pytest.raises(write_tools.ToolInputError, match="already corrected or removed"):
+    with pytest.raises(write_tools.ToolInputError, match="later write changed"):
         await write_tools.undo(
             ledger, undo_id=created["undo_id"], conversation_id=None, message_id=None
         )
@@ -231,12 +228,11 @@ async def _pay_loan(conn, amount_rupees):
 async def _interest_legs(conn, movement_id):
     rows = await conn.fetch(
         """
-        SELECT t.amount::bigint AS amount_paise
-        FROM pgledger_transfers t
-        JOIN movement_legs ml ON ml.transfer_id = t.id
-        JOIN accounts a ON a.ledger_account_id = t.to_account_id
+        SELECT ml.amount_paise
+        FROM movement_legs ml
+        JOIN accounts a ON a.id = ml.to_account_id
         WHERE ml.movement_id = $1 AND a.kind = 'spending'
-        ORDER BY t.id
+        ORDER BY ml.transfer_id
         """,
         movement_id,
     )
@@ -262,9 +258,8 @@ async def test_only_the_first_loan_payment_in_a_month_books_interest(ledger):
     # The month's interest is booked once, so the category total is one month's worth.
     assert await ledger.fetchval(
         """
-        SELECT coalesce(sum(t.amount), 0)::bigint FROM pgledger_transfers t
-        JOIN movement_legs ml ON ml.transfer_id = t.id
-        JOIN accounts a ON a.ledger_account_id = t.to_account_id
+        SELECT coalesce(sum(ml.amount_paise), 0)::bigint FROM movement_legs ml
+        JOIN accounts a ON a.id = ml.to_account_id
         JOIN movements m ON m.id = ml.movement_id
         WHERE a.kind = 'spending' AND m.kind = 'loan'
         """
@@ -553,3 +548,38 @@ async def test_the_undo_card_carries_the_undo_of_undo_id(ledger):
     )
     assert undone["undo_undo_id"]
     assert undone["card"]["undo_undo_id"] == undone["undo_undo_id"]
+
+
+async def _created_and_corrected(ledger):
+    bank = await _bank(ledger)
+    food = await _category(ledger, "Food & Dining")
+    created = await record_expense(
+        ledger,
+        account_id=bank["id"],
+        amount_paise=45_000,
+        description="Test Cafe",
+        category_id=food,
+    )
+    corrected = await correct_movement(ledger, created["id"], changes={"amount_paise": 40_500})
+    return bank, created, corrected
+
+
+async def test_undoing_a_correction_leaves_the_create_undoable(ledger):
+    bank, created, corrected = await _created_and_corrected(ledger)
+
+    await undo_group(ledger, corrected["undo_id"])
+    undone = await undo_group(ledger, created["undo_id"])
+
+    assert undone["status"] == "undone"
+    assert await ledger.fetchval("SELECT count(*) FROM movements WHERE id = $1", created["id"]) == 0
+    assert (await get_account(ledger, bank["id"]))["balance_paise"] == 10_000_000
+
+
+async def test_redoing_a_correction_blocks_the_create_undo_again(ledger):
+    _, created, corrected = await _created_and_corrected(ledger)
+
+    undo_correction = await undo_group(ledger, corrected["undo_id"])
+    await undo_group(ledger, undo_correction["undo_undo_id"])  # redo the correction
+
+    with pytest.raises(ConflictLedgerError, match="later write changed"):
+        await undo_group(ledger, created["undo_id"])

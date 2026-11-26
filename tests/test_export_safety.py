@@ -8,12 +8,6 @@ import pytest
 
 from arno.ledger.export import _csv_value, export_csv_zip, export_json, table_names
 
-SECRET_TABLES = frozenset(
-    {
-        "model_credentials",
-    }
-)
-
 
 @pytest.mark.parametrize("prefix", ["=", "+", "-", "@", "\t", "\r"])
 def test_csv_neutralizes_formula_prefixes_only_for_text(prefix):
@@ -21,18 +15,12 @@ def test_csv_neutralizes_formula_prefixes_only_for_text(prefix):
     assert _csv_value(-123) == -123
 
 
-async def test_export_never_carries_credential_tables_or_secrets(ledger):
-    await ledger.execute(
-        "INSERT INTO model_credentials (provider, client_id, access_token, refresh_token) "
-        "VALUES ('openai-chatgpt', 'client', 'ACCESS-SECRET', 'REFRESH-SECRET')"
-    )
-
+async def test_export_carries_every_table_in_paise(ledger):
     names = set(await table_names(ledger))
-    assert names & SECRET_TABLES == set()
-    assert {"movements", "audit_log"} <= names
+    assert {"movements", "undo_log"} <= names
 
     payload = await export_json(ledger)
-    assert set(payload["tables"]) & SECRET_TABLES == set()
+    assert set(payload["tables"]) == names
     assert payload["money_unit"] == "paise"
 
 

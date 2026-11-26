@@ -91,7 +91,7 @@ async def test_a_stated_balance_that_agrees_commits_without_confirmation(ledger)
 
     result = await commit_import(ledger, import_id)
     assert result["rows"] == 1
-    assert await ledger_balance(ledger, account["ledger_account_id"]) == CLOSING
+    assert await ledger_balance(ledger, account["id"]) == CLOSING
     stored = await ledger.fetchrow(
         "SELECT statement_balance_paise, statement_balance_as_of FROM accounts WHERE id = $1",
         account["id"],
@@ -121,13 +121,13 @@ async def test_a_stated_balance_inside_the_period_that_disagrees_needs_confirmat
     spending_before = await _spending_rows(ledger)
     committed = await commit_import(ledger, import_id, adjustment_confirmed=True)
     assert committed["rows"] == 1
-    assert await ledger_balance(ledger, account["ledger_account_id"]) == CLOSING
+    assert await ledger_balance(ledger, account["id"]) == CLOSING
     assert await _spending_rows(ledger) == spending_before
     assert await check_ledger(ledger) == []
 
     # Undo restores the stated figure and its own adjustment exactly.
     await undo_import(ledger, import_id)
-    assert await ledger_balance(ledger, account["ledger_account_id"]) == STATED
+    assert await ledger_balance(ledger, account["id"]) == STATED
     stored = await ledger.fetchrow(
         "SELECT statement_balance_paise, statement_balance_as_of FROM accounts WHERE id = $1",
         account["id"],
@@ -153,7 +153,7 @@ async def test_a_stated_balance_is_compared_on_its_own_day(ledger):
     detail = await import_payload(ledger, import_id)
     assert detail["stated_balance_reason"] is None
     await commit_import(ledger, import_id)
-    assert await ledger_balance(ledger, account["ledger_account_id"]) == CLOSING
+    assert await ledger_balance(ledger, account["id"]) == CLOSING
 
 
 # 2 — an undone import is not ledger evidence -------------------------------------------------
@@ -197,7 +197,7 @@ async def test_an_undone_import_is_not_ledger_evidence_for_the_next_statement(le
     )
     committed = await commit_import(ledger, second)
     assert committed["rows"] == 1
-    assert await ledger_balance(ledger, account["ledger_account_id"]) == 500_000
+    assert await ledger_balance(ledger, account["id"]) == 500_000
     assert await check_ledger(ledger) == []
 
 

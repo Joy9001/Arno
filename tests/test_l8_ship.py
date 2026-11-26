@@ -126,11 +126,11 @@ async def test_restore_drill_brings_back_every_area(demo_ledger, tmp_path: Path,
     )
     await db.execute(
         """
-        INSERT INTO audit_log (actor, message_id, group_id, table_name, row_id, after)
-        VALUES ('agent', $1, 'l8-group', 'preferences', $2, '{"body":"Prefers UPI"}'::jsonb)
+        INSERT INTO undo_log (actor, message_id, summary, snapshot)
+        VALUES ('agent', $1, 'Remembered a preference', $2)
         """,
         message,
-        preference,
+        [{"table": "preferences", "key": preference, "before": None, "after": {"id": preference}}],
     )
 
     get_settings(refresh=True)
@@ -159,7 +159,7 @@ async def test_restore_drill_brings_back_every_area(demo_ledger, tmp_path: Path,
             assert (await restored.fetchrow_required("SELECT sha256 FROM attachments"))[
                 "sha256"
             ] == ("abc123")
-            assert (await restored.fetchrow_required("SELECT count(*) AS n FROM audit_log"))[
+            assert (await restored.fetchrow_required("SELECT count(*) AS n FROM undo_log"))[
                 "n"
             ] >= 1
             assert (await restored.fetchrow_required("SELECT count(*) AS n FROM schedules"))[

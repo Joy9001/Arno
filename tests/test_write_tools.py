@@ -25,7 +25,7 @@ async def _counts(conn) -> tuple[int, int, int]:
     return (
         await conn.fetchval("SELECT count(*) FROM payees"),
         await conn.fetchval("SELECT count(*) FROM movements"),
-        await conn.fetchval("SELECT count(*) FROM audit_log"),
+        await conn.fetchval("SELECT count(*) FROM undo_log"),
     )
 
 
@@ -432,3 +432,21 @@ async def test_forgetting_an_already_forgotten_memory_keeps_one_inactive_row(led
         await ledger.fetchval("SELECT active FROM preferences WHERE id = $1", remembered["id"])
         is False
     )
+
+
+async def test_deleting_a_preference_for_good_leaves_no_copy_of_its_body(ledger):
+    first = await write_tools.change_preference(
+        ledger, action="add", text="Prefers marmalade", kind="preference"
+    )
+    await write_tools.change_preference(
+        ledger, action="update", preference_id=first["id"], text="Prefers jam"
+    )
+
+    await write_tools.delete_preference_for_good(ledger, first["id"])
+
+    copies = await ledger.fetchval(
+        "SELECT count(*) FROM undo_log "
+        "WHERE snapshot::text ILIKE '%marmalade%' OR snapshot::text ILIKE '%jam%' "
+        "OR summary ILIKE '%marmalade%' OR summary ILIKE '%jam%'"
+    )
+    assert copies == 0

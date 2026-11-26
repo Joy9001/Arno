@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { useReducedMotion } from "motion/react";
-import { Download } from "lucide-react";
 import {
   Area,
   CartesianGrid,
@@ -23,7 +22,6 @@ import {
   lowAmount,
   OBLIGATION_WARNING,
   projectionReadiness,
-  workbookUrl,
 } from "./projectionData";
 import { SourceDetail } from "./SourceDetail";
 import { SafeToSpend } from "./SafeToSpend";
@@ -125,7 +123,7 @@ export type ProjectionDataQuality = {
   };
 };
 
-/** The arguments one projection was asked with, echoed by the tool for the workbook link. */
+/** The arguments one projection was asked with, echoed by the tool so the lab can re-run it. */
 export type ProjectionRequest = {
   horizon_days?: number | null;
   cut_percent?: number;
@@ -156,16 +154,6 @@ function dateLabel(value: string | null | undefined): string {
     month: "short",
     year: "numeric",
   });
-}
-
-/** The workbook endpoint takes the same query parameters as `GET /api/projection`. */
-export function WorkbookLink({ request }: { request?: ProjectionRequest }) {
-  return (
-    <a className="ghost small" href={workbookUrl(request)} download>
-      <Download size={14} strokeWidth={2} aria-hidden="true" />
-      Download workbook (.xlsx)
-    </a>
-  );
 }
 
 export function ProjectionChart({

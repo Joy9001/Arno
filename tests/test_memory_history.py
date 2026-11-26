@@ -11,6 +11,7 @@ from arno.db.conn import Connection, connect
 from arno.tools.read import active_preferences
 from arno.tools.write import change_preference, delete_preference_for_good
 from tests.conftest import OWNER_EMAIL
+from tests.fixtures.undo import snapshot_entries
 
 
 async def _remember(
@@ -47,13 +48,7 @@ async def test_delete_for_good_removes_the_memory_and_its_superseded_value(ledge
 
     assert await ledger.fetchval("SELECT count(*) FROM preferences") == 0
     assert await active_preferences(ledger) == []
-    rows = await ledger.fetch(
-        """
-        SELECT before, after FROM audit_log
-        WHERE table_name = 'preferences' AND row_id = $1
-        """,
-        first["id"],
-    )
+    rows = await snapshot_entries(ledger, "preferences", first["id"])
     assert len(rows) >= 2
     for row in rows:
         assert "Prefers" not in str(row["before"])

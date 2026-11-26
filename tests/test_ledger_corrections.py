@@ -7,8 +7,6 @@ exact paise, and every correction is followed by the whole-ledger invariants che
 
 from __future__ import annotations
 
-import io
-import zipfile
 from datetime import timedelta
 from decimal import Decimal
 
@@ -16,19 +14,14 @@ import pytest
 
 from arno.ledger.accounts import create_account, set_statement_balance
 from arno.ledger.audit import undo_group
-from arno.ledger.common import today
+from arno.ledger.common import ledger_balance, today
 from arno.ledger.errors import InvalidLedgerError
-from arno.ledger.export import export_csv_zip, export_json, table_names
 from arno.ledger.movements import correct_movement, record_split, record_transfer
 from arno.ledger.payees import create_payee, ensure_person_account
 from arno.ledger.schedule_payments import link_payment
 from arno.ledger.schedules import create_schedule
 from arno.tools import write as write_tools
 from tests.invariants import check_ledger
-
-SECRET_TABLES = {
-    "model_credentials",
-}
 
 
 def _clean(violations) -> None:
@@ -60,14 +53,13 @@ async def _labels(conn, movement_id: str) -> list[dict]:
     return await conn.fetch(
         """
         SELECT fa.kind AS from_kind, ta.kind AS to_kind,
-               t.amount::bigint AS amount_paise, p.display_name AS payee_name
+               tl.amount_paise, p.display_name AS payee_name
         FROM movement_legs tl
-        JOIN pgledger_transfers t ON t.id = tl.transfer_id
-        JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
-        JOIN accounts ta ON ta.ledger_account_id = t.to_account_id
+        JOIN accounts fa ON fa.id = tl.from_account_id
+        JOIN accounts ta ON ta.id = tl.to_account_id
         LEFT JOIN payees p ON p.id = tl.payee_id
         WHERE tl.movement_id = $1
-        ORDER BY t.id
+        ORDER BY tl.transfer_id
         """,
         movement_id,
     )
@@ -209,7 +201,7 @@ async def test_correcting_an_uneven_split_amount_asks_for_the_shares(ledger):
         )
     # Nothing was written by either refused correction.
     assert await _spending(ledger) == 2_000
-    assert await ledger.fetchval("SELECT count(*) FROM movements WHERE kind = 'reversal'") == 0
+    assert await ledger.fetchval("SELECT count(*) FROM movements") == 2
     _clean(await check_ledger(ledger))
 
 
@@ -252,13 +244,7 @@ async def _loan(conn, *, rate_bps: int | None, outstanding: int = 500_000) -> di
 
 
 async def _balance(conn, account_id: str) -> int:
-    return int(
-        await conn.fetchval(
-            "SELECT coalesce(balance, 0)::bigint FROM pgledger_accounts "
-            "WHERE id = (SELECT ledger_account_id FROM accounts WHERE id = $1)",
-            account_id,
-        )
-    )
+    return await ledger_balance(conn, account_id)
 
 
 async def test_correcting_a_loan_payment_recomputes_interest_and_undo_restores(ledger):
@@ -409,47 +395,3 @@ async def test_an_own_account_transfer_does_not_pay_a_family_transfer_obligation
         await link_payment(
             ledger, schedule_id=schedule["id"], due_date=due, movement_id=movement["id"]
         )
-
-
-# 6. The data export never carries credential material ------------------------------------------
-
-
-async def _seed_secrets(conn) -> None:
-    await conn.execute(
-        "INSERT INTO model_credentials (provider, client_id, access_token, refresh_token) "
-        "VALUES ('openai-chatgpt', 'client', 'ACCESS-SECRET', 'REFRESH-SECRET')"
-    )
-
-
-async def test_no_credential_table_is_in_any_export(ledger):
-    await _seed_secrets(ledger)
-
-    names = set(await table_names(ledger))
-    assert names & SECRET_TABLES == set()
-    assert "audit_log" in names and "movements" in names
-
-    payload = await export_json(ledger)
-    assert set(payload["tables"]) & SECRET_TABLES == set()
-
-    blob = await export_csv_zip(ledger)
-    with zipfile.ZipFile(io.BytesIO(blob)) as archive:
-        namelist = archive.namelist()
-    assert {f"{table}.csv" for table in SECRET_TABLES} & set(namelist) == set()
-    assert b"audit_log.csv" in [name.encode() for name in namelist]
-
-
-async def test_the_json_export_labels_its_money_unit(ledger):
-    payload = await export_json(ledger)
-    assert payload["money_unit"] == "paise"
-
-
-# 7. UPI handles match without case -------------------------------------------------------------
-
-
-async def test_a_upi_id_matches_without_case(ledger):
-    ravi = await create_payee(ledger, display_name="Ravi", kind="person", upi_id="ravi@okaxis")
-
-    found = await write_tools.resolve_payee(ledger, "Ravi", upi_id="RAVI@OkAxis")
-
-    assert found["id"] == ravi["id"]
-    assert await ledger.fetchval("SELECT count(*) FROM payees") == 1

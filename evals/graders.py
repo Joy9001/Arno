@@ -343,10 +343,10 @@ async def _new_movements(conn: Connection, output: EvalOutput) -> list[dict[str,
     refs = output.message_ids[-1:] if output.last_turn_at else output.message_ids
     return await conn.fetch(
         """
-        SELECT m.id, m.date, m.kind, m.description, m.reverses_id,
+        SELECT m.id, m.date, m.kind, m.description,
                coalesce(sum(
-                   CASE WHEN t.to_account_id = sp.ledger_account_id
-                        THEN t.amount ELSE -t.amount END
+                   CASE WHEN ml.to_account_id = sp.id
+                        THEN ml.amount_paise ELSE -ml.amount_paise END
                ), 0)::bigint AS amount_paise,
                (array_agg(DISTINCT p.display_name)
                     FILTER (WHERE p.display_name IS NOT NULL))[1] AS payee,
@@ -354,11 +354,10 @@ async def _new_movements(conn: Connection, output: EvalOutput) -> list[dict[str,
                     FILTER (WHERE c.name IS NOT NULL))[1] AS category
         FROM movements m
         JOIN movement_legs ml ON ml.movement_id = m.id
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         JOIN accounts sp ON sp.kind = 'spending'
         LEFT JOIN payees p ON p.id = ml.payee_id
         LEFT JOIN categories c ON c.id = ml.category_id
-        WHERE m.created_at >= $1
+        WHERE m.updated_at >= $1 OR ml.updated_at >= $1
            OR EXISTS (SELECT 1 FROM captures cap WHERE cap.movement_id = m.id AND cap.ref = ANY($2))
         GROUP BY m.id
         ORDER BY m.created_at
@@ -375,10 +374,12 @@ async def _new_audit(
         return []
     return await conn.fetch(
         """
-        SELECT table_name, row_id, before, after
-        FROM audit_log
-        WHERE created_at >= $1 AND table_name = ANY($2)
-        ORDER BY created_at
+        SELECT e ->> 'table' AS table_name, e ->> 'key' AS row_id,
+               e -> 'before' AS before, e -> 'after' AS after
+        FROM undo_log u
+        CROSS JOIN LATERAL jsonb_array_elements(u.snapshot) AS t(e)
+        WHERE u.created_at >= $1 AND e ->> 'table' = ANY($2)
+        ORDER BY u.created_at
         """,
         _since(output),
         sorted(tables),
@@ -492,9 +493,7 @@ async def grade_answers(
         first, last = resolve_period(expected.get("period", "last_month"), ledger_today())
         total_count = await conn.fetchval(
             """
-            SELECT count(*) FROM movements m
-            JOIN v_movement_state s ON s.movement_id = m.id
-            WHERE s.is_effective AND m.date BETWEEN $1 AND $2
+            SELECT count(*) FROM movements m WHERE m.date BETWEEN $1 AND $2
             """,
             first,
             last,
@@ -1010,15 +1009,14 @@ async def grade_writes(
     elif check == "correction":
         amount = int(expected["amount_paise"])
         corrected = any(
-            row["kind"] in {"expense", "reversal"} and abs(int(row["amount_paise"])) == amount
+            row["kind"] == "expense" and abs(int(row["amount_paise"])) == amount
             for row in movements
         )
-        reversed_any = any(row["reverses_id"] for row in movements)
         results.append(
             CheckResult(
                 name="correction",
-                passed=corrected and reversed_any,
-                reason=f"expected the corrected amount ₹{amount / 100:,.2f} and a reversal",
+                passed=corrected,
+                reason=f"expected the movement corrected in place to ₹{amount / 100:,.2f}",
             )
         )
     elif check == "preference":
@@ -1079,12 +1077,11 @@ async def grade_writes(
             )
         )
     elif check == "undo":
+        undone = await conn.fetchval(
+            "SELECT count(*) FROM undo_log WHERE undone_at >= $1", _since(output)
+        )
         results.append(
-            CheckResult(
-                name="undo",
-                passed=any(row["reverses_id"] for row in movements),
-                reason="expected a reversal movement",
-            )
+            CheckResult(name="undo", passed=bool(undone), reason="expected an undone write group")
         )
     elif check == "no_write":
         # A question the agent must answer before writing: no money moves and no lasting

@@ -61,7 +61,7 @@ const scenario = z.object({
   }),
 });
 
-/** The arguments one projection was asked with, echoed by the tool for the workbook link. */
+/** The arguments one projection was asked with, echoed by the tool so the lab can re-run it. */
 const request = z.object({
   horizon_days: number.int().nullable().optional(),
   cut_percent: number.int().min(0).max(50).optional(),
@@ -81,7 +81,7 @@ const request = z.object({
 /**
  * Validate every field consumed by the receipt, its expanded details, and evidence panel.
  * Untrusted display strings lose their internal `<outside>` envelope here; the raw `request`
- * is left untouched so the workbook link still echoes exactly what was asked.
+ * is left untouched so the lab still echoes exactly what was asked.
  */
 export const projectionSchema = z
   .object({

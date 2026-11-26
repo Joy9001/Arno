@@ -75,14 +75,15 @@ async def _category_totals(conn) -> dict[str, int]:
 
 
 async def _entry_sum(conn, movement_id: str) -> int:
-    """Every movement's entries must net to zero: double-entry, always."""
+    """Every leg moves money out of one account and into another, so a movement nets to zero."""
     return int(
         await conn.fetchval(
             """
-            SELECT coalesce(sum(e.amount), 0)::bigint
-            FROM pgledger_entries e
-            JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
-            WHERE ml.movement_id = $1
+            SELECT coalesce(sum(delta), 0)::bigint FROM (
+                SELECT amount_paise AS delta FROM movement_legs WHERE movement_id = $1
+                UNION ALL
+                SELECT -amount_paise FROM movement_legs WHERE movement_id = $1
+            ) d
             """,
             movement_id,
         )
@@ -454,13 +455,8 @@ async def test_correcting_amount_account_and_date_matches_recording_it_right_onc
     assert effective[0]["date"] == "2026-10-31"
     assert effective[0]["category_name"] == "Groceries"
 
-    # Audit history: the original and its reversal are still there, hidden from the effective list.
-    history = (await list_movements(ledger, kind="expense", include_reversed=True))["items"]
-    assert sorted(row["id"] for row in history) == sorted(
-        [movement["id"], corrected["movement_id"]]
-    )
-    assert (await get_movement(ledger, movement["id"]))["reversed"] is True
-    assert (await get_movement(ledger, corrected["movement_id"]))["reversed"] is False
+    # A correction edits the movement in place.
+    assert corrected["movement_id"] == movement["id"]
     assert await _entry_sum(ledger, movement["id"]) == 0
 
 
@@ -521,12 +517,13 @@ async def test_undo_and_undo_of_undo_keep_spending_inside_its_category(ledger):
 
     first = await undo_group(ledger, movement["undo_id"])
 
-    assert await _category_totals(ledger) == {"Food & Dining": 0}
+    # The undone expense is gone, legs and all.
+    assert await _category_totals(ledger) == {}
     assert (
         await ledger.fetchval(
             "SELECT count(*) FROM movement_legs WHERE movement_id = $1", movement["id"]
         )
-        == 1
+        == 0
     )
 
     await undo_group(ledger, first["undo_undo_id"])
@@ -1141,7 +1138,7 @@ async def test_a_future_expense_is_rejected_with_a_schedule_hint(ledger):
     await _bank(ledger)
     before = (
         await ledger.fetchval("SELECT count(*) FROM payees"),
-        await ledger.fetchval("SELECT count(*) FROM audit_log"),
+        await ledger.fetchval("SELECT count(*) FROM undo_log"),
     )
 
     with pytest.raises(InvalidLedgerError, match="schedule"):
@@ -1158,10 +1155,10 @@ async def test_a_future_expense_is_rejected_with_a_schedule_hint(ledger):
         )
 
     assert await ledger.fetchval("SELECT count(*) FROM movements WHERE kind = 'expense'") == 0
-    # The refusal leaves no payee and no orphan audit rows behind either.
+    # The refusal leaves no payee and no orphan undo rows behind either.
     assert (
         await ledger.fetchval("SELECT count(*) FROM payees"),
-        await ledger.fetchval("SELECT count(*) FROM audit_log"),
+        await ledger.fetchval("SELECT count(*) FROM undo_log"),
     ) == before
 
 

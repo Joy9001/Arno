@@ -42,11 +42,10 @@ DEMO_SETTINGS = {
 
 _RESET_TABLES = """
 TRUNCATE
-    pgledger_idempotency_keys, pgledger_entries, pgledger_transfers, pgledger_accounts,
     accounts, payees, categories, movements, movement_legs, captures,
     imports, statement_lines, attachments,
     schedules, series_detections, goals, scheduled_questions,
-    category_rules, baselines, audit_log, backup_runs
+    category_rules, baselines, undo_log, backup_runs
 RESTART IDENTITY CASCADE
 """
 

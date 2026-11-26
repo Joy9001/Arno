@@ -40,22 +40,19 @@ REQUIRED_TABLES = {
     "accounts",
     "movements",
     "movement_legs",
-    "pgledger_accounts",
-    "pgledger_entries",
-    "pgledger_transfers",
     "schedules",
     "goals",
     "preferences",
     "conversations",
     "messages",
     "attachments",
-    "audit_log",
+    "undo_log",
     "schema_version",
 }
 
 # Login roles live on the cluster, not in a database, so `pg_dump` cannot carry them. A restore
 # into a fresh cluster must recreate them before anything names them. The list and settings mirror
-# migrations 0002 and 0006 without the superuser-only `NO*` flags (PostgreSQL 18 rejects even
+# the baseline migration without the superuser-only `NO*` flags (PostgreSQL 18 rejects even
 # `NOSUPERUSER`/`NOREPLICATION`/`NOBYPASSRLS` from a non-superuser role); `ensure_roles` verifies
 # those three attributes are false instead. Their passwords are set again from the environment at
 # boot.
@@ -228,31 +225,11 @@ async def verify_database(conn: Connection) -> dict[str, bool]:
     )["version"]
     checks["schema_version"] = int(version) > 0
 
-    unbalanced = await conn.fetchval(
-        """
-        SELECT count(*) FROM (
-            SELECT e.transfer_id
-            FROM pgledger_entries e
-            GROUP BY e.transfer_id
-            HAVING sum(e.amount) <> 0
-        ) AS bad
-        """
+    orphans = await conn.fetchval(
+        "SELECT count(*) FROM movements m "
+        "WHERE NOT EXISTS (SELECT 1 FROM movement_legs l WHERE l.movement_id = m.id)"
     )
-    checks["ledger_transfers_balance"] = unbalanced == 0
-
-    drifted = await conn.fetchval(
-        """
-        SELECT count(*) FROM (
-            SELECT a.id
-            FROM pgledger_accounts a
-            LEFT JOIN (
-                SELECT account_id, sum(amount) AS total FROM pgledger_entries GROUP BY account_id
-            ) e ON e.account_id = a.id
-            WHERE coalesce(e.total, 0) <> a.balance
-        ) AS bad
-        """
-    )
-    checks["account_balances_match_entries"] = drifted == 0
+    checks["movements_have_legs"] = orphans == 0
     return checks
 
 

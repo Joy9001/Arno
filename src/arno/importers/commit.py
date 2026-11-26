@@ -1,7 +1,7 @@
 """Commit a verified import: write movements and adjust the closing balance.
 
 Nothing is written before the review screen. Commit
-groups are recorded, so undoing the import reverses every movement it wrote.
+groups are recorded, so undoing the import deletes every movement it wrote.
 
 A statement also says what the balance was on its first day, so the commit books that opening
 where it belongs, at `period_start`, against Equity. Without it the opening stayed inside a later
@@ -37,20 +37,18 @@ from arno.tools.write import resolve_payee
 logger = logging.getLogger("arno.importers.commit")
 
 
-async def _net_on_account(conn: Connection, movement_id: str, ledger_account_id: str) -> int:
+async def _net_on_account(conn: Connection, movement_id: str, account_id: str) -> int:
     row = await conn.fetchrow(
         """
         SELECT coalesce(sum(
-            CASE WHEN t.from_account_id = $1 THEN -t.amount
-                 WHEN t.to_account_id = $2 THEN t.amount
+            CASE WHEN from_account_id = $1 THEN -amount_paise
+                 WHEN to_account_id = $1 THEN amount_paise
                  ELSE 0 END
         ), 0)::bigint AS net
-        FROM movement_legs ml
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
-        WHERE ml.movement_id = $3
+        FROM movement_legs
+        WHERE movement_id = $2
         """,
-        ledger_account_id,
-        ledger_account_id,
+        account_id,
         movement_id,
     )
     return int(row["net"]) if row else 0
@@ -61,32 +59,6 @@ async def _movement_date(conn: Connection, movement_id: str) -> date:
     if row is None:
         raise InvalidLedgerError("The matched movement disappeared")
     return cast(date, row["date"])  # movements.date is a date column
-
-
-async def _copy_captures(
-    conn: Connection, *, old_movement_id: str, new_movement_id: str
-) -> str | None:
-    rows = await conn.fetch(
-        "SELECT kind, ref, upi_ref, confidence FROM captures WHERE movement_id = $1",
-        old_movement_id,
-    )
-    if not rows:
-        return None
-    async with write_group(conn, actor="user") as group:
-        for row in rows:
-            created = await conn.fetchrow_required(
-                """
-                INSERT INTO captures (movement_id, kind, ref, upi_ref, confidence)
-                VALUES ($1, $2, $3, $4, $5) RETURNING *
-                """,
-                new_movement_id,
-                row["kind"],
-                row["ref"],
-                row["upi_ref"],
-                row["confidence"],
-            )
-            group.record_created("captures", created)
-    return group.group_id
 
 
 async def _capture_statement_line(
@@ -296,7 +268,7 @@ async def lock_account_and_import(conn: Connection, import_id: str) -> dict[str,
 async def _lock_import_scope(conn: Connection, import_id: str) -> dict[str, Any] | None:
     """Take the account, the import, and the payees it names, in an order both paths share.
 
-    Commit writes the statement's movements and resolves the payees they name; undo reverses
+    Commit writes the statement's movements and resolves the payees they name; undo deletes
     them, archives the payees it created, and restores the account last. Taking those rows in
     each path's own order made a commit and an undo of two imports on one account hold a row the
     other needed, so Postgres broke a deadlock and picked a side. The account's row lock is the
@@ -442,7 +414,7 @@ async def _commit(
             )
         movement_id = line.get("movement_id")
         if movement_id:
-            net = await _net_on_account(conn, movement_id, account["ledger_account_id"])
+            net = await _net_on_account(conn, movement_id, account["id"])
             # Money out is negative on both sides. A merge that flips the direction would tie a
             # debit to a credit, so the closing adjustment would hide the real difference.
             if net != 0 and (net < 0) != (line_amount < 0):
@@ -456,7 +428,7 @@ async def _commit(
                 changes["date"] = line["date"]
             if net != line_amount:
                 changes["amount_paise"] = abs(line_amount)
-            if not await _touches_account(conn, movement_id, account["ledger_account_id"]):
+            if not await _touches_account(conn, movement_id, account["id"]):
                 changes["account_id"] = account["id"]
             if changes:
                 result = await movements_mod.correct_movement(
@@ -466,14 +438,6 @@ async def _commit(
                     actor="user",
                 )
                 group_ids.append(str(result["undo_id"]))
-                corrected_id = str(result["movement"]["id"])
-                if corrected_id != movement_id:
-                    copy_group = await _copy_captures(
-                        conn, old_movement_id=movement_id, new_movement_id=corrected_id
-                    )
-                    if copy_group:
-                        group_ids.append(copy_group)
-                movement_id = corrected_id
             group_ids.append(
                 await _capture_statement_line(conn, movement_id=movement_id, line=line)
             )
@@ -556,18 +520,15 @@ async def _commit(
     return result
 
 
-async def _touches_account(conn: Connection, movement_id: str, ledger_account_id: str) -> bool:
+async def _touches_account(conn: Connection, movement_id: str, account_id: str) -> bool:
     row = await conn.fetchrow(
         """
-        SELECT 1 FROM movement_legs ml
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
-        WHERE ml.movement_id = $1
-          AND (t.from_account_id = $2 OR t.to_account_id = $3)
+        SELECT 1 FROM movement_legs
+        WHERE movement_id = $1 AND (from_account_id = $2 OR to_account_id = $2)
         LIMIT 1
         """,
         movement_id,
-        ledger_account_id,
-        ledger_account_id,
+        account_id,
     )
     return row is not None
 
@@ -596,9 +557,18 @@ async def _undo(conn: Connection, import_id: str) -> dict[str, Any]:
     groups = [str(group) for group in (row["commit_groups"] or [])]
     groups += [str(group) for group in (row["categorize_groups"] or [])]
     # The categorizer runs after the commit, so its groups are listed after the commit groups and
-    # reversing the list reverts them first. Its audit rows are the later writes a commit group's
+    # reversing the list reverts them first. Its undo log rows are the later writes a commit group's
     # undo would call a conflict, and its labels and `llm` rules were derived from this import: an
     # un-imported payee must not stay labelled by a rule it wrote.
+    # The lines point at the movements the groups delete, and lines are not recorded in a group.
+    await conn.execute(
+        """
+        UPDATE statement_lines
+        SET match_state = 'ignored', movement_id = NULL, updated_at = now()
+        WHERE import_id = $1
+        """,
+        import_id,
+    )
     undoing: set[str] = set()
     for group_id in reversed(groups):
         try:
@@ -608,7 +578,7 @@ async def _undo(conn: Connection, import_id: str) -> dict[str, Any]:
         except ConflictLedgerError:
             logger.warning("import %s undo conflict in group %s", import_id, group_id)
             raise
-        # This undo's own audit rows touch the same rows; the next step must not call them later
+        # This undo's own undo log rows touch the same rows; the next step must not call them later
         # writes when it reverts the movement and labels the commit group created.
         if result.get("undo_undo_id"):
             undoing.add(str(result["undo_undo_id"]))
@@ -619,14 +589,6 @@ async def _undo(conn: Connection, import_id: str) -> dict[str, Any]:
             review=row["review"],
             period_end=row["period_end"],
             closing=row["closing_balance_paise"],
-        )
-        await conn.execute(
-            """
-            UPDATE statement_lines
-            SET match_state = 'ignored', movement_id = NULL, updated_at = now()
-            WHERE import_id = $1
-            """,
-            import_id,
         )
         await conn.execute(
             """

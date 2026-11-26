@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import date
-from pathlib import Path
 from typing import Any
 
 from arno.importers.balance_plan import (
@@ -92,20 +91,19 @@ async def _review(
 
 
 async def _adjustments_on(conn, account: dict[str, Any], day: date) -> int:
-    """What that day's balance adjustments did to the account, cancellations included."""
+    """What that day's balance adjustments did to the account."""
     value = await conn.fetchval(
         """
         SELECT coalesce(sum(
-            CASE WHEN t.to_account_id = $1 THEN t.amount ELSE -t.amount END
+            CASE WHEN ml.to_account_id = $1 THEN ml.amount_paise ELSE -ml.amount_paise END
         ), 0)::bigint
         FROM movements m
         JOIN movement_legs ml ON ml.movement_id = m.id
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
-        WHERE (t.from_account_id = $1 OR t.to_account_id = $1)
+        WHERE (ml.from_account_id = $1 OR ml.to_account_id = $1)
           AND m.date = $2
-          AND m.kind IN ('adjustment', 'reversal')
+          AND m.kind = 'adjustment'
         """,
-        account["ledger_account_id"],
+        account["id"],
         day,
     )
     return int(value or 0)
@@ -172,7 +170,7 @@ async def test_a_backfill_after_a_stated_balance_keeps_the_running_balance(ledge
         expected = _running(BANK_ROWS, BANK_OPENING, day)
         assert await _balance_on(ledger, account, day) == expected, day
         # The projection's own balance seam agrees with the view the UI reads.
-        assert await _balance_at(ledger, account["ledger_account_id"], day) == expected, day
+        assert await _balance_at(ledger, account["id"], day) == expected, day
 
     # The stated balance at D still holds, and it is today's balance.
     assert await _balance_on(ledger, account, BANK_END) == BANK_CLOSING
@@ -256,14 +254,11 @@ async def test_a_longer_statement_replaces_an_earlier_opening(ledger):
 
     for day in (date(2025, 10, 1), date(2025, 11, 15), date(2026, 1, 10), date(2026, 3, 31)):
         assert await _balance_on(ledger, account, day) == _running(rows_b, 60_000, day), day
-    # One opening adjustment is live, not two: the superseded one nets to nothing.
+    # One opening adjustment is live, not two: the superseded one is deleted.
     live = await ledger.fetchval(
         """
         SELECT count(*) FROM movements m
         WHERE m.kind = 'adjustment' AND m.description LIKE 'Opening balance%'
-          AND NOT EXISTS (
-              SELECT 1 FROM movements r WHERE r.reverses_id = m.id
-          )
         """
     )
     assert int(live) == 1
@@ -275,7 +270,6 @@ async def _live_adjustments_named(conn, prefix: str) -> int:
         """
         SELECT count(*) FROM movements m
         WHERE m.kind = 'adjustment' AND m.description LIKE $1
-          AND NOT EXISTS (SELECT 1 FROM movements r WHERE r.reverses_id = m.id)
         """,
         f"{prefix}%",
     )
@@ -467,7 +461,7 @@ async def test_a_card_backfill_keeps_the_ledger_sign(ledger):
 
     for day in (date(2025, 5, 1), date(2026, 2, 10), date(2026, 4, 20), BANK_END):
         assert await _balance_on(ledger, account, day) == _running(rows, -100_000, day), day
-    assert await ledger_balance(ledger, account["ledger_account_id"]) == -445_000
+    assert await ledger_balance(ledger, account["id"]) == -445_000
     assert await _adjustments_on(ledger, account, BANK_END) == 0
     assert await check_ledger(ledger) == []
 
@@ -597,35 +591,9 @@ async def test_adjustments_are_found_by_their_import_not_by_their_label(ledger):
     async def live(movement_id: str) -> bool:
         return bool(
             await ledger.fetchval(
-                "SELECT is_effective FROM v_movement_state WHERE movement_id = $1", movement_id
+                "SELECT EXISTS(SELECT 1 FROM movements WHERE id = $1)", movement_id
             )
         )
 
-    assert not await live(opening_id)  # the older rows explain it, so it was found and reversed
+    assert not await live(opening_id)  # the older rows explain it, so it was found and deleted
     assert await live(decoy_id)  # a label is no longer a claim on a movement
-
-
-async def test_the_migration_backfill_tags_openings_from_the_commit_groups(ledger):
-    created = await create_account(ledger, kind="bank", name="SBI main", institution="SBI")
-    account = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", created["id"])
-    import_id = await _review(
-        ledger,
-        account,
-        [_row("2026-05-10", "UPI/DR/1/RENT", debit=40_000, balance=110_000)],
-        start=date(2026, 4, 1),
-        end=date(2026, 11, 1),
-        opening=150_000,
-        closing=110_000,
-    )
-    await commit_import(ledger, import_id)
-    await ledger.execute("UPDATE movements SET import_id = NULL")
-
-    migration = Path("src/arno/db/migrations/0050_import_adjustments.sql").read_text("utf-8")
-    await ledger.execute(migration[migration.index("-- Backfill") :])
-
-    tagged = await ledger.fetch(
-        "SELECT description, import_id FROM movements WHERE import_id IS NOT NULL"
-    )
-    assert [(row["description"], row["import_id"]) for row in tagged] == [
-        ("Opening balance for SBI main statement", import_id)
-    ]

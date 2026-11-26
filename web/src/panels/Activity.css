@@ -55,34 +55,6 @@
   min-width: 0;
 }
 
-/* Reversed movements: an icon toggle that sits with the filters it changes. */
-.act-toggle {
-  display: grid;
-  flex: none;
-  place-items: center;
-  width: 42px;
-  height: 42px;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: var(--surface-2);
-  color: var(--sub);
-}
-
-.act-toggle:hover {
-  background: var(--surface-3);
-  color: var(--text);
-}
-
-.act-toggle.on {
-  background: var(--lime);
-  color: var(--lime-ink);
-}
-
-.act-toolbar-actions .act-toggle {
-  flex: none;
-}
-
 .act-toolbar-actions {
   display: flex;
   gap: 8px;

@@ -53,7 +53,6 @@ def _rebuilt_counts() -> dict[str, int]:
     return {
         "accounts": 3,
         "categories": len(DEFAULT_CATEGORIES),
-        "pgledger_accounts": 3,
         "scheduled_questions": 1,
     }
 
@@ -191,13 +190,19 @@ async def _memory_scope(conn: Connection, target_id: str | None) -> tuple[list[A
     if row is None:
         raise NotFoundLedgerError("No such memory")
     audits = await conn.fetchval(
-        "SELECT count(*) FROM audit_log WHERE table_name = 'preferences' AND row_id = $1",
+        """
+        SELECT count(*) FROM undo_log
+        WHERE EXISTS (
+            SELECT 1 FROM jsonb_array_elements(snapshot) e
+            WHERE e ->> 'table' = 'preferences' AND e ->> 'key' = $1
+        )
+        """,
         target_id,
     )
     removes: list[dict[str, Any]] = [{"table": "preferences", "count": 1}]
     retains = [
         {
-            "what": f"{int(audits or 0)} audit rows naming this memory",
+            "what": f"{int(audits or 0)} undo-history entries naming this memory",
             "why": "they stay as the record of the delete, with the body blanked in every copy",
         },
         {
@@ -231,8 +236,8 @@ async def _statement_scope(conn: Connection, target_id: str | None) -> tuple[lis
             "remains auditable and a re-upload is recognized",
         },
         {
-            "what": "Audit rows and undo history for this import",
-            "why": "the ledger writes it made keep their trail; purging the file changes no money",
+            "what": "Undo history for this import",
+            "why": "the ledger writes it made keep their history; purging the file moves no money",
         },
         {
             "what": "The movements booked from this statement",
@@ -283,8 +288,8 @@ async def erase_everything(conn: Connection) -> dict[str, Any]:
         await ensure_system_accounts(conn)
         await ensure_default_categories(conn)
         await ensure_default_question(conn)
-        # Rebuilding the seed rows writes audit entries; a fresh start keeps no history.
-        await conn.execute("TRUNCATE audit_log")
+        # Rebuilding the seed rows writes undo entries; a fresh start keeps no history.
+        await conn.execute("TRUNCATE undo_log")
         await conn.execute(
             """
             UPDATE settings

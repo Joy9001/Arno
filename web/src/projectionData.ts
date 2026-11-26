@@ -1,4 +1,4 @@
-import type { ProjectionPayload, ProjectionRequest } from "./projection";
+import type { ProjectionPayload } from "./projection";
 
 export const OBLIGATION_WARNING =
   "An obligation cannot be met on its date in some simulated futures.";
@@ -33,33 +33,6 @@ export function paymentMethodLabel(method: string | undefined): string {
   if (method === "card") return "by credit card";
   if (method === "emi") return "card EMI";
   return method.replaceAll("_", " ");
-}
-
-/** The workbook endpoint takes the same query parameters as `GET /api/projection`. */
-export function workbookUrl(request?: ProjectionRequest): string {
-  const params = new URLSearchParams();
-  if (request?.horizon_days != null) {
-    params.set("horizon_days", String(request.horizon_days));
-  }
-  if (request?.cut_percent) params.set("cut_percent", String(request.cut_percent));
-  const purchase = request?.hypothetical;
-  if (purchase?.amount_paise != null) {
-    params.set("amount_paise", String(purchase.amount_paise));
-    if (purchase.date) params.set("date", purchase.date);
-    params.set("method", purchase.method ?? "account");
-    if (purchase.emi_months != null) params.set("emi_months", String(purchase.emi_months));
-    if (purchase.account) params.set("account", purchase.account);
-    if (purchase.emi_rate_percent != null) {
-      params.set("emi_rate_percent", String(purchase.emi_rate_percent));
-    }
-    if (purchase.emi_fee_paise != null) params.set("emi_fee_paise", String(purchase.emi_fee_paise));
-    if (purchase.no_cost) params.set("no_cost", "true");
-  }
-  if (request?.changes?.length) {
-    params.set("changes", JSON.stringify(request.changes));
-  }
-  const query = params.toString();
-  return query ? `/api/projection/workbook?${query}` : "/api/projection/workbook";
 }
 
 export type ProjectionReadiness = {

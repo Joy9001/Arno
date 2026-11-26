@@ -142,7 +142,6 @@ async def _import_rows(conn: Connection, import_id: str) -> list[dict[str, Any]]
                payee.kind AS payee_kind, payee.display_name AS payee_name
         FROM statement_lines sl
         JOIN movements m ON m.id = sl.movement_id
-        JOIN v_movement_state ms ON ms.movement_id = m.id
         LEFT JOIN LATERAL (
             SELECT ml.category_id
             FROM movement_legs ml
@@ -159,7 +158,6 @@ async def _import_rows(conn: Connection, import_id: str) -> list[dict[str, Any]]
         WHERE sl.import_id = $1
           AND sl.match_state = 'merged'
           AND sl.movement_id IS NOT NULL
-          AND ms.is_effective
         ORDER BY sl.date, sl.id
         """,
         import_id,
@@ -250,7 +248,6 @@ async def _refund_source(
                m.category_rule_id, label.category_id, payee.display_name AS payee_name
         FROM statement_lines sl
         JOIN movements m ON m.id = sl.movement_id
-        JOIN v_movement_state ms ON ms.movement_id = m.id
         JOIN LATERAL (
             SELECT ml.category_id
             FROM movement_legs ml
@@ -267,7 +264,6 @@ async def _refund_source(
         WHERE sl.amount_paise < 0
           AND m.date BETWEEN $1 AND $2
           AND abs(sl.amount_paise) >= $3
-          AND ms.is_effective
         ORDER BY m.date DESC, sl.id DESC
         LIMIT 100
         """,

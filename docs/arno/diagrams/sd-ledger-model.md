@@ -1,19 +1,17 @@
-# The ledger, built on pgledger
+# The ledger model
 
-**What it shows:** Arno's ledger. One real money movement is one pgledger call of balanced
-transfers between accounts. pgledger's tables are vendored and append-only. Arno's tables sit
-around them: `accounts` carries the domain fields, `movement_legs` links each transfer to its
-movement and holds its editable category and payee, `payees` identifies who money went to, and
-`captures` links every chat message, photo, and statement line to its movement.
+**What it shows:** Arno's ledger. One real money movement is a `movements` row that owns one or more
+`movement_legs`. Each leg moves a positive amount from one `accounts` row to a different one, so the
+ledger is zero-sum by constraint. A leg holds its editable category and payee, `payees` identifies
+who money went to, and `captures` links every chat message, photo, and statement line to its
+movement. `undo_log` stores one snapshot row per write group.
 
-**Diagram type:** ER, with a dashed zone around the vendored tables.
+**Diagram type:** ER.
 
-**What the budget forced out:** `statement_lines`, `imports`, `categories`, and
-`pgledger_idempotency_keys` are left out, and the views are in the text; the Spending, Income, and
-equity accounts are rows in `accounts`. 8 entities, 7 relationships; the accent marks `movements`
-and its link to the transfers.
+**What the budget forced out:** `statement_lines`, `imports`, and `categories` are left out, and the
+views are in the text; the Spending, Income, and equity accounts are rows in `accounts`.
 
-![The ledger, built on pgledger](./sd-ledger-model.png)
+![The ledger model](./sd-ledger-model.png)
 
 **Source:** `sd-ledger-model.html` (diagram-design skill, default skin, minimal light, doc-inline
 preset).

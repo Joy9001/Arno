@@ -18,7 +18,7 @@ src/arno/
                usage log and daily cap
   api/         FastAPI app, middleware, routers, SSE chat stream
   capture/     STT client and capture helpers
-  db/          Connection cache, numbered SQL migrations, role bootstrap, vendored pgledger
+  db/          Connection pool, the baseline SQL migration, role bootstrap
   demo/        Synthetic demo persona seeder and template database helpers
   engine/      Pure scenario projection kernel, affordability, patterns, and money math
   importers/   File readers, verification checks, gate, reconciliation,
@@ -26,7 +26,7 @@ src/arno/
   india/       Default Indian categories, bank holiday calendar, ₹ formatting, prompt notes
   jobs/        Minute loop, `spawn` helper, scheduled questions, reminders, risk, patterns,
                backup check
-  ledger/      Double-entry ledger writes, audit log, undo, deletion, exports, workbooks
+  ledger/      Double-entry ledger writes, undo log, deletion, exports
   tools/       Plain-Python read, write, projection, and recap functions (no PydanticAI types)
   cli.py       Host administration CLI (`arno`)
 web/           Vite and React PWA (built to `web/dist` and served by the API)
@@ -56,20 +56,20 @@ The following table summarizes every API router and endpoint group mounted in
 | Chat and threads | `POST /api/chat` (`VercelAIAdapter` with `sdk_version=7`, `manage_message_history="server"`, `allowed_file_url_schemes=frozenset()`), `GET /api/chat/{thread_id}/stream` (reconnect to detached turn), `POST /api/chat/{thread_id}/stop`, and thread list, read, rename, search, and reply flagging |
 | Home | `GET /api/home` composes account summary, 90-day default projection (configurable `horizon_days`), inbox preview, and recent activity |
 | Ledger | Accounts (`GET/POST/PATCH/DELETE /api/accounts`, `POST /api/accounts/{id}/statement-balance`), movements (`GET/POST /api/movements`, `GET /api/movements/{id}`, `POST /api/movements/{id}/correct`, `GET /api/ledger/span`), categories and rules (`/api/categories`, `/api/category-rules`), uncategorized queue (`GET /api/uncategorized`, `POST /api/uncategorized/answer`), schedules and payment evidence (`/api/schedules`, `GET /api/schedules/upcoming`, `GET /api/schedules/{id}/occurrences/{date}`, `POST/DELETE .../payments`), goals (`/api/goals`), people and payees (`/api/people`, `/api/payees`), settings and memory (`GET/PATCH /api/settings`, `PATCH /api/preferences/{id}/content`), and undo (`POST /api/undo`, `POST /api/undo/{undo_id}`) |
-| Projection | `GET /api/projection` and `GET /api/projection/workbook` (`.xlsx`, calculation version `2`) accept `horizon_days` from 1–3,650, `cut_percent` from 0–50 for reducible everyday spending, optional what-if `changes`, and hypothetical purchase terms (`amount_paise` and `emi_fee_paise` capped at `MAX_PAISE`, `emi_months` 2–48) |
+| Projection | `GET /api/projection` accepts `horizon_days` from 1–3,650, `cut_percent` from 0–50 for reducible everyday spending, optional what-if `changes`, and hypothetical purchase terms (`amount_paise` and `emi_fee_paise` capped at `MAX_PAISE`, `emi_months` 2–48) |
 | Attachments and imports | `POST /api/attachments` (accepts `purpose="statement"` or `"photo"`, up to 25 MB), `DELETE /api/attachments/{id}` (purges stored statement bytes), `GET /api/attachments/{id}` (serves photos and audio with `Cache-Control: private, no-store`), `GET /api/imports`, `GET /api/import-history` (keyset paginated), `GET /api/imports/{id}`, `PATCH /api/imports/{id}/lines/{line_id}`, `POST /api/imports/{id}/password`, `POST /api/imports/{id}/opening`, `POST /api/imports/{id}/commit`, `POST /api/imports/{id}/reject`, and `POST /api/imports/{id}/undo` |
 | Capture | `POST /api/transcribe` and `POST /api/transcribe/{attachment_id}` (audio upload and retry, up to 25 MB). Photos attach to chat turns and reach the main agent natively |
 | Recaps | `GET /api/recaps`, `GET /api/recaps/unseen`, `GET /api/recaps/{period_id}`, `GET /api/recaps/{period_id}/rows`, and `POST /api/recaps/{period_id}/seen` |
 | Watch (inbox, questions) | `GET /api/notifications`, `POST /api/notifications/read-all`, `POST /api/notifications/{id}/read`, `POST /api/notifications/{id}/chat`, and CRUD `/api/scheduled-questions` |
-| Audit history | `GET /api/history` (keyset-paginated audit log of undoable write groups) |
+| History | `GET /api/history` (keyset-paginated `undo_log` of undoable write groups) |
 | Diagnostics and backups | `GET /api/runtime-info` (configured model labels/hosts and optional `ARNO_PHOENIX_UI_URL`, never credentials or collector addresses) and `GET /api/backup/status` |
 | Export | `GET /api/export/scope` (lists excluded tables), `GET /api/export/json`, `GET /api/export/csv` (ZIP of CSVs with formula-injection quoting), and `GET /api/export/pg_dump` (owner only; no step-up) |
 | Deletion | `GET /api/deletion/preview` (lists the rows affected) and `POST /api/deletion/everything` (requires the typed `"delete everything"` confirmation) |
 
-Projection, affordability, and `.xlsx` workbook builds run off the event loop via
+Projection and affordability run off the event loop via
 `asyncio.to_thread` behind a shared two-slot semaphore after loading inputs in one read-only
 `REPEATABLE READ` transaction. Chat tools and REST endpoints call the same `src/arno/ledger/` and
-`src/arno/tools/` functions and write the same audit log, so any edit is undoable from either
+`src/arno/tools/` functions and write the same undo log, so any edit is undoable from either
 surface.
 
 The web app consumes these routes with the [frontend stack](web-interface.md#frontend-stack).
@@ -157,32 +157,36 @@ Key properties:
 
 ## Database connections and integrity
 
-### Connection cache and failure handling
+### Connection pool and failure handling
 
-The API process uses a per-loop cache of idle `asyncpg` connections (`API_POOL_MAX_IDLE = 8`) bound
-in the FastAPI lifespan and closed after background tasks and active turns drain
+The API process uses one standard `asyncpg` pool (`min_size=1`, `max_size=20`) per event loop,
+opened in the FastAPI lifespan and closed after background tasks and active turns drain
 (`src/arno/db/conn.py`):
 
-- **Cache, not a capacity limiter:** `connect()` pops and pre-pings (`SELECT 1`) the last-returned
-  released idle connection when available, and opens a fresh direct connection immediately when the
-  idle deque is empty—never waiting on capacity. A bounded limiter pool could let long chat streams
-  starve or deadlock tool calls; the cache preserves never-wait behavior. Exiting
-  `async with connect()` runs `reset()` (rolling back open transactions and resetting session
-  state) and returns up to eight connections to the deque, closing excess connections.
-- **Direct bypasses:** `connect()` opens an uncached direct connection whenever an explicit `dsn`
-  or `role` is passed, on other event loops (CLI and worker threads), or when `current_database_url()`
-  differs from the bound DSN (eval trials). `agent_ro` queries stay direct for fresh session
-  isolation.
-- **Outage recovery:** Reused connections are pre-pinged before handoff and discarded if dead.
-  After `connect()` returns, reads and writes never retry automatically. Connection `TimeoutError`
-  converts to `ConnectionError`, and `asyncpg` connection errors or `InternalClientError` map to
-  HTTP `503` ("The database is unreachable.") while non-database timeouts surface normally. The
-  cache recovers automatically once Postgres returns without restarting the API.
-- **Uncertain commits:** `write_group` distinguishes a lost connection before `COMMIT` (rolled back;
-  ordinary `503`) from a connection lost while `COMMIT` is in flight, raising
-  `CommitOutcomeUnknownError`. The API returns `503` asking you to verify before retrying, agent
-  write tools return `"outcome_unknown"` instructing the model not to repeat the write, and the job
-  runner fails the job immediately without retry.
+- **Pooled by default:** `connect()` acquires from the pool bound to the running loop and releases
+  on exiting `async with`. `asyncpg` resets session state on release, discards a
+  connection the server dropped, and opens a replacement on the next acquisition, so the API
+  recovers once Postgres returns without a restart. A request that draws a connection the
+  server dropped moments earlier fails with `503`; the pool discards it and the next request
+  succeeds. The json and jsonb codecs register once per
+  connection.
+- **Direct bypasses:** `connect()` opens an unpooled direct connection whenever an explicit `dsn`
+  or `role` is passed, on other event loops (CLI and worker threads), or when
+  `current_database_url()` differs from the pool's DSN (eval trials). `agent_ro` queries stay
+  direct for fresh session isolation.
+- **Capacity:** An acquisition waits when all 20 connections are out, so code that holds a
+  connection must not wait on another `connect()` in a task it spawns and joins.
+- **Shutdown:** The lifespan waits up to five seconds for `pool.close()`, then terminates the pool,
+  because a detached chat turn may still hold a connection.
+- **Errors:** After `connect()` returns, reads and writes never retry automatically. Connection
+  `TimeoutError` converts to `ConnectionError`, and `asyncpg` connection errors or
+  `InternalClientError` map to HTTP `503` ("The database is unreachable.") while non-database
+  timeouts surface normally.
+- **Uncertain commits:** A lost connection before `COMMIT` rolls back and returns an ordinary
+  `503`; a connection lost while `COMMIT` is in flight raises `CommitOutcomeUnknownError`. The API
+  returns `503` asking you to verify before retrying, agent write tools return `"outcome_unknown"`
+  instructing the model not to repeat the write, and the job runner fails the job immediately
+  without retry.
 
 ### Measured database tuning
 
@@ -192,7 +196,9 @@ ten-year single-user scale:
 - `movement_legs_movement_id_idx` on `movement_legs (movement_id)` for batched movement leg lookups.
 - `movement_legs_category_id_idx` on `movement_legs (category_id)` for category filters and
   `v_spending` joins.
-- `audit_log_created_at_idx` on `audit_log (created_at)` for per-turn writes-since-snapshot checks.
+- `undo_log_created_idx` on `undo_log (created_at DESC, id DESC)` for history paging and per-turn
+  writes-since-snapshot checks, and `undo_log_snapshot_idx` (GIN, `jsonb_path_ops`) to find the group
+  that last wrote a row.
 - `random_page_cost=1.1` on `db` in `compose.yaml` for SSD/NVMe storage (use `4` on spinning disks).
 
 ### Schema integrity
@@ -200,20 +206,19 @@ ten-year single-user scale:
 Invariants relied on by application code are enforced in SQL constraints and checked by
 `tests/invariants.py`:
 
-- **Balanced ledger legs:** `pgledger_transfers` enforces integer paise (`amount = trunc(amount)`)
-  and carries a deferred foreign key (`pgledger_transfers_leg_fkey`) to `movement_legs (transfer_id)`
-  with `movement_id NOT NULL`, so no transfer commits without a leg and legs cannot be deleted.
-- **State and reversal invariants:** `movements` pairs `kind = 'reversal'` with `reverses_id`;
-  `accounts` enforces card cycle fields and statement balance/date pairing; `schedule_occurrences`
-  mirrors closed `kind` and `subtype` sets. Reversal state has one definition,
-  `movement_reversal_state` (`v_movement_state`).
+- **Balanced ledger legs:** `movement_legs.amount_paise` is a `bigint` with `CHECK (amount_paise > 0)`
+  and `CHECK (from_account_id <> to_account_id)`, so every leg moves money between two accounts and
+  the ledger sums to zero by construction. `movement_legs.movement_id` is `NOT NULL` and cascades,
+  so a leg never outlives its movement. Foreign keys from `captures`, `schedule_payments`, and
+  `statement_lines` to `movements` block deletes; the delete code removes those rows first.
+- **State invariants:** `movements.kind` is a closed set; `accounts` enforces card cycle fields and
+  statement balance/date pairing; `schedule_occurrences` mirrors closed `kind` and `subtype` sets.
 - **Natural keys and single user:** Case-insensitive unique indexes guard `categories (lower(name))`,
   and `payees (lower(upi_id))`.
   `users_one_row_idx` on `users ((true))` enforces a single user row.
 - **Account identity:** `accounts.name` must be `NULL` if and only if `kind` is `'person'` or
   `'goal'` (`accounts_name_kind_check`). Person names come from `payees.display_name`, goal names
-  derive `<name> goal` from `goals.name`, `pgledger_accounts.name` stores the immutable
-  `accounts.id`, and `v_accounts`, `v_legs`, `v_balances`, and `v_owed` (`Asia/Kolkata` cutoff)
+  derive `<name> goal` from `goals.name`, and `v_accounts`, `v_legs`, `v_balances`, and `v_owed` (`Asia/Kolkata` cutoff)
   expose resolved names and balances.
 - **Import metadata:** `imports.check_status` owns the check verdict (`VERIFIED`, `DISCREPANCY`,
   `FAILED`), `imports.counts` owns line counts, and `imports.attachment_id` owns the statement file
@@ -231,13 +236,13 @@ The following table summarizes Arno's threat model and implemented controls:
 | Lost restic password | Not defended (permanent data loss); must be backed up off-host |
 | VPS host or live host compromise | Not defended; in-database encryption is parked ([`parked.md`](../planning/parked.md)) |
 | Borrowed unlocked browser | Expiring passphrase cookies; erase-everything needs its typed phrase. A browser already signed in to the owner account is not defended |
-| Prompt injection in statements or photos | The prompt treats statement text, payee notes, and image text as data. The agent cannot move money, and every write is audited and undoable. Wide writes (`correct_movement` with `scope` other than `this`, and `update_setup` to archive or change settings) require a confirm card |
+| Prompt injection in statements or photos | The prompt treats statement text, payee notes, and image text as data. The agent cannot move money, and every write is undoable. Wide writes (`correct_movement` with `scope` other than `this`, and `update_setup` to archive or change settings) require a confirm card |
 | Forged or replayed confirm answer | Server-held history validates pending deferred calls once against stored arguments; partial multi-card answers are refused with HTTP `409` |
 | Secrets typed into chat | Nothing redacts chat input: a secret you type reaches the model provider and is stored in `model_history`. The prompt forbids repeating a password, PIN, OTP, or full card number. Statement passwords use the dedicated import card field, stay in memory only for the unlock, and are never persisted |
 | Data exfiltration through rendered output | Strict CSP (`default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'`), `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, plain-text links in agent replies, and `allowed_file_url_schemes=frozenset()` |
-| Agent-written SQL | `agent_ro` role: `SELECT` only on allowed read views/tables, `default_transaction_read_only = on`, `2s` statement timeout, single extended-protocol statement rolled back after read, `TEMP` revoked, no auth, secret, or raw `pgledger_*` grants |
+| Agent-written SQL | `agent_ro` role: `SELECT` only on allowed read views/tables, `default_transaction_read_only = on`, `2s` statement timeout, single extended-protocol statement rolled back after read, `TEMP` revoked, no auth, secret, `undo_log`, or raw ledger-table grants |
 | Agent-written code | `run_python` posts the script to the `sandbox` service: a read-only container on an internal Docker network with no internet and no database route, a non-root user, 512 MB memory, one CPU, a 30-second timeout, a throwaway working directory, and no secrets. The script sees only the files it is sent |
-| Credential leakage in data exports | JSON and CSV exports exclude the `SECRET_TABLES` entry `model_credentials` (`pg_dump` stays complete for backup/restore) |
+| Credential leakage in data exports | JSON and CSV exports skip any table in `SECRET_TABLES` (currently none; `pg_dump` stays complete for backup/restore) |
 | Supply-chain or copyleft dependency | Locked dependency files, a manual permissive-license check when a dependency changes, and `pip-audit` + `pnpm audit` in CI |
 | Upload flood or runaway model spend | 25 MB upload limit, single-user sign-in gate, usage limits, and a fail-closed shared daily spend cap in Postgres (`llm_usage`) |
 | Telemetry data exposure | Phoenix binds to loopback with authentication enabled, stores traces in its own SQLite volume, never in the Arno database, and vision agents disable tracing (`agent.instrument = False`). See [`self-hosting.md`](../operations/self-hosting.md) for provider data-retention policies |

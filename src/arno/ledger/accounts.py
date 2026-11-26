@@ -1,6 +1,6 @@
-"""Accounts: every place money can sit, one-to-one with a pgledger account.
+"""Accounts: every place money can sit.
 
-`create_account` creates the pgledger account and the row, then records an opening balance as a
+`create_account` creates the row, then records an opening balance as a
 visible adjustment against the system Equity account. A stated balance later is the same kind of
 adjustment, never spending.
 """
@@ -28,14 +28,8 @@ from arno.ledger.common import (
     today,
 )
 from arno.ledger.errors import InvalidLedgerError, NotFoundLedgerError
-from arno.ledger.postings import TransferSpec, create_movement_in_group
 
 LAST4_RE = re.compile(r"^[0-9]{4}$")
-
-
-async def _base_currency(conn: Connection) -> str:
-    row = await conn.fetchrow("SELECT base_currency FROM settings WHERE id = 1")
-    return str(row["base_currency"]) if row else "INR"
 
 
 def _validate_balance_date(value: date | None) -> None:
@@ -131,7 +125,6 @@ async def ensure_system_accounts(conn: Connection) -> dict[str, dict[str, Any]]:
     """Create the one Spending, Income, and Equity account if they are missing."""
     accounts: dict[str, dict[str, Any]] = {}
     async with write_group(conn, actor="system") as group:
-        currency = await _base_currency(conn)
         for kind, name in (
             ("spending", "Spending"),
             ("income", "Income"),
@@ -142,23 +135,14 @@ async def ensure_system_accounts(conn: Connection) -> dict[str, dict[str, Any]]:
             )
             if row is None:
                 account_id = await new_id(conn, "acc")
-                ledger = await conn.fetchrow_required(
-                    """
-                    SELECT * FROM pgledger_create_account($1, $2, true, true, $3)
-                    """,
-                    account_id,
-                    currency,
-                    {"system": kind},
-                )
                 row = await conn.fetchrow_required(
                     """
-                    INSERT INTO accounts (id, kind, ledger_account_id, name, liquid)
-                    VALUES ($1, $2, $3, $4, false)
+                    INSERT INTO accounts (id, kind, name, liquid)
+                    VALUES ($1, $2, $3, false)
                     RETURNING *
                     """,
                     account_id,
                     kind,
-                    ledger["id"],
                     name,
                 )
                 group.record_created("accounts", row)
@@ -220,33 +204,24 @@ async def _create_account_in_group(
     )
 
     account_id = await new_id(conn, "acc")
-    ledger = await conn.fetchrow_required(
-        """
-        SELECT * FROM pgledger_create_account($1, $2, true, true, $3)
-        """,
-        account_id,
-        await _base_currency(conn),
-        {"kind": kind},
-    )
     stored_name = None if kind in ("person", "goal") else (name or "").strip()
     stated_as_of = opening_balance_as_of or today()
     row = await conn.fetchrow_required(
         """
         INSERT INTO accounts (
-            id, kind, ledger_account_id, name, institution, last4,
+            id, kind, name, institution, last4,
             statement_balance_paise, statement_balance_as_of, liquid,
             credit_limit_paise, statement_day, due_day, emi_rate_bps, emi_fee_paise,
             finance_rate_bps, min_due_bps, min_due_floor_paise,
             rate_bps, tenure_months, emi_schedule_id
         ) VALUES (
-            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17,
-            $18, $19, $20
+            $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+            $17, $18, $19
         )
         RETURNING *
         """,
         account_id,
         kind,
-        ledger["id"],
         stored_name,
         institution,
         last4,
@@ -268,6 +243,9 @@ async def _create_account_in_group(
     group.record_created("accounts", row)
 
     if opening_balance_paise:
+        # movements imports payees, which imports this module.
+        from arno.ledger.movements import TransferSpec, create_movement_in_group
+
         equity = await system_account(conn, "equity")
         label = stored_name or (name.strip() if name else kind)
         if opening_balance_paise > 0:
@@ -537,6 +515,9 @@ async def set_statement_balance(
     difference = int(balance_paise) - current
 
     movement_id = None
+    # movements imports payees, which imports this module.
+    from arno.ledger.movements import TransferSpec, create_movement_in_group
+
     async with write_group(conn, actor=actor, message_id=message_id) as group:
         if difference:
             equity = await system_account(conn, "equity")
@@ -661,7 +642,7 @@ async def loan_terms(conn: Connection, name: str) -> dict[str, Any]:
         raise LoanTermsError(f"No loan named {name!r}")
     # A loan is a liability: its ledger balance is negative, as in `account_payload`. Reading it
     # unsigned made every named loan look paid off, so scripts re-derived the terms by hand.
-    principal = max(-(await ledger_balance(conn, row["ledger_account_id"])), 0)
+    principal = max(-(await ledger_balance(conn, row["id"])), 0)
     if principal <= 0:
         raise LoanTermsError("That loan has no outstanding balance")
     if not row["tenure_months"]:

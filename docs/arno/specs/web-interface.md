@@ -59,7 +59,7 @@ The following table specifies the financial workspace panels:
 
 | View | Layout and content | Primary actions and details |
 |---|---|---|
-| **Money → Timeline** | Historical ledger spending paired with median and P10–P90 projection band, financial floor, dated schedule events, goals, assumptions, data-quality notes, and a hypothetical purchase form | Inspect forecast horizons, export the projection `.xlsx` workbook, or test purchase scenarios; missing floor suppresses probability and explains why |
+| **Money → Timeline** | Historical ledger spending paired with median and P10–P90 projection band, financial floor, dated schedule events, goals, assumptions, data-quality notes, and a hypothetical purchase form | Inspect forecast horizons or test purchase scenarios; missing floor suppresses probability and explains why |
 | **Money → Accounts** | Cash-on-hand summary leading bank and cash accounts, followed by credit cards, loans, and asset holdings; distinguishes ledger and stated balances, their dates, and discrepancies | Inspect account details or ask about an account; never labels liquid balance as safe-to-spend |
 | **Money → Schedules** | Expected incoming and outgoing totals for the selected period (`30`–`730` days), a scrollable calendar strip (past 7 days + next 30 days), and dated rows grouped by type. Paid/received occurrences appear struck through; partial rows show matched and remaining amounts. Generated card-due entries are labeled as forecasts rather than payment evidence | Inspect read-only payment evidence (`SchedulePaymentDetails`), seed chat to link or unlink a payment, or filter by schedule bucket |
 | **Money → Goals** | Progress rings, saved versus target amounts, deadlines, and projected completion dates from the 365-day forecast | Ask about a goal; missing balances suppress forecasts and missing targets stay explicit |
@@ -83,10 +83,10 @@ The following table lists the settings sections.
 | Everyday | **Notifications** (`notifications`) | Briefing day, notification time, and reminder lead days |
 | Everyday | **Scheduled questions** (`questions`) | Paginated user-defined recurring questions with RRULE schedules and an active toggle |
 | Everyday | **Agent memory** (`memory`) | Review saved preferences, facts, and rules. Use **Ask** to change a memory or delete it permanently in Settings. |
-| Everyday | **History** (`history`) | Cursor-paginated audit log (`HistoryPanel`) of write groups with actor, timestamp, summary, and undo action |
+| Everyday | **History** (`history`) | Cursor-paginated undo log (`HistoryPanel`) of write groups with actor, timestamp, summary, and undo action |
 | Advanced | **Diagnostics** (`diagnostics`) | **Models and diagnostics** (`RuntimeInfo`) displaying each role's configured model and host and an **Open Phoenix** link when `ARNO_PHOENIX_UI_URL` is configured |
 | Advanced | **Backups** (`backups`) | Last successful backup status, age, and recovery instructions; distinguishes unavailable status from no backup yet |
-| Advanced | **Export** (`export`) | Format guidance, `ExportScope` listing the excluded credential tables, and downloads for JSON, CSV ZIP, and `pg_dump` |
+| Advanced | **Export** (`export`) | Format guidance, `ExportScope` listing any excluded credential tables, and downloads for JSON, CSV ZIP, and `pg_dump` |
 | Advanced | **Delete everything** (`deletion`) | `DeletionScope` preview of every table affected, requiring the typed `"delete everything"` confirmation phrase |
 
 ### Badges and categorization status
@@ -123,7 +123,7 @@ encrypted file. See [Statement extraction](import.md#extraction).
   across polling ticks, and the UI never implies a commit or undo succeeded before the server
   confirms it.
 - **Pagination:** All long lists (ledger movements, import lines, import history, notifications,
-  category rules, memories, scheduled questions, and audit history) use filters and explicit
+  category rules, memories, scheduled questions, and undo history) use filters and explicit
   cursor or page navigation (`Previous` / `Next`) rather than infinite scrolling.
 - **Motion and accessibility:** Coordinated transitions use `motion` (`AnimatePresence`) and honor
   `prefers-reduced-motion`. Controls keep visible focus rings, accessible names on icon-only

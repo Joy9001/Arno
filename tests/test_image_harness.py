@@ -383,9 +383,7 @@ async def test_record_movements_mixed_batch_duplicates_undo_and_history(
     assert await demo_ledger.fetchval("SELECT count(*) FROM payees WHERE active") == before_payees
     assert (
         await demo_ledger.fetchval(
-            "SELECT count(*) FROM movements WHERE NOT EXISTS ("
-            "SELECT 1 FROM movements r WHERE r.reverses_id = movements.id"
-            ") AND reverses_id IS NULL AND id = ANY($1::text[])",
+            "SELECT count(*) FROM movements WHERE id = ANY($1::text[])",
             [item["movement_id"] for item in card["items"]],
         )
         == 0

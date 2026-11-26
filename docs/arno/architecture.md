@@ -126,16 +126,17 @@ For capabilities, prompt discipline, and history storage, see
 
 ![The ledger model](diagrams/sd-ledger-model.png)
 
-_Figure: Every real money movement pairs a balanced `pgledger` transfer with a `movement_legs`
-record and unified reversal state ([note](diagrams/sd-ledger-model.md))._
+_Figure: Every real money movement owns balanced `movement_legs`, and every write lands in the undo
+log ([note](diagrams/sd-ledger-model.md))._
 
-- **Double-entry core:** Vendored `pgledger` enforces balanced integer-paise entries and transfer
-  idempotency. Every transfer pairs 1:1 with `movement_legs` through a deferred foreign key.
-- **One reversal rule:** `movement_reversal_state(as_of)` and `v_movement_state` define effective
-  reversal once in SQL (`1 - sum(child signs) <= 0`), so balances, spending, recaps, and exports
-  never disagree.
+- **Double-entry core:** Each `movement_legs` row moves a positive integer-paise amount from one
+  account to a different one, so the ledger is zero-sum by `CHECK` constraint and a balance is the
+  sum of legs in minus legs out.
+- **One undo rule:** Corrections edit a movement in place and deletes remove it. `undo_log` stores a
+  `{table, key, before, after}` snapshot per write group, and undo replays it backwards, so every
+  write is reversible without a second set of rows to net out.
 - **Named read model:** `agent_ro` reads 23 curated views and domain tables (`v_accounts`,
-  `v_legs`, `v_movement_state`, `v_spending`, `v_balances`, `v_owed`, plus 17 domain tables) with a
+  `v_legs`, `v_spending`, `v_balances`, `v_owed`, plus 18 domain tables) with a
   2-second statement timeout and zero access to authentication, session, or credential tables.
 
 Full schema, engine math, pattern detection, and invariants live in
@@ -182,7 +183,7 @@ continuing runs ([note](diagrams/sd-thread-records.md))._
   (`trim_old_tool_payloads` in `src/arno/agent/capabilities.py`). The agent reads data fresh with
   `run_query` instead of relying on a snapshot.
 - **Typed memories:** Memories are explicit, visible, and undoable (`preference`, `fact`, `rule`),
-  replaced in place per `(kind, subject)` with previous values recoverable from `audit_log`. Hidden
+  replaced in place per `(kind, subject)` with previous values recoverable from `undo_log`. Hidden
   background memory extraction stays parked ([`planning/parked.md`](planning/parked.md)).
 
 ---
@@ -195,7 +196,7 @@ _Figure: Statement text and payee notes cross an explicit untrusted boundary; wi
 account-wide writes require confirmation ([note](diagrams/sd-trust-boundaries.md))._
 
 - **Data, not instructions:** The prompt tells the agent that statement text, payee notes, and
-  image text are data. The agent cannot move money, and every write is audited and undoable.
+  image text are data. The agent cannot move money, and every write is undoable.
 - **Write gating:** `correct_movement` with `scope="future"` or `scope="all"`, and `update_setup`
   with `action="archive"` or `entity="settings"`, require an explicit confirm-card approval
   (PydanticAI's `ApprovalRequired`) before writing. A turn's confirm cards are answered
@@ -236,7 +237,7 @@ repeating recent manual entries, and statement reconciliation deduplicates later
   failed turns (`capture_run_messages()`) all save both the UI transcript and `model_history` so
   subsequent turns see any write that landed. The transcript is written from the saved model
   history (`VercelAIAdapter.dump_messages`), and answered confirm cards settle at the same save. A
-  `run_started_at` marker detects hard process crashes at boot and inspects `audit_log` to report
+  `run_started_at` marker detects hard process crashes at boot and inspects `undo_log` to report
   whether any write landed.
 - **Idempotency:** Each UI message ID starts at most one turn. Open confirm cards persist in
   `model_history` across restarts, and repeated approvals reuse the same `tool_call_id`.
@@ -330,5 +331,5 @@ and daily use (`pass^3` counts a case only when all three trials pass):
 | Honesty when data is missing | Agent eval suite (`pass^3`) | 95% or higher |
 | Number traceability | Answer evals (`pass^3`) | 100% of figures traced to tool output |
 | Never-move and long threads | Agent eval suite (`pass^3`) | 90% or higher |
-| Categorizer accuracy | Share of LLM-assigned categories left uncorrected in `audit_log` | 90% or higher |
+| Categorizer accuracy | Share of LLM-assigned categories left uncorrected in `undo_log` | 90% or higher |
 | Daily reliability | Four weeks of daily owner use without spreadsheet or mental-math fallback | Required ship gate ([`plan.md`](plan.md#what-shipped-means)) |

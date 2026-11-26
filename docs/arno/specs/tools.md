@@ -29,9 +29,9 @@ search. Two writes ask for a confirm tap in specific cases
 | Uncertain commit | When a commit's outcome is unknown (`CommitOutcomeUnknownError`), the write returns `{"status": "outcome_unknown", "committed": "unknown", "message": "..."}` telling the model to ask the user to verify the ledger and never repeat the write |
 | Streamed results | Native tool parts carry computed results. `ToolReturn` metadata carries UI-only payloads such as the daily projection curve and web source previews. |
 | Coverage | `coverage()` inspects committed, non-undone statements; gaps are reported rather than summed as zero |
-| Write groups | `write_group()` wraps each write in one audited transaction returning `undo_id`; `message_id` and `ctx.tool_call_id` come from `RunContext`, never tool inputs |
+| Write groups | `write_group()` wraps each write in one transaction that records an `undo_log` row and returns `undo_id`; `message_id` and `ctx.tool_call_id` come from `RunContext`, never tool inputs |
 | Confirm gate | `_ask_first()` raises PydanticAI's `ApprovalRequired` when the call needs a tap and `ctx.tool_call_approved` is false. Approval resumes the call from the top and applies once per `tool_call_id` |
-| Stale IDs | Tools never depend on earlier IDs staying in chat history; `undo` reads `audit_log` directly and raises `ModelRetry` on unknown IDs |
+| Stale IDs | Tools never depend on earlier IDs staying in chat history; `undo` reads `undo_log` directly and raises `ModelRetry` on unknown IDs |
 
 ---
 
@@ -42,8 +42,7 @@ search. Two writes ask for a confirm tap in specific cases
 **Purpose:** Read-only PostgreSQL (2-second statement timeout, 1,000-row cap) and the way the agent
 reads the ledger: balances, spending, movements, schedules, goals, who owes what, memories,
 imports, and conversation search (`messages.search`). The docstring lists the exact columns of the
-`agent_ro` views (`v_legs`, `v_spending`, `v_accounts`, `v_balances`, `v_owed`,
-`v_movement_state`), names the readable domain tables, and tells the model to read a table's
+`agent_ro` views (`v_legs`, `v_spending`, `v_accounts`, `v_balances`, `v_owed`), names the readable domain tables, and tells the model to read a table's
 columns from `information_schema.columns` instead of guessing.
 
 **Input:** `run_query(sql: str)`
@@ -118,8 +117,7 @@ Each item in `changes` is discriminated by `kind` (`stop_income`, `pause_schedul
 
 **Logic:** Validates the inputs, loads a `REPEATABLE READ` ledger snapshot, resolves schedule,
 detected-series, and goal names, and runs the pure engine off the event loop. Emits a projection
-`data-card` carrying the daily curve, full sources, and the request's own arguments so the card can
-download a workbook of the same request. For simulation mechanics and scenario rules, see
+`data-card` carrying the daily curve and full sources. For simulation mechanics and scenario rules, see
 [data-and-engine.md](data-and-engine.md#projection-engine) and
 [data-and-engine.md](data-and-engine.md#affordability).
 
@@ -217,7 +215,7 @@ check.
 a confirm tap through `ApprovalRequired`.
 
 **Purpose:** Fixes an existing movement's category, payee, note, expected date, business date,
-`one_off` flag, amount, split shares, or account, or deletes it by appending a reversal. `scope`
+`one_off` flag, amount, split shares, or account, or deletes it. `scope`
 sets how far a category or payee change reaches: `this`, `future` (upserts a user rule), or `all`
 (upserts a user rule and relabels past movements for that payee). Passing only `schedule_payment`
 matches the movement to a schedule occurrence, or removes that match, without recording money.
@@ -246,9 +244,11 @@ class MovementChanges:              # extra="forbid"; every field optional
 **Output:** `{"status": "corrected" | "deleted", "undo_id": str | None, "summary": str,
 "rule": str | None, "rows_changed": int, "movement": dict}`. The UI receives a `correction` card.
 
-**Logic:** Rejects already-reversed movements. Label edits update `movement_legs` without touching
-pgledger; `date` and `one_off` update `movements`; amount, account, or delete operations append a
-reversal (and replacement transfers when editing) in one atomic batch. Equal splits re-split
+**Logic:** Every edit updates the movement in place, so `movement_id` never changes: labels update
+`movement_legs`, `date` and `one_off` update `movements`, and amount or account edits rewrite the
+legs, all in one write group. A delete removes the movement, its legs, captures, and schedule
+payments, and leaves a matched statement line ignored rather than unmatched
+(`delete_movement_in_group`). Equal splits re-split
 automatically; unequal splits need explicit shares. Recomputes loan principal and interest, and
 warns on the card when an amount edit changes a statement-verified movement. A schedule match
 requires `due_date` within 31 days after the movement date, checks capacity and account direction,
@@ -281,7 +281,7 @@ states them.
 | `preference` | `id`, `text`, `kind` (`preference`, `fact`, `rule`), `subject` |
 
 A `preference` is a lasting memory. `add` saves one; a stable `subject` makes a contradicting fact
-replace the active value for the same `(kind, subject)` while `audit_log` keeps the old one.
+replace the active value for the same `(kind, subject)` while `undo_log` keeps the old one.
 `update` changes `text` or `kind`; `archive` forgets it (`active = false`, still visible in
 Settings and undoable). A memory never stores a number the ledger owns. Permanent deletion is
 Settings-only (`delete_preference_for_good`), so every agent write stays undoable.
@@ -291,7 +291,7 @@ Settings-only (`delete_preference_for_good`), so every agent write stays undoabl
 undo.
 
 **Logic:** Validates entity fields and RRULE syntax, applies the write inside one `write_group`
-(creating paired pgledger accounts and equity adjustments for `account`, `balance`, and `goal`;
+(creating accounts and equity adjustments for `account`, `balance`, and `goal`;
 archiving soft-deletes with `active = false`), and queues a risk check when balances or plans
 change. Preference changes go through `tools/write.py::edit_preference`, the one mutation function
 the REST routes use too.
@@ -310,8 +310,8 @@ conversation when omitted.
 
 **Logic:** Refuses committed imports (directing the user to the Imports screen), returns
 `already_undone` if `undone_at` is set, returns `conflict` without mutating rows if a later write
-modified any row in the group, and otherwise reverses ledger transfers and restores non-ledger
-`before` snapshots in one audited transaction. The card's **Undo** button calls this same service
+left any row in the group in a different state, and otherwise replays the group's `snapshot` backwards
+in one transaction. An undo is itself a write group, so it can be undone. The card's **Undo** button calls this same service
 over REST.
 
 ---

@@ -453,9 +453,8 @@ docker compose up -d
 
 `arno restore` creates `arno` if missing, refuses to overwrite a database that already has tables,
 checks that the snapshot holds `/fin_agent.dump` (or `/tmp/fin_agent.dump` in snapshots from the old sidecar), and pipes `restic dump` into
-`pg_restore --no-owner`. It then restores grants and checks that every transfer balances and every
-account balance matches its entries. It exits nonzero on any mismatch. Snapshots from older
-versions restore too.
+`pg_restore --no-owner`. It then restores grants and checks that the required tables exist, a schema version is recorded,
+and every movement has legs. It exits nonzero on any mismatch.
 
 The restore runs as `app` (using `CREATEDB`, `CREATEROLE`, and `pg_signal_backend`, never
 `SUPERUSER`), recreates the `agent_ro` and `backup` login roles, restores table grants from the
@@ -556,7 +555,7 @@ touch.
   and `ADMIN OPTION` with `INHERIT FALSE, SET FALSE` on `agent_ro` and `backup`); `agent_ro` is
   `SELECT`-only on ledger-side tables and views with no auth or secrets tables, no `TEMP`, and a
   two-second statement timeout; `backup` has `SELECT` for `pg_dump` and `INSERT` on `backup_runs`
-  only; `phoenix` owns only the `phoenix` database.
+  only.
 - **Logs and traces:** Standard Python/Uvicorn stdout stays on the host (10 MB × 3 files per
   service). Phoenix traces (when enabled) include prompts, replies, and tool returns and stay loopback-only.
 - **Not defended:** A cloud VPS provider inspecting a running host or a live host compromise.

@@ -45,20 +45,19 @@ async def run_query(ctx: RunContext[AgentDeps], sql: str) -> ToolReturn:
     - v_legs: movement_id, transfer_id, date, movement_kind, description, from_account_id,
       from_account_name, from_account_kind, from_account_liquid, to_account_id, to_account_name,
       to_account_kind, to_account_liquid, amount_paise, category_id, category_name, payee_id,
-      payee_name, note, expected_date, is_reversal, is_reversed
+      payee_name, note, expected_date
     - v_spending: movement_id, date, description, transfer_id, category_id, category_name,
       payee_id, payee_name, amount_paise
-    - v_accounts: id, kind, ledger_account_id, name, institution, last4, statement_balance_paise,
+    - v_accounts: id, kind, name, institution, last4, statement_balance_paise,
       statement_balance_as_of, liquid, credit_limit_paise, statement_day, due_day, rate_bps,
       tenure_months, emi_schedule_id, active, created_at, updated_at, balance_paise,
       emi_rate_bps, emi_fee_paise, finance_rate_bps, min_due_bps, min_due_floor_paise
     - v_balances: account_id, name, kind, liquid, as_of, balance_paise (one row per day)
     - v_owed: payee_id, display_name, account_id, balance_paise, direction (owes_you, you_owe,
       settled), next_expected_date
-    - v_movement_state: movement_id, is_reversal, is_reversed, is_effective
 
     Ledger tables:
-    - movements: money events by IST date, kind, and reversal parent link
+    - movements: money events by IST date and kind; every movement counts
     - captures: chat, voice, photo, and statement-line evidence linked to movements
 
     Planning:
@@ -90,8 +89,8 @@ async def run_query(ctx: RunContext[AgentDeps], sql: str) -> ToolReturn:
       v_accounts.balance_paise and v_balances are cumulative net (+ asset or receivable, - card
       or loan debt); v_owed is + they owe you, - you owe them; statement_lines is signed credit
       minus debit (- debit, + credit).
-    - Reversals: a reversal is its own movement with opposite legs, so raw sums net out; filter
-      with is_reversed / is_reversal or v_movement_state when counting or listing."""
+    - Corrections: a correction edits the movement in place and a delete removes it, so every
+      movement in the views counts; there is nothing to filter out."""
     try:
         payload = await read_tools.run_query(sql)
     except (asyncpg.QueryCanceledError, TimeoutError) as exc:
@@ -152,7 +151,7 @@ async def project(
         except ValueError as exc:
             raise ModelRetry(str(exc)) from exc
     payload = projection_tools.summary(result)
-    # The card echoes its own arguments so it can download a workbook of this same request.
+    # The card echoes its own arguments so the web app can reload the same request.
     request: dict[str, Any] = {"horizon_days": horizon_days}
     if purchase is not None:
         request["hypothetical"] = {

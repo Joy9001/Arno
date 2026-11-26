@@ -147,10 +147,7 @@ def _answers() -> list[Case[EvalInput, EvalOutput, EvalMeta]]:
         _case(
             "ans_movement_count",
             "answers",
-            [
-                "How many movements did I have last month, excluding corrected entries "
-                "and their reversals? Give just the number."
-            ],
+            ["How many movements did I have last month? Give just the number."],
             {"check": "movement_count", "period": "last_month"},
         ),
         _case(

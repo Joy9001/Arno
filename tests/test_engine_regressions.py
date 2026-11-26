@@ -1602,15 +1602,14 @@ async def test_the_demo_loan_book_a_months_interest_at_its_rate(demo_ledger):
     rows = await demo_ledger.fetch(
         """
         SELECT m.id, m.date,
-               sum(CASE WHEN a.kind = 'spending' THEN e.amount ELSE 0 END)::bigint
+               sum(CASE WHEN a.kind = 'spending' THEN l.amount_paise ELSE 0 END)::bigint
                    AS interest_paise,
-               sum(CASE WHEN a.kind = 'loan' THEN e.amount ELSE 0 END)::bigint AS principal_paise
+               sum(CASE WHEN a.kind = 'loan' THEN l.amount_paise ELSE 0 END)::bigint
+                   AS principal_paise
         FROM movements m
-        JOIN movement_legs ml ON ml.movement_id = m.id
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
-        JOIN pgledger_entries e ON e.transfer_id = t.id
-        JOIN accounts a ON a.ledger_account_id = e.account_id
-        WHERE m.kind = 'loan' AND m.reverses_id IS NULL
+        JOIN movement_legs l ON l.movement_id = m.id
+        JOIN accounts a ON a.id = l.to_account_id
+        WHERE m.kind = 'loan'
         GROUP BY m.id, m.date
         ORDER BY m.date
         """
@@ -1627,5 +1626,5 @@ async def test_the_demo_loan_book_a_months_interest_at_its_rate(demo_ledger):
 
 
 async def test_no_live_demo_movement_still_says_it_was_entered_wrong(demo_ledger):
-    rows = await demo_ledger.fetch("SELECT description FROM movements WHERE reverses_id IS NULL")
+    rows = await demo_ledger.fetch("SELECT description FROM movements")
     assert not any("wrong" in str(row["description"]).lower() for row in rows)

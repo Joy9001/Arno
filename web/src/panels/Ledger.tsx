@@ -7,7 +7,6 @@ import {
   FileSearch,
   MessageCircle,
   RefreshCw,
-  Undo2,
   X,
 } from "lucide-react";
 import { askAgent } from "../ask";
@@ -44,7 +43,6 @@ type Filters = {
   accountId: string;
   start: string;
   end: string;
-  includeReversed: boolean;
 };
 
 const EMPTY: Filters = {
@@ -52,7 +50,6 @@ const EMPTY: Filters = {
   accountId: "",
   start: "",
   end: "",
-  includeReversed: false,
 };
 
 type Request = {
@@ -90,7 +87,6 @@ function openConversation(threadId: string, messageId: string | null) {
 function buildParams(filters: Filters, cursor: string | null): string {
   const params = new URLSearchParams({
     limit: String(PAGE_SIZE),
-    include_reversed: String(filters.includeReversed),
   });
   if (filters.kind) params.set("kind", filters.kind);
   if (filters.accountId) params.set("account_id", filters.accountId);
@@ -136,9 +132,7 @@ function MovementRow({
       </div>
       <div className="act-move-amount">
         <strong>{formatPaise(movement.amount_paise)}</strong>
-        <span className={`badge ${movement.reversed ? "danger" : "muted"}`}>
-          {movement.reversed ? "Reversed" : humanizeKind(movement.kind)}
-        </span>
+        <span className="badge muted">{humanizeKind(movement.kind)}</span>
       </div>
       <div className="act-move-open">
         <button
@@ -524,8 +518,8 @@ export function LedgerPanel() {
         <div>
           <h2>Movements</h2>
           <p className="muted">
-            Every real money movement, newest first. Corrections are reversals; nothing is edited
-            in place. Open a row for its evidence and the transfers that balanced it.
+            Every real money movement, newest first. Open a row for its evidence and the transfers
+            that balanced it.
           </p>
         </div>
         <button
@@ -614,16 +608,6 @@ export function LedgerPanel() {
           />
         </label>
         <div className="act-toolbar-actions">
-          <button
-            type="button"
-            className={draft.includeReversed ? "act-toggle on" : "act-toggle"}
-            aria-pressed={draft.includeReversed}
-            aria-label="Show reversed movements"
-            title="Show reversed movements"
-            onClick={() => setDraft({ ...draft, includeReversed: !draft.includeReversed })}
-          >
-            <Undo2 size={17} strokeWidth={2} aria-hidden="true" />
-          </button>
           <button type="submit" disabled={loading || Boolean(rangeError)}>
             Apply filters
           </button>
@@ -775,8 +759,6 @@ export function LedgerPanel() {
                 <dd className="statement-text">{openMovement.description}</dd>
                 <dt>Amount</dt>
                 <dd>{formatPaise(openMovement.amount_paise)}</dd>
-                <dt>State</dt>
-                <dd>{openMovement.reversed ? "reversed" : "live"}</dd>
                 <dt>Evidence</dt>
                 <dd>
                   {openMovement.evidence.length

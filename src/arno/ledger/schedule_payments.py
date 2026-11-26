@@ -1,7 +1,7 @@
 """Assign recorded ledger money to recurring plan occurrences, without moving money.
 
 Expected occurrences are expanded from the schedule. The first assignment freezes its terms.
-Payment status is always derived from live movement evidence, including reversal parity.
+Payment status is always derived from the movements that still exist.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from arno.india.workdays import calendar_for
 from arno.ledger.audit import WriteGroup, write_group
 from arno.ledger.common import today
 from arno.ledger.errors import ConflictLedgerError, InvalidLedgerError, NotFoundLedgerError
-from arno.ledger.movements import _reversal_state, _transfer_rows
+from arno.ledger.movements import _transfer_rows
 
 
 async def _schedule(conn: Connection, schedule_id: str) -> dict[str, Any]:
@@ -137,11 +137,6 @@ async def link_payment(
         )
         if movement is None:
             raise NotFoundLedgerError(f"No movement {movement_id}")
-        if (
-            movement["kind"] == "reversal"
-            or (await _reversal_state(conn, [movement_id]))[movement_id]["reversed"]
-        ):
-            raise InvalidLedgerError("A reversed movement cannot cover a schedule occurrence")
         if due_date > movement["date"] + timedelta(days=31):
             raise InvalidLedgerError(await _far_match_message(conn, schedule, movement, due_date))
         occurrence = await _occurrence(conn, group, schedule, due_date)
@@ -245,9 +240,9 @@ async def lock_payment_undo(conn: Connection, entries: list[dict[str, Any]]) -> 
     movements: set[str] = set()
     for entry in entries:
         row = entry["before"] or entry["after"]
-        if entry["table_name"] == "schedule_occurrences" and row:
+        if entry["table"] == "schedule_occurrences" and row:
             schedules.add(row["schedule_id"])
-        if entry["table_name"] == "schedule_payments" and row:
+        if entry["table"] == "schedule_payments" and row:
             occurrences.add(row["occurrence_id"])
             movements.add(row["movement_id"])
     rows = await conn.fetch(
@@ -319,11 +314,6 @@ async def payment_evidence_for_schedules(
         end,
         as_of,
     )
-    states = await _reversal_state(
-        conn,
-        list({row["movement_id"] for row in rows if row["movement_id"]}),
-        as_of=as_of,
-    )
     by_schedule: dict[str, dict[date, dict[str, Any]]] = {
         schedule_id: {} for schedule_id in schedule_ids
     }
@@ -334,10 +324,8 @@ async def payment_evidence_for_schedules(
         item = schedule_items.setdefault(day, {**dict(row), "paid_paise": 0, "payments": []})
         if not row["movement_id"]:
             continue
-        active = not states[row["movement_id"]]["reversed"]
         amount = int(row["allocated_paise"])
-        if active:
-            item["paid_paise"] += amount
+        item["paid_paise"] += amount
         item["payments"].append(
             {
                 "id": row["payment_id"],
@@ -345,7 +333,6 @@ async def payment_evidence_for_schedules(
                 "date": row["movement_date"].isoformat(),
                 "description": row["description"],
                 "amount_paise": amount,
-                "active": active,
             }
         )
     return by_schedule

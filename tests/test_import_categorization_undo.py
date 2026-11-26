@@ -82,10 +82,8 @@ async def _categorize(conn, import_id: str) -> dict[str, Any]:
 
 async def _state(conn) -> dict[str, Any]:
     """Everything an undo must put back: balances, spending, labels, rules, active payees."""
-    accounts = await conn.fetch("SELECT name, ledger_account_id FROM accounts ORDER BY name")
-    balances = {
-        row["name"]: await ledger_balance(conn, row["ledger_account_id"]) for row in accounts
-    }
+    accounts = await conn.fetch("SELECT id, name FROM accounts ORDER BY name")
+    balances = {row["name"]: await ledger_balance(conn, row["id"]) for row in accounts}
     spending = {
         str(row["category"]): int(row["total"])
         for row in await conn.fetch(
@@ -105,7 +103,6 @@ async def _state(conn) -> dict[str, Any]:
             FROM movements m
             JOIN movement_legs tl ON tl.movement_id = m.id
             JOIN categories c ON c.id = tl.category_id
-            WHERE m.reverses_id IS NULL
             ORDER BY m.description, c.name
             """
         )
@@ -115,7 +112,7 @@ async def _state(conn) -> dict[str, Any]:
         for row in await conn.fetch(
             """
             SELECT description, category_hint FROM movements
-            WHERE reverses_id IS NULL AND category_hint IS NOT NULL
+            WHERE category_hint IS NOT NULL
             ORDER BY description
             """
         )
@@ -126,7 +123,6 @@ async def _state(conn) -> dict[str, Any]:
             """
             SELECT m.description, r.pattern
             FROM movements m JOIN category_rules r ON r.id = m.category_rule_id
-            WHERE m.reverses_id IS NULL
             ORDER BY m.description, r.pattern
             """
         )
@@ -235,11 +231,10 @@ async def test_a_later_user_edit_blocks_the_undo_and_says_what_changed(ledger):
     assert "label" in message
     assert "Undo that change first" in message
     assert message != "A later write changed rows this group touched."
-    # Nothing is half-reverted.
+    # Nothing is half-undone.
     assert await ledger.fetchval("SELECT status FROM imports WHERE id = $1", import_id) == (
         "committed"
     )
-    assert await ledger.fetchval("SELECT count(*) FROM movements WHERE kind = 'reversal'") == 0
     assert await check_ledger(ledger) == []
 
 
@@ -295,7 +290,7 @@ async def test_undoing_one_import_leaves_the_other_imports_categorization(ledger
             SELECT c.name FROM movements m
             JOIN movement_legs tl ON tl.movement_id = m.id
             JOIN categories c ON c.id = tl.category_id
-            WHERE m.reverses_id IS NULL AND m.description LIKE '%BETA%'
+            WHERE m.description LIKE '%BETA%'
             """
         )
         == SHOPPING
@@ -305,7 +300,7 @@ async def test_undoing_one_import_leaves_the_other_imports_categorization(ledger
             """
             SELECT count(*) FROM movements m
             JOIN movement_legs tl ON tl.movement_id = m.id
-            WHERE m.reverses_id IS NULL AND m.description LIKE '%ALPHA%'
+            WHERE m.description LIKE '%ALPHA%'
               AND tl.category_id IS NOT NULL
             """
         )

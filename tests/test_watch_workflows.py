@@ -387,7 +387,7 @@ async def test_a_linked_schedule_with_another_name_and_no_category_is_not_report
     assert not any(p["kind"] == "new_subscription" for p in proposals)
 
 
-async def test_a_reversed_schedule_payment_is_not_counted_as_a_price_change(ledger):
+async def test_a_deleted_schedule_payment_is_not_counted_as_a_price_change(ledger):
     from arno.ledger.movements import correct_movement
     from arno.ledger.payees import create_payee
     from arno.ledger.schedule_payments import link_payment
@@ -496,12 +496,12 @@ async def test_a_schedule_price_step_notifies_once_and_dismissing_writes_nothing
     again = await run_pattern_detection(ledger, as_of=date(2026, 9, 20))
     assert not [item for item in again if item["kind"] == "price_change"]
 
-    audit_rows = await ledger.fetchval("SELECT count(*) FROM audit_log")
+    audit_rows = await ledger.fetchval("SELECT count(*) FROM undo_log")
     before = await ledger.fetchrow(
         "SELECT amount_paise, updated_at FROM schedules WHERE id = $1", schedule["id"]
     )
     await mark_read(ledger, row["id"])
-    assert await ledger.fetchval("SELECT count(*) FROM audit_log") == audit_rows
+    assert await ledger.fetchval("SELECT count(*) FROM undo_log") == audit_rows
     after = await ledger.fetchrow(
         "SELECT amount_paise, updated_at FROM schedules WHERE id = $1", schedule["id"]
     )

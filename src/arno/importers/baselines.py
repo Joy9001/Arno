@@ -37,12 +37,10 @@ async def recompute_baselines(conn: Connection, *, as_of: date | None = None) ->
             count(DISTINCT v.date)::bigint AS days
         FROM v_spending v
         JOIN movements m ON m.id = v.movement_id
-        JOIN v_movement_state ms ON ms.movement_id = v.movement_id
         JOIN categories c ON c.id = v.category_id
         WHERE v.date BETWEEN $1 AND $2
           AND v.amount_paise > 0
           AND c.active
-          AND ms.is_effective
           AND NOT m.one_off
           AND NOT EXISTS (
               SELECT 1 FROM schedule_payments sp

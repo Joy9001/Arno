@@ -8,7 +8,7 @@ from typing import Any
 import pytest
 
 from arno.engine.inputs import build_inputs
-from arno.ledger.accounts import create_account
+from arno.ledger.accounts import create_account, get_account
 from arno.ledger.audit import undo_group
 from arno.ledger.common import today
 from arno.ledger.errors import ConflictLedgerError, InvalidLedgerError
@@ -109,21 +109,41 @@ async def test_split_one_movement_across_occurrences(ledger):
     assert row["remaining_paise"] == 50_000
 
 
-async def test_reversal_and_undo_of_reversal_change_payment_status(ledger):
+async def _rows_of(conn, movement_id: str) -> dict[str, list[dict]]:
+    return {
+        "movements": await conn.fetch("SELECT * FROM movements WHERE id = $1", movement_id),
+        "movement_legs": await conn.fetch(
+            "SELECT * FROM movement_legs WHERE movement_id = $1 ORDER BY transfer_id", movement_id
+        ),
+        "captures": await conn.fetch("SELECT * FROM captures WHERE movement_id = $1", movement_id),
+        "schedule_payments": await conn.fetch(
+            "SELECT * FROM schedule_payments WHERE movement_id = $1", movement_id
+        ),
+    }
+
+
+async def test_deleting_a_paid_movement_and_undoing_it_restores_every_row_exactly(ledger):
     bank, schedule, due = await _plan(ledger)
     movement, _ = await _pay(ledger, bank, schedule, due, 100_000)
-    reversed_payment = await correct_movement(ledger, movement["id"], changes={"delete": True})
+    await ledger.execute(
+        "INSERT INTO captures (movement_id, kind, ref) VALUES ($1, 'chat', 'msg_1')",
+        movement["id"],
+    )
+    before = await _rows_of(ledger, movement["id"])
+    balance = (await get_account(ledger, bank["id"]))["balance_paise"]
+    assert all(before.values())
+
+    deleted = await correct_movement(ledger, movement["id"], changes={"delete": True})
+
+    assert not any((await _rows_of(ledger, movement["id"])).values())
     row = await get_occurrence(ledger, schedule["id"], due)
     assert row["paid_paise"] == 0
-    assert row["payments"][0]["active"] is False
-    with pytest.raises(InvalidLedgerError, match="reversed"):
-        await link_payment(
-            ledger,
-            schedule_id=schedule["id"],
-            due_date=due + timedelta(days=1),
-            movement_id=movement["id"],
-        )
-    await undo_group(ledger, reversed_payment["undo_id"])
+    assert (await get_account(ledger, bank["id"]))["balance_paise"] == balance + 100_000
+
+    await undo_group(ledger, deleted["undo_id"])
+
+    assert await _rows_of(ledger, movement["id"]) == before
+    assert (await get_account(ledger, bank["id"]))["balance_paise"] == balance
     assert (await get_occurrence(ledger, schedule["id"], due))["payment_status"] == "paid"
 
 
@@ -278,6 +298,9 @@ async def test_api_payment_match_round_trip_and_undo(session_client):
     assert client.get(path).json()["paid_paise"] == 0
     assert client.post(f"/api/undo/{unlinked.json()['undo_id']}").status_code == 200
     assert client.get(path).json()["payment_status"] == "partial"
+    # A payment that still covers the occurrence keeps its movement from being undone.
+    assert client.post(f"/api/undo/{payment['undo_id']}").status_code == 409
+    assert client.delete(path + f"/payments/{payment['id']}").status_code == 200
     assert client.post(f"/api/undo/{payment['undo_id']}").status_code == 200
     assert client.get(path).json()["paid_paise"] == 0
 

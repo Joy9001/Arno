@@ -62,14 +62,12 @@ async def _load_spend_payments(conn: Connection, as_of: date) -> list[PaymentRow
         FROM v_spending v
         JOIN movements m ON m.id = v.movement_id
         JOIN payees p ON p.id = v.payee_id
-        JOIN v_movement_state ms ON ms.movement_id = v.movement_id
-        JOIN pgledger_transfers t ON t.id = v.transfer_id
-        JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
-        JOIN accounts ta ON ta.ledger_account_id = t.to_account_id
+        JOIN movement_legs ml ON ml.transfer_id = v.transfer_id
+        JOIN accounts fa ON fa.id = ml.from_account_id
+        JOIN accounts ta ON ta.id = ml.to_account_id
         WHERE v.amount_paise > 0
           AND v.date BETWEEN $1 AND $2
           AND p.active
-          AND ms.is_effective
           AND NOT m.one_off
         GROUP BY v.movement_id, v.date, v.payee_id, p.display_name, p.outside_text
         ORDER BY v.date, v.movement_id
@@ -100,18 +98,15 @@ async def _load_income_payments(conn: Connection, as_of: date) -> list[PaymentRo
         SELECT m.id AS movement_id, m.date, ml.payee_id, p.display_name, p.outside_text,
                min(ml.category_id) AS category_id,
                NULL::text AS card_id,
-               sum(t.amount)::bigint AS amount_paise
+               sum(ml.amount_paise)::bigint AS amount_paise
         FROM movement_legs ml
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         JOIN movements m ON m.id = ml.movement_id
         JOIN payees p ON p.id = ml.payee_id
-        JOIN v_movement_state ms ON ms.movement_id = m.id
-        JOIN accounts inc ON inc.ledger_account_id = t.from_account_id AND inc.kind = 'income'
-        JOIN accounts dest ON dest.ledger_account_id = t.to_account_id AND dest.liquid
-        WHERE t.amount > 0
+        JOIN accounts inc ON inc.id = ml.from_account_id AND inc.kind = 'income'
+        JOIN accounts dest ON dest.id = ml.to_account_id AND dest.liquid
+        WHERE ml.amount_paise > 0
           AND m.date BETWEEN $1 AND $2
           AND p.active
-          AND ms.is_effective
           AND NOT m.one_off
         GROUP BY m.id, m.date, ml.payee_id, p.display_name, p.outside_text
         ORDER BY m.date, m.id
@@ -247,9 +242,7 @@ async def _schedule_price_changes(conn: Connection, *, as_of: date) -> list[dict
             level = series.stepped_level([paid for _, paid, _ in run], from_paise=stated_paise)
             if level is None:
                 continue
-            payments = [
-                payment for _, _, item in run for payment in item["payments"] if payment["active"]
-            ]
+            payments = [payment for _, _, item in run for payment in item["payments"]]
             payments.sort(key=lambda payment: (payment["date"], payment["movement_id"]))
             movement_ids = list(dict.fromkeys(str(payment["movement_id"]) for payment in payments))
             proposals.append(

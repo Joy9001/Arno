@@ -174,12 +174,7 @@ async def test_a_negative_card_balance_is_a_credit_in_one_write(ledger):
     assert refreshed["available_credit_paise"] == 10_050_000
     # One stated balance is one visible adjustment, never a flip-flop of writes.
     assert await ledger.fetchval("SELECT count(*) FROM movements") == 1
-    assert (
-        await ledger.fetchval(
-            "SELECT count(*) FROM audit_log WHERE group_id = $1", result["undo_id"]
-        )
-        > 0
-    )
+    assert await ledger.fetchval("SELECT count(*) FROM undo_log WHERE id = $1", result["undo_id"])
 
 
 async def test_a_positive_card_balance_is_still_what_is_owed(ledger):

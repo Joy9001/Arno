@@ -1,8 +1,8 @@
 # Legacy upgrades
 
-This guide owns one-time migration procedures for pre-0.3.0 installations: moving from the
-Fin-Agent project name, replacing the pre-0.3.0 superuser `app` database role, and replacing passkey
-sign-in. For routine
+This guide owns one-time migration procedures for older installations: moving from the
+Fin-Agent project name, replacing the pre-0.3.0 superuser `app` database role, replacing passkey
+sign-in, and moving to the baseline schema. For routine
 version updates and PostgreSQL major upgrades, see [self-hosting](self-hosting.md#update-arno).
 
 ---
@@ -89,8 +89,9 @@ curl -s http://127.0.0.1:${ARNO_API_PORT:-8000}/api/health
 docker compose exec api arno migrate
 ```
 
-Confirm `api` and `db` are healthy and `arno migrate` reports no pending
-migrations. Then follow [replace passkey sign-in](#replace-passkey-sign-in).
+Confirm `api` and `db` are healthy. A pre-baseline database makes `arno migrate` and `api` refuse
+to start; then follow [move to the baseline schema](#move-to-the-baseline-schema). Also follow
+[replace passkey sign-in](#replace-passkey-sign-in) for the `.env` changes.
 
 ### 8. Retire the old volumes
 
@@ -127,13 +128,73 @@ Keep the old volume until the restored instance answers real questions cleanly.
 
 ---
 
+## Move to the baseline schema
+
+The ledger tables changed shape: pgledger is gone, and movements now carry their legs directly.
+Because Arno is a single-user app whose data you can recreate from your statements, there is no
+in-place upgrade. Every install that ran migrations 1-50 (any release before the baseline schema)
+moves to a fresh database instead.
+
+On boot, `api` and `arno migrate` refuse such a database and print:
+
+```text
+This database uses the pre-baseline schema (migrations 1–50). Follow
+docs/arno/operations/legacy-upgrades.md to move it to a fresh database.
+```
+
+Run every command below from the repository checkout containing `compose.yaml`.
+
+### 1. Back up the old database
+
+```bash
+docker compose exec -T db pg_dump -U postgres --format=custom arno > arno-pre-baseline.dump
+```
+
+The `-T` flag keeps the terminal from corrupting the binary stream. The daily restic backup is a
+second copy; see [backups](self-hosting.md#backups). Keep both until the new database answers real
+questions.
+
+### 2. Know what does not carry over
+
+The new database starts empty. You re-add your accounts and re-upload your statements. Learned
+category rules re-learn as you import. Chat history and undo history are not migrated. The dump
+stays as the record of the old data.
+
+### 3. Stop `api` and recreate the database
+
+```bash
+docker compose stop api
+docker compose exec db psql -U postgres -d postgres   -c "DROP DATABASE arno WITH (FORCE)" -c "CREATE DATABASE arno OWNER app"
+```
+
+`psql` connects as `postgres` over the container's local socket without a password. The `app` role
+and its password are untouched.
+
+### 4. Update and start `api`
+
+Run `git pull` (or pull the new image), then:
+
+```bash
+docker compose up -d api
+docker compose logs api
+```
+
+`api` migrates the empty database on boot (`ARNO_AUTO_MIGRATE` defaults to on) and logs
+`applied migrations [1]`. Check `curl -s http://127.0.0.1:${ARNO_API_PORT:-8000}/api/health`.
+
+### 5. Re-add accounts and re-upload statements
+
+Add your accounts in the app, then upload each statement again. The first imports re-teach the
+categorizer.
+
+---
+
 ## Replace passkey sign-in
 
 Installs that registered passkeys, and later versions that dropped them, authenticate with your
-Tailscale login or an optional passphrase instead. Migrations `0046` through `0050` run on the next
-`arno migrate`. They drop the passkey, session, job queue, parser, and categorizer-run tables and
-delete the shipped seed category rules. Your ledger, your own category rules, and the rules the
-model learned stay, and your display name moves to settings. Do this before you open Arno:
+Tailscale login or an optional passphrase instead. The baseline schema has no passkey, session, job
+queue, parser, or categorizer-run tables and no shipped seed category rules, and your display name
+lives in settings. Do this before you open Arno:
 
 1. In `.env`, set `ARNO_OWNER_EMAIL` to your Tailscale login, set `ARNO_PASSPHRASE`, or set both.
    With neither set, every protected route returns `401`.

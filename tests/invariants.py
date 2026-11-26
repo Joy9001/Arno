@@ -1,9 +1,9 @@
 """Whole-ledger and deterministic engine invariants.
 
 The rules are the financial invariants in `docs/arno/specs/data-and-engine.md#financial-invariants`,
-derived from `ledger/movements.py` and `tests`' own view definitions. The two balance checks come
-from `backup_restore.verify_database`, which the restore drill already relies on, so there is one
-definition of "the ledger balances".
+derived from `ledger/movements.py` and `tests`' own view definitions. The restore drill's own
+checks (`backup_restore.verify_database`) run first, so there is one definition of "the ledger
+balances".
 
 Run it against a scratch database::
 
@@ -24,7 +24,7 @@ from datetime import date, timedelta
 from typing import Any
 
 from arno.backup_restore import verify_database
-from arno.db.conn import Connection, connect, conninfo_to_dict
+from arno.db.conn import Connection, connect, conninfo_to_dict, quote_ident
 from arno.engine.affordability import Hypothetical, afford
 from arno.engine.money import allocate, amortize
 from arno.engine.projection import CardAccount, CashEvent, LiquidAccount, ProjectionInput, project
@@ -45,13 +45,14 @@ class Violation:
 
 @dataclass
 class Posting:
+    """One `movement_legs` row with its two accounts resolved."""
+
     transfer_id: str
-    has_leg: bool
-    movement_id: str | None
-    from_id: str | None
-    from_kind: str | None
-    to_id: str | None
-    to_kind: str | None
+    movement_id: str
+    from_id: str
+    from_kind: str
+    to_id: str
+    to_kind: str
     amount_paise: int
     category_id: str | None
     category_name: str | None
@@ -65,7 +66,6 @@ class Movement:
     id: str
     date: date
     kind: str
-    reverses_id: str | None
     postings: list[Posting] = field(default_factory=list)
 
     @property
@@ -112,11 +112,10 @@ def _reset_checks() -> None:
 async def check_ledger(conn: Connection) -> list[Violation]:
     """Every financial invariant that can be checked from the database alone."""
     _reset_checks()
-    movements, postings, legs = await _load_ledger(conn)
-    await _check_balances(conn)
-    _check_transfer_shapes(movements, postings, legs)
+    movements = await _load_ledger(conn)
+    await _check_double_entry(conn, movements)
     _check_movement_postings(movements)
-    await _check_reversals(conn, movements)
+    await _check_money_types(conn)
     await _check_cross_paths(conn)
     await _check_account_identity(conn)
     await _check_legs_view(conn)
@@ -124,6 +123,7 @@ async def check_ledger(conn: Connection) -> list[Violation]:
     await _check_owed_view(conn)
     await _check_schedules(conn)
     await _check_imports(conn)
+    await _check_undo_log(conn)
     return list(_violations)
 
 
@@ -194,186 +194,139 @@ def check_engine() -> list[Violation]:
     return list(_violations)
 
 
-async def _load_ledger(
-    conn: Connection,
-) -> tuple[dict[str, Movement], list[Posting], list[tuple[str, str]]]:
-    movement_rows = await conn.fetch(
-        "SELECT id, date, kind, reverses_id FROM movements ORDER BY date, id"
-    )
+async def _load_ledger(conn: Connection) -> dict[str, Movement]:
+    movement_rows = await conn.fetch("SELECT id, date, kind FROM movements ORDER BY date, id")
     movements = {
-        str(row["id"]): Movement(
-            id=str(row["id"]),
-            date=row["date"],
-            kind=str(row["kind"]),
-            reverses_id=row["reverses_id"],
-        )
+        str(row["id"]): Movement(id=str(row["id"]), date=row["date"], kind=str(row["kind"]))
         for row in movement_rows
     }
     rows = await conn.fetch(
         """
         SELECT
-            t.id AS transfer_id,
-            ml.transfer_id IS NOT NULL AS has_leg,
-            ml.movement_id AS movement_id,
-            t.amount::bigint AS amount_paise,
-            fa.id AS from_id, fa.kind AS from_kind, fa.name AS from_name,
-            ta.id AS to_id, ta.kind AS to_kind, ta.name AS to_name,
-            ml.category_id, c.name AS category_name,
-            ml.payee_id, p.kind AS payee_kind, p.person_account_id AS payee_person_account_id
-        FROM pgledger_transfers t
-        LEFT JOIN v_accounts fa ON fa.ledger_account_id = t.from_account_id
-        LEFT JOIN v_accounts ta ON ta.ledger_account_id = t.to_account_id
-        LEFT JOIN movement_legs ml ON ml.transfer_id = t.id
-        LEFT JOIN categories c ON c.id = ml.category_id
-        LEFT JOIN payees p ON p.id = ml.payee_id
-        ORDER BY t.id
-        """
-    )
-    leg_rows = await conn.fetch(
-        "SELECT transfer_id, movement_id FROM movement_legs ORDER BY transfer_id"
-    )
-    legs = [(str(row["transfer_id"]), str(row["movement_id"])) for row in leg_rows]
-    postings = [
-        Posting(
-            transfer_id=str(row["transfer_id"]),
-            has_leg=bool(row["has_leg"]),
-            movement_id=row["movement_id"],
-            from_id=row["from_id"],
-            from_kind=row["from_kind"],
-            to_id=row["to_id"],
-            to_kind=row["to_kind"],
-            amount_paise=int(row["amount_paise"]),
-            category_id=row["category_id"],
-            category_name=row["category_name"],
-            payee_id=row["payee_id"],
-            payee_kind=row["payee_kind"],
-            payee_person_account_id=row["payee_person_account_id"],
-        )
-        for row in rows
-    ]
-    for posting in postings:
-        movement = movements.get(str(posting.movement_id))
-        if movement is not None:
-            movement.postings.append(posting)
-    return movements, postings, legs
-
-
-# --- a. balances ------------------------------------------------------------------------------
-
-
-async def _check_balances(conn: Connection) -> None:
-    """Reuse the restore drill's two ledger checks, then confirm entries match their transfer."""
-    checks = await verify_database(conn)
-    _expect(
-        checks.get("ledger_transfers_balance", False),
-        "ledger_transfer_unbalanced",
-        "a transfer's entries do not sum to zero",
-        await _unbalanced_transfer_ids(conn),
-    )
-    _expect(
-        checks.get("account_balances_match_entries", False),
-        "account_balance_mismatch",
-        "pgledger_accounts.balance differs from the sum of that account's entries",
-        await _drifted_account_ids(conn),
-    )
-
-    rows = await conn.fetch(
-        """
-        SELECT t.id, t.amount::bigint AS amount,
-               count(e.id) AS entries,
-               count(*) FILTER (
-                   WHERE e.account_id = t.from_account_id AND e.amount = -t.amount
-               ) AS from_ok,
-               count(*) FILTER (
-                   WHERE e.account_id = t.to_account_id AND e.amount = t.amount
-               ) AS to_ok
-        FROM pgledger_transfers t
-        LEFT JOIN pgledger_entries e ON e.transfer_id = t.id
-        GROUP BY t.id, t.amount
+            l.transfer_id, l.movement_id, l.amount_paise,
+            fa.id AS from_id, fa.kind AS from_kind,
+            ta.id AS to_id, ta.kind AS to_kind,
+            l.category_id, c.name AS category_name,
+            l.payee_id, p.kind AS payee_kind, p.person_account_id AS payee_person_account_id
+        FROM movement_legs l
+        JOIN accounts fa ON fa.id = l.from_account_id
+        JOIN accounts ta ON ta.id = l.to_account_id
+        LEFT JOIN categories c ON c.id = l.category_id
+        LEFT JOIN payees p ON p.id = l.payee_id
+        ORDER BY l.transfer_id
         """
     )
     for row in rows:
-        identifier = str(row["id"])
-        _expect(
-            int(row["entries"]) == 2 and int(row["from_ok"]) == 1 and int(row["to_ok"]) == 1,
-            "transfer_entries_wrong",
-            f"transfer {identifier} needs exactly one -amount entry on the payer and one "
-            f"+amount entry on the payee",
-            (identifier,),
-        )
-
-
-async def _unbalanced_transfer_ids(conn: Connection) -> tuple[str, ...]:
-    rows = await conn.fetch(
-        """
-        SELECT e.transfer_id
-        FROM pgledger_entries e
-        GROUP BY e.transfer_id
-        HAVING sum(e.amount) <> 0
-        """
-    )
-    return _ids(rows, "transfer_id")
-
-
-async def _drifted_account_ids(conn: Connection) -> tuple[str, ...]:
-    rows = await conn.fetch(
-        """
-        SELECT a.id
-        FROM pgledger_accounts a
-        LEFT JOIN (
-            SELECT account_id, sum(amount) AS total FROM pgledger_entries GROUP BY account_id
-        ) e ON e.account_id = a.id
-        WHERE coalesce(e.total, 0) <> a.balance
-        """
-    )
-    return _ids(rows, "id")
-
-
-# --- b. posting rules -------------------------------------------------------------------------
-
-
-def _check_transfer_shapes(
-    movements: dict[str, Movement],
-    postings: list[Posting],
-    legs: list[tuple[str, str]],
-) -> None:
-    for posting in postings:
-        ids = (posting.transfer_id,)
-        _expect(
-            posting.from_id is not None and posting.to_id is not None,
-            "transfer_without_account",
-            f"transfer {posting.transfer_id} has a ledger side with no accounts row",
-            ids,
-        )
-        _expect(
-            posting.has_leg and posting.movement_id is not None,
-            "transfer_without_leg",
-            f"transfer {posting.transfer_id} has no movement_legs row",
-            ids,
-        )
-        if posting.movement_id is not None:
-            _expect(
-                posting.movement_id in movements,
-                "leg_movement_missing",
-                f"transfer {posting.transfer_id} points at movement {posting.movement_id}, "
-                "which does not exist",
-                ids,
+        movement = movements.get(str(row["movement_id"]))
+        if movement is not None:
+            movement.postings.append(
+                Posting(
+                    transfer_id=str(row["transfer_id"]),
+                    movement_id=str(row["movement_id"]),
+                    from_id=str(row["from_id"]),
+                    from_kind=str(row["from_kind"]),
+                    to_id=str(row["to_id"]),
+                    to_kind=str(row["to_kind"]),
+                    amount_paise=int(row["amount_paise"]),
+                    category_id=row["category_id"],
+                    category_name=row["category_name"],
+                    payee_id=row["payee_id"],
+                    payee_kind=row["payee_kind"],
+                    payee_person_account_id=row["payee_person_account_id"],
+                )
             )
-    for transfer_id, movement_id in legs:
-        _expect(
-            movement_id in movements,
-            "leg_movement_missing",
-            f"leg for transfer {transfer_id} points at movement {movement_id}, "
-            "which does not exist",
-            (transfer_id, movement_id),
-        )
+    return movements
+
+
+# --- a. double entry --------------------------------------------------------------------------
+
+
+async def _check_double_entry(conn: Connection, movements: dict[str, Movement]) -> None:
+    """Every leg moves a positive amount between two accounts, so the books sum to zero."""
+    checks = await verify_database(conn)
+    failed = sorted(name for name, ok in checks.items() if not ok)
+    _expect(
+        not failed,
+        "restore_checks_failed",
+        f"backup_restore.verify_database failed: {', '.join(failed)}",
+    )
+
     for movement in movements.values():
         _expect(
             bool(movement.postings),
-            "movement_without_transfer",
-            f"movement {movement.id} ({movement.kind}) has no transfers",
+            "movement_without_leg",
+            f"movement {movement.id} ({movement.kind}) has no legs",
             (movement.id,),
         )
+
+    bad_legs = await conn.fetch(
+        """
+        SELECT transfer_id FROM movement_legs
+        WHERE amount_paise <= 0 OR from_account_id = to_account_id
+        ORDER BY transfer_id
+        """
+    )
+    _expect(
+        not bad_legs,
+        "leg_not_positive_between_two_accounts",
+        "every leg needs amount_paise > 0 and from_account_id <> to_account_id",
+        _ids(bad_legs, "transfer_id"),
+    )
+
+    total = await conn.fetchval("SELECT coalesce(sum(balance_paise), 0)::bigint FROM v_accounts")
+    _expect(
+        int(total or 0) == 0,
+        "ledger_not_zero_sum",
+        f"v_accounts.balance_paise sums to {int(total or 0)} across all accounts, not 0",
+    )
+
+    drifted = await conn.fetch(
+        """
+        SELECT a.id, a.balance_paise::bigint AS view_balance,
+               (coalesce(i.total, 0) - coalesce(o.total, 0))::bigint AS leg_balance
+        FROM v_accounts a
+        LEFT JOIN (
+            SELECT to_account_id, sum(amount_paise) AS total FROM movement_legs
+            GROUP BY to_account_id
+        ) i ON i.to_account_id = a.id
+        LEFT JOIN (
+            SELECT from_account_id, sum(amount_paise) AS total FROM movement_legs
+            GROUP BY from_account_id
+        ) o ON o.from_account_id = a.id
+        WHERE a.balance_paise <> coalesce(i.total, 0) - coalesce(o.total, 0)
+        ORDER BY a.id
+        """
+    )
+    for row in drifted:
+        _expect(
+            False,
+            "account_balance_mismatch",
+            f"v_accounts.balance_paise is {int(row['view_balance'])} for {row['id']}, but its "
+            f"legs sum to {int(row['leg_balance'])} (in minus out)",
+            (str(row["id"]),),
+        )
+
+
+async def _check_money_types(conn: Connection) -> None:
+    rows = await conn.fetch(
+        """
+        SELECT table_name, column_name, data_type
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND column_name LIKE '%paise%'
+          AND data_type NOT IN ('smallint', 'integer', 'bigint')
+        ORDER BY table_name, column_name
+        """
+    )
+    _expect(
+        not rows,
+        "money_column_not_integer",
+        "money is integer paise; not integer: "
+        + ", ".join(f"{r['table_name']}.{r['column_name']} ({r['data_type']})" for r in rows),
+    )
+
+
+# --- b. posting rules -------------------------------------------------------------------------
 
 
 def _check_movement_postings(movements: dict[str, Movement]) -> None:
@@ -499,147 +452,6 @@ def _check_movement_postings(movements: dict[str, Movement]) -> None:
                 f"adjustment {movement.id} moves {consumption} paise through Spending",
                 ids,
             )
-        elif movement.kind == "reversal":
-            _expect(
-                movement.reverses_id is not None,
-                "reversal_without_original",
-                f"reversal {movement.id} does not name the movement it reverses",
-                ids,
-            )
-
-
-# --- c. reversals -----------------------------------------------------------------------------
-
-
-def _signature(postings: list[Posting]) -> list[tuple[Any, ...]]:
-    return sorted(
-        (
-            posting.from_id or "",
-            posting.to_id or "",
-            posting.amount_paise,
-            posting.category_id or "",
-        )
-        for posting in postings
-    )
-
-
-def _opposite(postings: list[Posting]) -> list[tuple[Any, ...]]:
-    return sorted(
-        (
-            posting.to_id or "",
-            posting.from_id or "",
-            posting.amount_paise,
-            posting.category_id or "",
-        )
-        for posting in postings
-    )
-
-
-async def _check_reversals(conn: Connection, movements: dict[str, Movement]) -> None:
-    for movement in movements.values():
-        if movement.kind != "reversal":
-            continue
-        original = movements.get(str(movement.reverses_id))
-        _expect(
-            original is not None,
-            "reversal_original_missing",
-            f"reversal {movement.id} points at a missing movement",
-            (movement.id,),
-        )
-        if original is None:
-            continue
-        _expect(
-            _signature(movement.postings) == _opposite(original.postings),
-            "reversal_not_opposite",
-            f"reversal {movement.id} is not the exact opposite of {original.id}",
-            (movement.id, original.id),
-        )
-
-    view_rows = await conn.fetch(
-        """
-        SELECT m.id, m.kind,
-               ms.movement_id IS NOT NULL AS has_view,
-               ms.is_reversal, ms.is_reversed, ms.is_effective,
-               coalesce(s.is_reversed, false) AS fn_is_reversed
-        FROM movements m
-        LEFT JOIN v_movement_state ms ON ms.movement_id = m.id
-        LEFT JOIN movement_reversal_state() s ON s.movement_id = m.id
-        """
-    )
-    reversed_roots: list[str] = []
-    for row in view_rows:
-        mid = str(row["id"])
-        is_rev_kind = row["kind"] == "reversal"
-        expected_rev = bool(row["fn_is_reversed"])
-        expected_eff = not is_rev_kind and not expected_rev
-        _expect(
-            bool(row["has_view"])
-            and bool(row["is_reversal"]) == is_rev_kind
-            and bool(row["is_reversed"]) == expected_rev
-            and bool(row["is_effective"]) == expected_eff,
-            "movement_state_view_mismatch",
-            f"v_movement_state disagrees with movements/movement_reversal_state() for {mid}",
-            (mid,),
-        )
-        if row["is_reversed"]:
-            reversed_roots.append(mid)
-
-    chain_by_root = await _reversal_chains(conn, reversed_roots)
-    for root in reversed_roots:
-        chain = [root, *chain_by_root.get(root, [])]
-        net = await conn.fetchval(
-            "SELECT coalesce(sum(amount_paise), 0)::bigint FROM v_spending "
-            "WHERE movement_id = ANY($1::text[])",
-            chain,
-        )
-        assert net is not None  # coalesce(sum(...), 0) always returns one value
-        _expect(
-            int(net) == 0,
-            "reversed_pair_not_net_zero",
-            f"the reversed movement {root} and its reversals move {int(net)} paise through "
-            "Spending; effective results must net to zero",
-            tuple(chain),
-        )
-        rows = await conn.fetch(
-            """
-            SELECT e.account_id, sum(e.amount)::bigint AS net
-            FROM pgledger_entries e
-            JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
-            WHERE ml.movement_id = ANY($1::text[])
-            GROUP BY e.account_id
-            HAVING sum(e.amount) <> 0
-            """,
-            chain,
-        )
-        for row in rows:
-            _expect(
-                False,
-                "reversed_pair_not_net_zero",
-                f"reversed chain {root} leaves {int(row['net'])} paise on account "
-                f"{row['account_id']}; v_balances and v_owed must exclude the pair's effect",
-                (root, str(row["account_id"])),
-            )
-
-
-async def _reversal_chains(conn: Connection, roots: list[str]) -> dict[str, list[str]]:
-    if not roots:
-        return {}
-    rows = await conn.fetch(
-        """
-        WITH RECURSIVE descendants AS (
-            SELECT m.id AS root, m.id AS node FROM movements m WHERE m.id = ANY($1::text[])
-            UNION ALL
-            SELECT d.root, child.id
-            FROM descendants d JOIN movements child ON child.reverses_id = d.node
-        )
-        SELECT root, node FROM descendants WHERE root <> node
-        """,
-        roots,
-    )
-    result: dict[str, list[str]] = defaultdict(list)
-    for row in rows:
-        result[str(row["root"])].append(str(row["node"]))
-    return result
 
 
 # --- d. cross-path spending -------------------------------------------------------------------
@@ -693,16 +505,14 @@ async def _spending_from_view(conn: Connection, start: date, end: date) -> dict[
     rows = await conn.fetch(
         """
         SELECT coalesce(c.name, 'Uncategorized') AS category,
-               sum(CASE WHEN t.to_account_id = sp.ledger_account_id
-                        THEN t.amount ELSE -t.amount END)::bigint AS amount
+               sum(CASE WHEN ml.to_account_id = sp.id
+                        THEN ml.amount_paise ELSE -ml.amount_paise END)::bigint AS amount
         FROM movement_legs ml
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         JOIN movements m ON m.id = ml.movement_id
         JOIN accounts sp ON sp.kind = 'spending'
         LEFT JOIN categories c ON c.id = ml.category_id
         WHERE m.date BETWEEN $1 AND $2
-          AND (t.from_account_id = sp.ledger_account_id
-               OR t.to_account_id = sp.ledger_account_id)
+          AND (ml.from_account_id = sp.id OR ml.to_account_id = sp.id)
         GROUP BY 1
         """,
         start,
@@ -725,14 +535,14 @@ async def _spending_from_recap(conn: Connection, start: date, end: date) -> dict
 
 
 async def _spending_from_legs(conn: Connection, start: date, end: date) -> dict[str, int]:
-    """The agent's own view: v_legs over effective movements, signed toward the spending side."""
+    """The agent's own view: v_legs, signed toward the spending side."""
     rows = await conn.fetch(
         """
         SELECT coalesce(category_name, 'Uncategorized') AS category,
                sum(CASE WHEN to_account_kind = 'spending' THEN amount_paise
                         ELSE -amount_paise END)::bigint AS amount
         FROM v_legs
-        WHERE date BETWEEN $1 AND $2 AND NOT is_reversal AND NOT is_reversed
+        WHERE date BETWEEN $1 AND $2
           AND (to_account_kind = 'spending' OR from_account_kind = 'spending')
         GROUP BY 1
         """,
@@ -746,22 +556,6 @@ async def _spending_from_legs(conn: Connection, start: date, end: date) -> dict[
 
 
 async def _check_account_identity(conn: Connection) -> None:
-    bad_pg = await conn.fetch(
-        """
-        SELECT a.id, a.ledger_account_id, pg.name AS pg_name
-        FROM accounts a
-        JOIN pgledger_accounts pg ON pg.id = a.ledger_account_id
-        WHERE pg.name IS DISTINCT FROM a.id
-        ORDER BY a.id
-        """
-    )
-    _expect(
-        not bad_pg,
-        "pgledger_account_name_mismatch",
-        "pgledger_accounts.name must hold accounts.id",
-        _ids(bad_pg, "id"),
-    )
-
     bad_names = await conn.fetch(
         """
         SELECT id
@@ -811,12 +605,12 @@ async def _check_account_identity(conn: Connection) -> None:
 
 
 async def _check_legs_view(conn: Connection) -> None:
-    transfer_count = await conn.fetchval("SELECT count(*) FROM pgledger_transfers")
+    transfer_count = await conn.fetchval("SELECT count(*) FROM movement_legs")
     legs_count = await conn.fetchval("SELECT count(*) FROM v_legs")
     _expect(
         int(legs_count or 0) == int(transfer_count or 0),
         "legs_view_count_mismatch",
-        f"v_legs has {legs_count} rows, but pgledger_transfers has {transfer_count}",
+        f"v_legs has {legs_count} rows, but movement_legs has {transfer_count}",
     )
 
     mismatches = await conn.fetch(
@@ -867,11 +661,9 @@ async def _check_balance_view(conn: Connection) -> None:
         """
         SELECT a.id, a.name,
                a.balance_paise::bigint AS account_balance,
-               pg.balance::bigint AS ledger_balance,
                coalesce(last_day.balance_paise, 0)::bigint AS view_balance,
                coalesce(today_day.balance_paise, 0)::bigint AS today_view_balance
         FROM v_accounts a
-        JOIN pgledger_accounts pg ON pg.id = a.ledger_account_id
         LEFT JOIN LATERAL (
             SELECT v.balance_paise
             FROM v_balances v
@@ -891,17 +683,10 @@ async def _check_balance_view(conn: Connection) -> None:
     )
     for row in rows:
         _expect(
-            int(row["ledger_balance"]) == int(row["view_balance"]),
+            int(row["account_balance"]) == int(row["view_balance"]),
             "balance_view_mismatch",
-            f"v_balances ends at {int(row['view_balance'])} for {row['name']}, but pgledger "
-            f"says {int(row['ledger_balance'])}",
-            (str(row["id"]),),
-        )
-        _expect(
-            int(row["account_balance"]) == int(row["ledger_balance"]),
-            "account_balance_view_mismatch",
-            f"v_accounts.balance_paise is {int(row['account_balance'])} for {row['name']}, "
-            f"but pgledger says {int(row['ledger_balance'])}",
+            f"v_balances ends at {int(row['view_balance'])} for {row['name']}, but "
+            f"v_accounts.balance_paise is {int(row['account_balance'])}",
             (str(row["id"]),),
         )
         _expect(
@@ -919,17 +704,15 @@ async def _check_owed_view(conn: Connection) -> None:
         SELECT a.id, a.name, p.id AS payee_id, p.display_name,
                coalesce(v.balance_paise, 0)::bigint AS view_balance,
                coalesce(sum(CASE
-                   WHEN t.to_account_id = a.ledger_account_id THEN t.amount
-                   ELSE -t.amount
+                   WHEN ml.to_account_id = a.id THEN ml.amount_paise
+                   ELSE -ml.amount_paise
                END), 0)::bigint AS ledger_balance,
                count(*) FILTER (
-                   WHERE m.kind NOT IN ('split', 'settlement', 'transfer', 'reversal')
+                   WHERE m.kind NOT IN ('split', 'settlement', 'transfer')
                ) AS unexpected_rows
         FROM v_accounts a
         JOIN payees p ON p.person_account_id = a.id
-        LEFT JOIN pgledger_entries e ON e.account_id = a.ledger_account_id
-        LEFT JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
-        LEFT JOIN pgledger_transfers t ON t.id = ml.transfer_id
+        LEFT JOIN movement_legs ml ON ml.to_account_id = a.id OR ml.from_account_id = a.id
         LEFT JOIN movements m ON m.id = ml.movement_id
         LEFT JOIN v_owed v ON v.account_id = a.id
         GROUP BY a.id, a.name, p.id, p.display_name, v.balance_paise
@@ -947,7 +730,7 @@ async def _check_owed_view(conn: Connection) -> None:
             int(row["unexpected_rows"]) == 0,
             "owed_from_unexpected_kind",
             f"{row['display_name']}'s balance is driven by a movement kind other than split, "
-            "settlement, transfer, or reversal",
+            "settlement, or transfer",
             (str(row["payee_id"]),),
         )
 
@@ -976,34 +759,23 @@ async def _check_schedules(conn: Connection) -> None:
     payments = await conn.fetch(
         """
         SELECT p.id, p.occurrence_id, p.movement_id, p.amount_paise,
-               o.schedule_id, o.due_date, o.amount_paise AS expected_paise,
-               o.account_id, m.kind AS movement_kind, m.date AS movement_date,
-               coalesce(state.is_reversed, false) AS reversed
+               o.id AS occurrence_row, o.schedule_id, o.due_date,
+               m.id AS movement_row, m.date AS movement_date
         FROM schedule_payments p
-        JOIN schedule_occurrences o ON o.id = p.occurrence_id
-        JOIN movements m ON m.id = p.movement_id
-        LEFT JOIN movement_reversal_state($1) state ON state.movement_id = m.id
+        LEFT JOIN schedule_occurrences o ON o.id = p.occurrence_id
+        LEFT JOIN movements m ON m.id = p.movement_id
         ORDER BY o.due_date, p.id
-        """,
-        as_of,
+        """
     )
     for payment in payments:
         ids = (str(payment["id"]), str(payment["movement_id"]))
         _expect(
-            payment["movement_kind"] != "reversal",
-            "schedule_payment_on_reversal",
-            f"schedule payment {payment['id']} is allocated to reversal {payment['movement_id']}",
+            int(payment["amount_paise"]) > 0,
+            "schedule_payment_not_positive",
+            f"schedule payment {payment['id']} allocates {int(payment['amount_paise'])} paise",
             ids,
         )
-        if payment["movement_kind"] == "reversal":
-            continue
-        occurrence = await conn.fetchrow(
-            "SELECT * FROM schedule_occurrences WHERE id = $1", payment["occurrence_id"]
-        )
-        movement = await conn.fetchrow(
-            "SELECT * FROM movements WHERE id = $1", payment["movement_id"]
-        )
-        if occurrence is None or movement is None:
+        if payment["occurrence_row"] is None or payment["movement_row"] is None:
             _expect(
                 False,
                 "schedule_payment_missing_row",
@@ -1012,6 +784,13 @@ async def _check_schedules(conn: Connection) -> None:
                 ids,
             )
             continue
+        occurrence = await conn.fetchrow(
+            "SELECT * FROM schedule_occurrences WHERE id = $1", payment["occurrence_id"]
+        )
+        movement = await conn.fetchrow(
+            "SELECT * FROM movements WHERE id = $1", payment["movement_id"]
+        )
+        assert occurrence is not None and movement is not None  # the join above found both
         try:
             capacity = await _capacity(conn, occurrence, movement)
         except InvalidLedgerError as exc:
@@ -1034,20 +813,13 @@ async def _check_schedules(conn: Connection) -> None:
         """
         SELECT p.movement_id, sum(p.amount_paise)::bigint AS allocated
         FROM schedule_payments p
-        JOIN movements m ON m.id = p.movement_id AND m.kind <> 'reversal'
         GROUP BY p.movement_id
         """
     )
     for row in per_movement:
         movement = await conn.fetchrow("SELECT * FROM movements WHERE id = $1", row["movement_id"])
         if movement is None:
-            _expect(
-                False,
-                "schedule_payment_missing_row",
-                f"movement {row['movement_id']} has allocations but no movements row",
-                (str(row["movement_id"]),),
-            )
-            continue
+            continue  # already reported as schedule_payment_missing_row
         occurrences = await conn.fetch(
             """
             SELECT o.*, p.amount_paise AS allocated_paise
@@ -1082,12 +854,7 @@ async def _check_schedules(conn: Connection) -> None:
         evidence = await payment_evidence(conn, schedule_id, start, end, as_of=as_of)
         effective_totals: dict[date, int] = defaultdict(int)
         for payment in payments:
-            if (
-                str(payment["schedule_id"]) == schedule_id
-                and payment["movement_date"] <= as_of
-                and payment["movement_kind"] != "reversal"
-                and not payment["reversed"]
-            ):
+            if str(payment["schedule_id"]) == schedule_id and payment["movement_date"] <= as_of:
                 effective_totals[payment["due_date"]] += int(payment["amount_paise"])
         for occurrence in rows:
             day = occurrence["due_date"]
@@ -1165,6 +932,112 @@ async def _check_imports(conn: Connection) -> None:
             f"import {row['id']} is committed but its check result is {row['check_status']}",
             (str(row["id"]),),
         )
+
+
+# --- h. undo log ------------------------------------------------------------------------------
+
+
+async def _check_undo_log(conn: Connection) -> None:
+    bad_shape = await conn.fetch(
+        """
+        SELECT g.id
+        FROM undo_log g
+        WHERE EXISTS (
+            SELECT 1 FROM jsonb_array_elements(g.snapshot) AS t(e)
+            WHERE NOT (
+                jsonb_typeof(t.e) = 'object'
+                AND t.e ?& ARRAY['table', 'key', 'before', 'after']
+                AND jsonb_typeof(t.e -> 'table') = 'string'
+                AND jsonb_typeof(t.e -> 'key') = 'string'
+                AND jsonb_typeof(t.e -> 'before') IN ('object', 'null')
+                AND jsonb_typeof(t.e -> 'after') IN ('object', 'null')
+            )
+        )
+        ORDER BY g.id
+        """
+    )
+    _expect(
+        not bad_shape,
+        "undo_snapshot_shape",
+        "every undo_log.snapshot must be an array of {table, key, before, after} objects",
+        _ids(bad_shape, "id"),
+    )
+
+    backwards = await conn.fetch(
+        "SELECT id FROM undo_log WHERE undone_at IS NOT NULL AND undone_at < created_at ORDER BY id"
+    )
+    _expect(
+        not backwards,
+        "undo_undone_before_created",
+        "undo_log.undone_at must be null or not earlier than created_at",
+        _ids(backwards, "id"),
+    )
+    if bad_shape:
+        return
+
+    # A live group's created rows must still exist unless a later live group deleted them.
+    created = await conn.fetch(
+        """
+        SELECT g.id AS group_id, t.e ->> 'table' AS table_name, t.e ->> 'key' AS row_key
+        FROM undo_log g
+        CROSS JOIN LATERAL jsonb_array_elements(g.snapshot) AS t(e)
+        WHERE g.undone_at IS NULL
+          AND jsonb_typeof(t.e -> 'before') = 'null'
+          AND jsonb_typeof(t.e -> 'after') = 'object'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM undo_log h
+              CROSS JOIN LATERAL jsonb_array_elements(h.snapshot) AS u(e)
+              WHERE h.undone_at IS NULL AND h.id <> g.id AND h.created_at >= g.created_at
+                AND u.e ->> 'table' = t.e ->> 'table' AND u.e ->> 'key' = t.e ->> 'key'
+                AND jsonb_typeof(u.e -> 'before') = 'object'
+                AND jsonb_typeof(u.e -> 'after') = 'null'
+          )
+        """
+    )
+    by_table: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for row in created:
+        by_table[str(row["table_name"])].append((str(row["row_key"]), str(row["group_id"])))
+    key_columns = {
+        str(row["table_name"]): str(row["column_name"])
+        for row in await conn.fetch(
+            """
+            SELECT c.table_name, c.column_name
+            FROM information_schema.columns c
+            JOIN information_schema.tables t
+              ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+            WHERE c.table_schema = 'public' AND t.table_type = 'BASE TABLE'
+              AND c.column_name = CASE WHEN c.table_name = 'movement_legs'
+                                       THEN 'transfer_id' ELSE 'id' END
+            """
+        )
+    }
+    for table, entries in by_table.items():
+        key_column = key_columns.get(table)
+        _expect(
+            key_column is not None,
+            "undo_unknown_table",
+            f"undo_log names table {table!r}, which does not exist or has no id column",
+            tuple(group_id for _, group_id in entries),
+        )
+        if key_column is None:
+            continue
+        present = {
+            str(row["key"])
+            for row in await conn.fetch(
+                f"SELECT {quote_ident(key_column)}::text AS key FROM {quote_ident(table)} "  # noqa: S608
+                f"WHERE {quote_ident(key_column)}::text = ANY($1::text[])",
+                [key for key, _ in entries],
+            )
+        }
+        for key, group_id in entries:
+            _expect(
+                key in present,
+                "undo_created_row_missing",
+                f"undo group {group_id} created {table} row {key}, which is gone and no later "
+                "live group deleted it",
+                (group_id, key),
+            )
 
 
 # --- entry point ------------------------------------------------------------------------------

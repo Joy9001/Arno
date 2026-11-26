@@ -212,7 +212,7 @@ class MovementChanges(WriteModel):
         ),
     )
     account: str | None = Field(default=None, description="New account name.")
-    delete: bool = Field(default=False, description="Delete by appending a reversal.")
+    delete: bool = Field(default=False, description="Delete the movement; undo restores it.")
     schedule_payment: SchedulePaymentChange | None = Field(
         default=None,
         description=(
@@ -597,8 +597,7 @@ async def _usual_account(conn: Connection, payee_id: str) -> str | None:
         """
         SELECT fa.id, count(*) AS n
         FROM movement_legs ml
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
-        JOIN v_accounts fa ON fa.ledger_account_id = t.from_account_id
+        JOIN v_accounts fa ON fa.id = ml.from_account_id
         WHERE ml.payee_id = $1 AND fa.active AND fa.kind IN ('bank', 'cash', 'wallet', 'card')
         GROUP BY fa.id, fa.name
         ORDER BY n DESC, fa.name
@@ -633,8 +632,7 @@ async def _everyday_account(conn: Connection) -> str | None:
         """
         SELECT fa.id, count(*) AS n
         FROM movement_legs ml
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
-        JOIN v_accounts fa ON fa.ledger_account_id = t.from_account_id
+        JOIN v_accounts fa ON fa.id = ml.from_account_id
         JOIN movements m ON m.id = ml.movement_id
         WHERE fa.active AND fa.liquid AND m.kind IN ('expense', 'refund')
         GROUP BY fa.id, fa.name
@@ -659,17 +657,15 @@ async def _possible_duplicate(
         """
         SELECT m.id, m.date, m.description
         FROM movements m
-        JOIN v_movement_state vms ON vms.movement_id = m.id AND vms.is_effective
         JOIN movement_legs ml ON ml.movement_id = m.id
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
-        JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
+        JOIN accounts fa ON fa.id = ml.from_account_id
         -- Match the movement itself, not one capture kind. Chat, photo, voice and woken
         -- writes (which have no capture row at all) all count as a possible duplicate.
         WHERE m.kind = 'expense'
           AND ($1::text[] IS NULL OR m.idempotency_key IS NULL
                OR NOT (m.idempotency_key = ANY($1::text[])))
           AND fa.id = $2
-          AND t.amount = $3
+          AND ml.amount_paise = $3
           AND ml.payee_id IS NOT DISTINCT FROM $4
           AND (($5::date IS NOT NULL AND m.date = $5)
                OR m.created_at > now() - interval '10 minutes')
@@ -710,10 +706,10 @@ def _required(data: dict[str, Any], key: str, label: str) -> Any:
 
 
 async def _audited_undo_id(conn: Connection, undo_id: str | None) -> str | None:
-    """Only an audit group with a real change gets an undo button."""
+    """Only an undo group with a real change gets an undo button."""
     if not undo_id:
         return None
-    row = await conn.fetchrow("SELECT 1 FROM audit_log WHERE group_id = $1 LIMIT 1", undo_id)
+    row = await conn.fetchrow("SELECT 1 FROM undo_log WHERE id = $1", undo_id)
     return undo_id if row else None
 
 
@@ -2364,12 +2360,11 @@ async def undo(
     elif conversation_id:
         row = await conn.fetchrow(
             """
-            SELECT a.group_id
-            FROM audit_log a
-            JOIN messages m ON m.id = a.message_id
-            WHERE m.conversation_id = $1 AND a.undone_at IS NULL
-            GROUP BY a.group_id
-            ORDER BY max(a.created_at) DESC
+            SELECT u.id
+            FROM undo_log u
+            JOIN messages m ON m.id = u.message_id
+            WHERE m.conversation_id = $1 AND u.undone_at IS NULL
+            ORDER BY u.created_at DESC, u.id DESC
             LIMIT 1
             """,
             conversation_id,
@@ -2378,7 +2373,7 @@ async def undo(
             # The tool promises "the last write in this conversation". Never fall back to
             # undo_latest across every conversation: that would undo a stranger's write.
             raise ToolInputError("Nothing to undo in this conversation")
-        result = await undo_group(conn, str(row["group_id"]), actor="agent", message_id=message_id)
+        result = await undo_group(conn, str(row["id"]), actor="agent", message_id=message_id)
     else:
         result = await undo_latest(conn, actor="agent", message_id=message_id)
     return {
@@ -2393,30 +2388,58 @@ async def undo(
 
 
 async def delete_preference_for_good(conn: Connection, preference_id: str) -> dict[str, Any]:
-    """Settings-only delete: blank the body and every audit copy, then delete the row."""
+    """Settings-only delete: blank the body in every undo copy, then delete the row."""
     row = await conn.fetchrow("SELECT * FROM preferences WHERE id = $1", preference_id)
     if row is None:
         raise ToolInputError("No such preference")
+    touching = [{"table": "preferences", "key": preference_id}]
     async with conn.transaction():
+        # A summary such as "Remembered: <body>" quotes the body, so it goes too.
+        for group in await conn.fetch(
+            "SELECT id, summary, snapshot FROM undo_log WHERE snapshot @> $1::jsonb", touching
+        ):
+            summary = str(group["summary"])
+            for entry in group["snapshot"]:
+                if entry["table"] != "preferences" or entry["key"] != preference_id:
+                    continue
+                for side in ("before", "after"):
+                    body = str((entry[side] or {}).get("body") or "")
+                    if body:
+                        summary = summary.replace(body, "a deleted memory")
+            await conn.execute(
+                "UPDATE undo_log SET summary = $2 WHERE id = $1", group["id"], summary
+            )
         await conn.execute(
             """
-            UPDATE audit_log
-            SET before = CASE WHEN before ? 'body'
-                              THEN jsonb_set(before, '{body}', '\"\"') ELSE before END,
-                after = CASE WHEN after ? 'body'
-                             THEN jsonb_set(after, '{body}', '\"\"') ELSE after END
-            WHERE table_name = 'preferences' AND row_id = $1
+            UPDATE undo_log SET snapshot = (
+                SELECT jsonb_agg(
+                    CASE WHEN e ->> 'table' = 'preferences' AND e ->> 'key' = $1
+                         THEN jsonb_set(
+                                  jsonb_set(e, '{before}', CASE WHEN e -> 'before' ? 'body'
+                                      THEN jsonb_set(e -> 'before', '{body}', '""')
+                                      ELSE e -> 'before' END),
+                                  '{after}', CASE WHEN e -> 'after' ? 'body'
+                                      THEN jsonb_set(e -> 'after', '{body}', '""')
+                                      ELSE e -> 'after' END)
+                         ELSE e END ORDER BY ord)
+                FROM jsonb_array_elements(snapshot) WITH ORDINALITY AS t(e, ord))
+            WHERE snapshot @> jsonb_build_array(
+                      jsonb_build_object('table', 'preferences', 'key', $1::text))
             """,
             preference_id,
         )
         await conn.execute("DELETE FROM preferences WHERE id = $1", preference_id)
         await conn.execute(
-            """
-            INSERT INTO audit_log (actor, group_id, table_name, row_id, before, after)
-            VALUES ('user', pgledger_generate_id('und'), 'preferences', $1, $2, NULL)
-            """,
-            preference_id,
-            {"id": preference_id, "body": ""},
+            "INSERT INTO undo_log (actor, summary, snapshot) VALUES ('user', $1, $2)",
+            "Deleted a memory",
+            [
+                {
+                    "table": "preferences",
+                    "key": preference_id,
+                    "before": {"id": preference_id, "body": ""},
+                    "after": None,
+                }
+            ],
         )
     return {"status": "deleted", "id": preference_id}
 

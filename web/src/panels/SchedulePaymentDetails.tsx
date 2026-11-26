@@ -40,7 +40,7 @@ export function SchedulePaymentDetails({ event }: { event: UpcomingEvent }) {
                 <li key={payment.id}>
                   <div className="schedule-payment-copy">
                     <strong>{payment.description || "Recorded movement"}</strong>
-                    <span className="moneyv-meta">{formatDate(payment.date)} · {payment.active ? "Matched" : "Reversed · excluded"}</span>
+                    <span className="moneyv-meta">{formatDate(payment.date)} · Matched</span>
                     <code className="moneyv-meta">{payment.movement_id}</code>
                   </div>
                   <strong>{formatPaise(payment.amount_paise)}</strong>
@@ -51,7 +51,7 @@ export function SchedulePaymentDetails({ event }: { event: UpcomingEvent }) {
               ))}
             </ul>
           )}
-          <p className="moneyv-basis">Matching assigns existing ledger money; it does not record another transaction. Reversed movements do not count. Schedule confirmation does not mean paid.</p>
+          <p className="moneyv-basis">Matching assigns existing ledger money; it does not record another transaction. Schedule confirmation does not mean paid.</p>
           <Dialog.Close asChild><button type="button" className="ask-link" onClick={() => askAgent(matchPrompt)}>Find a payment</button></Dialog.Close>
         </Dialog.Content>
       </Dialog.Portal>

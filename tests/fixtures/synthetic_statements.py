@@ -192,11 +192,9 @@ async def _first_ledger_day(conn: Connection, account_id: str) -> date | None:
     row = await conn.fetchrow(
         """
         SELECT min(m.date) AS day
-        FROM pgledger_entries e
-        JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
+        FROM movement_legs ml
         JOIN movements m ON m.id = ml.movement_id
-        JOIN accounts a ON a.ledger_account_id = e.account_id
-        WHERE a.id = $1
+        WHERE ml.from_account_id = $1 OR ml.to_account_id = $1
         """,
         account_id,
     )

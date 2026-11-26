@@ -51,8 +51,8 @@ an investment.
   from a tool return or a script the agent ran in an isolated sandbox.
 - Affordability verdicts come from a seeded projection in plain Python. "Yes" means at least a 90%
   chance your balance stays above your floor, with no goal slipping and no bill missed.
-- One Postgres database holds the whole state, on a vendored copy of
-  [pgledger](https://github.com/pgr0ss/pgledger). Money is stored in integer paise.
+- One Postgres database holds the whole state, with a double-entry ledger enforced by
+  constraints. Money is stored in integer paise.
 - Text from statements and payee notes is treated as data. Wide changes (a category rule for every
   past row, archiving, settings) wait for your tap on a confirm card; everyday writes are instant
   and undoable.
@@ -152,7 +152,4 @@ tracks what's left. India is the only country implemented; everything India-spec
 Arno is [MIT licensed](LICENSE). Dependency licenses are checked by hand, and no GPL, AGPL,
 SSPL, or Elastic code ships in the Arno image; the optional Phoenix service is Elastic 2.0 and
 runs outside it.
-The double-entry core is [pgledger](https://github.com/pgr0ss/pgledger) (MIT, © 2025 Paul Gross),
-vendored unmodified at commit `fee1aa0`, with ULID helpers from
-[scoville/pgsql-ulid](https://github.com/scoville/pgsql-ulid) (BSD-3-Clause, © 2021 Scoville). No
-endorsement is implied. Full notices are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+Full third-party notices are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).

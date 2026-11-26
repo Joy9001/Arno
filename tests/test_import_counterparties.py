@@ -63,12 +63,11 @@ async def _expense(conn, account: dict) -> dict:
         WHERE kind = 'expense'
           AND EXISTS (
               SELECT 1 FROM movement_legs ml
-              JOIN pgledger_transfers t ON t.id = ml.transfer_id
               WHERE ml.movement_id = movements.id
-                AND t.from_account_id = $1
+                AND ml.from_account_id = $1
           )
         """,
-        account["ledger_account_id"],
+        account["id"],
     )
 
 

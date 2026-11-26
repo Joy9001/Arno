@@ -105,8 +105,8 @@ async def run_compute[**P, R](fn: Callable[P, R], /, *args: P.args, **kwargs: P.
     return await asyncio.shield(worker)
 
 
-async def _balance_at(conn: Connection, ledger_account_id: str, as_of: date) -> int:
-    return (await ledger_balances_at(conn, [ledger_account_id], as_of))[ledger_account_id]
+async def _balance_at(conn: Connection, account_id: str, as_of: date) -> int:
+    return (await ledger_balances_at(conn, [account_id], as_of))[account_id]
 
 
 async def _horizon_for_loading(
@@ -134,32 +134,32 @@ async def _horizon_for_loading(
 
 
 async def _last_movements(
-    conn: Connection, ledger_account_ids: list[str], as_of: date
+    conn: Connection, account_ids: list[str], as_of: date
 ) -> dict[str, date | None]:
     """The date of each account's last movement on or before ``as_of``."""
-    if not ledger_account_ids:
+    if not account_ids:
         return {}
     # Same `ARRAY(SELECT unnest(...))` generic-plan idiom as `ledger_balances_at`.
     rows = await conn.fetch(
         """
-        SELECT e.account_id, max(m.date) AS last_date
-        FROM pgledger_entries e
-        JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
+        SELECT a.id AS account_id, max(m.date) AS last_date
+        FROM movement_legs ml
         JOIN movements m ON m.id = ml.movement_id
-        WHERE e.account_id = ANY(ARRAY(SELECT unnest($1::text[])))
+        JOIN accounts a ON a.id IN (ml.from_account_id, ml.to_account_id)
+        WHERE a.id = ANY(ARRAY(SELECT unnest($1::text[])))
           AND m.date <= $2
-        GROUP BY e.account_id
+        GROUP BY a.id
         """,
-        ledger_account_ids,
+        account_ids,
         as_of,
     )
     by_id = {str(row["account_id"]): row["last_date"] for row in rows}
-    return {account_id: by_id.get(account_id) for account_id in ledger_account_ids}
+    return {account_id: by_id.get(account_id) for account_id in account_ids}
 
 
-async def _last_movement(conn: Connection, ledger_account_id: str, as_of: date) -> date | None:
+async def _last_movement(conn: Connection, account_id: str, as_of: date) -> date | None:
     """The date of the account's last movement on or before ``as_of``."""
-    return (await _last_movements(conn, [ledger_account_id], as_of))[ledger_account_id]
+    return (await _last_movements(conn, [account_id], as_of))[account_id]
 
 
 # An account is known on a day when its row existed then, or when the ledger already held an entry
@@ -168,10 +168,9 @@ async def _last_movement(conn: Connection, ledger_account_id: str, as_of: date) 
 _KNOWN_ON_DAY = """
           AND (NOT $2 OR (created_at AT TIME ZONE 'Asia/Kolkata')::date <= $1
                OR EXISTS (
-                   SELECT 1 FROM pgledger_entries e
-                   JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
+                   SELECT 1 FROM movement_legs ml
                    JOIN movements m ON m.id = ml.movement_id
-                   WHERE e.account_id = v_accounts.ledger_account_id
+                   WHERE v_accounts.id IN (ml.from_account_id, ml.to_account_id)
                      AND m.date <= $1
                ))
 """
@@ -189,14 +188,14 @@ async def _card_rows(
         as_of,
         known_then,
     )
-    ledger_ids = [str(row["ledger_account_id"]) for row in rows]
+    ledger_ids = [str(row["id"]) for row in rows]
     balances = await ledger_balances_at(conn, ledger_ids, as_of)
     last_dates = await _last_movements(conn, ledger_ids, as_of)
     unbilled = await schedules_mod.card_unbilled(conn, rows, as_of)
     cards: list[dict[str, Any]] = []
     gaps: list[str] = []
     for row in rows:
-        ledger_id = str(row["ledger_account_id"])
+        ledger_id = str(row["id"])
         balance = balances[ledger_id]
         outstanding = max(-balance, 0)
         stated = row["statement_balance_as_of"]
@@ -237,13 +236,13 @@ async def _liquid_rows(
         as_of,
         known_then,
     )
-    ledger_ids = [str(row["ledger_account_id"]) for row in rows]
+    ledger_ids = [str(row["id"]) for row in rows]
     balances = await ledger_balances_at(conn, ledger_ids, as_of)
     last_dates = await _last_movements(conn, ledger_ids, as_of)
     accounts: list[dict[str, Any]] = []
     gaps: list[str] = []
     for row in rows:
-        ledger_id = str(row["ledger_account_id"])
+        ledger_id = str(row["id"])
         balance = balances[ledger_id]
         stated = row["statement_balance_as_of"]
         # A statement dated after as_of says nothing about the balance on as_of.
@@ -283,22 +282,10 @@ async def _goals(conn: Connection, as_of: date, *, known_then: bool) -> list[dic
         known_then,
     )
     account_ids = [str(row["account_id"]) for row in rows if row.get("account_id")]
-    ledger_by_account: dict[str, str] = {}
-    if account_ids:
-        account_rows = await conn.fetch(
-            """
-            SELECT id, ledger_account_id
-            FROM accounts
-            WHERE id = ANY(ARRAY(SELECT unnest($1::text[])))
-            """,
-            account_ids,
-        )
-        ledger_by_account = {str(acc["id"]): str(acc["ledger_account_id"]) for acc in account_rows}
-    balances = await ledger_balances_at(conn, list(ledger_by_account.values()), as_of)
+    balances = await ledger_balances_at(conn, account_ids, as_of)
     goals: list[dict[str, Any]] = []
     for row in rows:
-        ledger_id = ledger_by_account.get(str(row["account_id"]))
-        saved = balances.get(ledger_id, 0) if ledger_id else 0
+        saved = balances.get(str(row["account_id"]), 0)
         goals.append(
             {
                 **dict(row),
@@ -323,13 +310,11 @@ async def _spend_rows(
                sum(v.amount_paise)::bigint AS amount_paise
         FROM v_spending v
         JOIN movements m ON m.id = v.movement_id
-        JOIN pgledger_transfers t ON t.id = v.transfer_id
-        JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
-        JOIN accounts ta ON ta.ledger_account_id = t.to_account_id
-        JOIN v_movement_state ms ON ms.movement_id = v.movement_id
+        JOIN movement_legs ml ON ml.transfer_id = v.transfer_id
+        JOIN accounts fa ON fa.id = ml.from_account_id
+        JOIN accounts ta ON ta.id = ml.to_account_id
         WHERE v.date BETWEEN $1 AND $2
           AND v.amount_paise > 0
-          AND ms.is_effective
           AND NOT m.one_off
           AND NOT EXISTS (
               SELECT 1 FROM schedule_payments sp
@@ -480,22 +465,24 @@ async def _owed_events(
     conn: Connection, *, as_of: date, end: date, known_then: bool
 ) -> tuple[list[CashEvent], list[SourceRef], list[str]]:
     # The person account's balance is what is still owed; a label's transfer amount is not.
-    # Reading the label amount counted a repaid or reversed split as an expected receipt.
+    # Reading the label amount counted a repaid split as an expected receipt.
     rows = await conn.fetch(
         """
         SELECT p.id AS payee_id, p.display_name, p.outside_text,
-               coalesce(sum(e.amount), 0)::bigint AS balance_paise,
+               coalesce(sum(CASE WHEN ml.to_account_id = a.id THEN ml.amount_paise
+                                 ELSE -ml.amount_paise END), 0)::bigint AS balance_paise,
                min(ml.expected_date) AS expected_date
         FROM accounts a
         JOIN payees p ON p.person_account_id = a.id
-        LEFT JOIN pgledger_entries e ON e.account_id = a.ledger_account_id
-        LEFT JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
+        LEFT JOIN movement_legs ml ON a.id IN (ml.from_account_id, ml.to_account_id)
         LEFT JOIN movements m ON m.id = ml.movement_id
         WHERE a.kind = 'person'
           AND (NOT $2 OR (a.created_at AT TIME ZONE 'Asia/Kolkata')::date <= $1)
           AND m.date <= $1
         GROUP BY p.id, p.display_name, p.outside_text
-        HAVING coalesce(sum(e.amount), 0) <> 0 AND min(ml.expected_date) IS NOT NULL
+        HAVING coalesce(sum(CASE WHEN ml.to_account_id = a.id THEN ml.amount_paise
+                                 ELSE -ml.amount_paise END), 0) <> 0
+           AND min(ml.expected_date) IS NOT NULL
         ORDER BY min(ml.expected_date), p.display_name
         """,
         as_of,
@@ -760,8 +747,7 @@ async def _load_snapshot(
                 FROM schedule_occurrences o
                 JOIN schedule_payments p ON p.occurrence_id = o.id
                 JOIN movements m ON m.id = p.movement_id
-                JOIN v_movement_state ms ON ms.movement_id = m.id
-                WHERE o.schedule_id = ANY($1::text[]) AND ms.is_effective
+                WHERE o.schedule_id = ANY($1::text[])
                   AND m.date BETWEEN $2 AND $3
                 """,
                 sorted({schedule_id for schedule_id, _ in scheduled_categories}),

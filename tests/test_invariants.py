@@ -68,7 +68,7 @@ async def test_the_invariant_compares_payment_status_to_effective_evidence(ledge
     )
 
 
-async def test_undo_keeps_the_reversed_pair_categorised(ledger):
+async def test_undo_keeps_the_ledger_clean(ledger):
     bank = await create_account(
         ledger, kind="bank", name="Undo bank", opening_balance_paise=10_000_000
     )
@@ -311,16 +311,8 @@ class _Books:
         result = await write_tools.correct_movement(
             self.conn, movement_id=record["id"], changes=changes, message_id=None
         )
-        record["active"] = False
-        self.records.append(
-            {
-                "id": result["movement"]["id"],
-                "kind": result["movement"]["kind"],
-                "undo_id": result["undo_id"],
-                "amount_paise": int(result["movement"]["amount_paise"]),
-                "active": True,
-            }
-        )
+        record["undo_id"] = result["undo_id"]
+        record["amount_paise"] = int(result["movement"]["amount_paise"])
 
     async def undo(self) -> None:
         candidates = [record for record in self.records if record["active"]]
@@ -437,79 +429,27 @@ async def _broken_transfer(
     from_account_id: str,
     to_account_id: str,
     amount_paise: int,
-    reverses_id: str | None = None,
     when: date | None = None,
 ) -> str:
-    """Insert a balanced movement whose shape breaks one kind's posting rule."""
-    when = when or ledger_today()
-    from_row = await conn.fetchrow(
-        "SELECT ledger_account_id FROM accounts WHERE id = $1", from_account_id
-    )
-    to_row = await conn.fetchrow(
-        "SELECT ledger_account_id FROM accounts WHERE id = $1", to_account_id
-    )
+    """Insert a movement with one leg whose shape breaks one kind's posting rule."""
     movement_id = f"mov_test_{uuid.uuid4().hex}"
-    transfer_id = f"pglt_test_{uuid.uuid4().hex}"
     await conn.execute(
-        """
-        INSERT INTO movements (id, date, description, kind, reverses_id)
-        VALUES ($1, $2, $3, $4, $5)
-        """,
+        "INSERT INTO movements (id, date, description, kind) VALUES ($1, $2, $3, $4)",
         movement_id,
-        when,
+        when or ledger_today(),
         "Planted broken movement",
         kind,
-        reverses_id,
     )
     await conn.execute(
         """
-        INSERT INTO pgledger_transfers
-            (id, from_account_id, to_account_id, amount, created_at, event_at)
-        VALUES ($1, $2, $3, $4, now(), now())
+        INSERT INTO movement_legs (movement_id, from_account_id, to_account_id, amount_paise)
+        VALUES ($1, $2, $3, $4)
         """,
-        transfer_id,
-        from_row["ledger_account_id"],
-        to_row["ledger_account_id"],
+        movement_id,
+        from_account_id,
+        to_account_id,
         amount_paise,
     )
-    await conn.execute(
-        """
-        INSERT INTO movement_legs (transfer_id, movement_id)
-        VALUES ($1, $2)
-        """,
-        transfer_id,
-        movement_id,
-    )
-    for ledger_id, signed in (
-        (from_row["ledger_account_id"], -amount_paise),
-        (to_row["ledger_account_id"], amount_paise),
-    ):
-        account = await conn.fetchrow(
-            "SELECT balance, version FROM pgledger_accounts WHERE id = $1 FOR UPDATE", ledger_id
-        )
-        previous = int(account["balance"])
-        version = int(account["version"]) + 1
-        await conn.execute(
-            """
-            INSERT INTO pgledger_entries
-                (account_id, transfer_id, amount, account_previous_balance,
-                 account_current_balance, account_version, created_at)
-            VALUES ($1, $2, $3, $4, $5, $6, now())
-            """,
-            ledger_id,
-            transfer_id,
-            signed,
-            previous,
-            previous + signed,
-            version,
-        )
-        await conn.execute(
-            "UPDATE pgledger_accounts SET balance = $1, version = $2, updated_at = now() "
-            "WHERE id = $3",
-            previous + signed,
-            version,
-            ledger_id,
-        )
     return movement_id
 
 
@@ -523,11 +463,15 @@ async def _in_savepoint(conn, mutate) -> list[Violation]:
         await transaction.rollback()
 
 
+async def _doubled_summary(*_args) -> dict[str, int]:
+    return {"Food & Dining": 1}
+
+
 def _codes(violations: list[Violation]) -> set[str]:
     return {violation.code for violation in violations}
 
 
-async def test_each_invariant_is_caught(ledger):
+async def test_each_invariant_is_caught(ledger, monkeypatch):
     bank = await create_account(
         ledger, kind="bank", name="Case bank", opening_balance_paise=10_000_000
     )
@@ -561,14 +505,38 @@ async def test_each_invariant_is_caught(ledger):
     equity = await ledger.fetchrow("SELECT id FROM accounts WHERE kind = 'equity'")
     person_account = str(person["person_account_id"])
 
-    async def unbalanced():
-        transfer = await ledger.fetchrow(
-            "SELECT transfer_id AS id FROM movement_legs WHERE movement_id = $1",
+    async def bad_leg():
+        # The table's own CHECKs normally refuse these; drop them so the checker is what notices.
+        for name in await ledger.fetch(
+            "SELECT conname FROM pg_constraint "
+            "WHERE conrelid = 'movement_legs'::regclass AND contype = 'c'"
+        ):
+            await ledger.execute(f'ALTER TABLE movement_legs DROP CONSTRAINT "{name["conname"]}"')
+        await ledger.execute(
+            "UPDATE movement_legs SET amount_paise = 0, to_account_id = from_account_id "
+            "WHERE movement_id = $1",
             expense_id,
         )
+
+    async def float_money():
+        await ledger.execute("ALTER TABLE movement_legs ADD COLUMN extra_paise numeric")
+
+    async def undo_shape():
         await ledger.execute(
-            "UPDATE pgledger_entries SET amount = amount + 1 WHERE transfer_id = $1",
-            transfer["id"],
+            "INSERT INTO undo_log (actor, summary, snapshot) "
+            "VALUES ('system', 'bad', '[{\"table\": \"movements\"}]')"
+        )
+
+    async def undo_clock():
+        await ledger.execute(
+            "INSERT INTO undo_log (actor, summary, snapshot, undone_at) "
+            "VALUES ('system', 'backwards', '[]', now() - interval '1 day')"
+        )
+
+    async def undo_lost_row():
+        await ledger.execute(
+            "INSERT INTO undo_log (actor, summary, snapshot) VALUES ('system', 'lost', $1)",
+            [{"table": "movements", "key": "mov_never_existed", "before": None, "after": {}}],
         )
 
     async def expense_shape():
@@ -641,91 +609,6 @@ async def test_each_invariant_is_caught(ledger):
             from_account_id=bank["id"],
             to_account_id=str(asset["id"]),
             amount_paise=1_000,
-        )
-
-    async def reversal_shape():
-        await _broken_transfer(
-            ledger,
-            kind="reversal",
-            from_account_id=bank["id"],
-            to_account_id=str(spending["id"]),
-            amount_paise=10_000,
-            reverses_id=expense_id,
-        )
-
-    async def reversed_pair_net():
-        reversal = await _broken_transfer(
-            ledger,
-            kind="reversal",
-            from_account_id=str(spending["id"]),
-            to_account_id=bank["id"],
-            amount_paise=10_000,
-            reverses_id=expense_id,
-        )
-        reversal_transfer = await ledger.fetchrow(
-            "SELECT transfer_id AS id FROM movement_legs WHERE movement_id = $1", reversal
-        )
-        account = await ledger.fetchrow(
-            "SELECT balance, version FROM pgledger_accounts WHERE id = "
-            "(SELECT ledger_account_id FROM accounts WHERE id = $1) FOR UPDATE",
-            spending["id"],
-        )
-        version = int(account["version"]) + 1
-        await ledger.execute(
-            """
-            INSERT INTO pgledger_entries
-                (account_id, transfer_id, amount, account_previous_balance,
-                 account_current_balance, account_version, created_at)
-            VALUES ((SELECT ledger_account_id FROM accounts WHERE id = $1), $2, 500, $3, $4,
-                    $5, now())
-            """,
-            spending["id"],
-            reversal_transfer["id"],
-            int(account["balance"]),
-            int(account["balance"]) + 500,
-            version,
-        )
-        await ledger.execute(
-            "UPDATE pgledger_accounts SET balance = balance + 500, version = $1 WHERE id = ("
-            "SELECT ledger_account_id FROM accounts WHERE id = $2)",
-            version,
-            spending["id"],
-        )
-
-    async def cross_path():
-        old_when = ledger_today() - timedelta(days=41)
-        new_when = ledger_today() - timedelta(days=1)
-        movement = await write_tools.record_movement(
-            ledger,
-            {
-                "kind": "expense",
-                "amount_rupees": "100.00",
-                "account": "Case bank",
-                "description": "Cross-path expense",
-                "date": old_when.isoformat(),
-            },
-            message_id=None,
-            conversation_id=None,
-            not_duplicate=True,
-        )
-        await write_tools.correct_movement(
-            ledger,
-            movement_id=movement["movement_id"],
-            changes={"delete": True},
-            message_id=None,
-        )
-        reversal = await ledger.fetchrow(
-            "SELECT id FROM movements WHERE reverses_id = $1", movement["movement_id"]
-        )
-        await ledger.execute(
-            "UPDATE movements SET date = $1 WHERE id = $2", new_when, reversal["id"]
-        )
-
-    async def balance_view():
-        await ledger.execute(
-            "UPDATE pgledger_accounts SET balance = balance + 1 WHERE id = "
-            "(SELECT ledger_account_id FROM accounts WHERE id = $1)",
-            bank["id"],
         )
 
     async def owed_view():
@@ -822,7 +705,7 @@ async def test_each_invariant_is_caught(ledger):
     async def person_without_payee():
         await create_account(ledger, kind="person", name="Ghost person")
 
-    async def movement_without_transfer():
+    async def movement_without_leg():
         await ledger.execute(
             """
             INSERT INTO movements (id, date, description, kind)
@@ -833,7 +716,11 @@ async def test_each_invariant_is_caught(ledger):
         )
 
     cases = (
-        (unbalanced, {"ledger_transfer_unbalanced", "account_balance_mismatch"}),
+        (bad_leg, {"leg_not_positive_between_two_accounts"}),
+        (float_money, {"money_column_not_integer"}),
+        (undo_shape, {"undo_snapshot_shape"}),
+        (undo_clock, {"undo_undone_before_created"}),
+        (undo_lost_row, {"undo_created_row_missing"}),
         (expense_shape, {"expense_postings"}),
         (income_shape, {"income_postings"}),
         (transfer_shape, {"transfer_postings"}),
@@ -842,16 +729,12 @@ async def test_each_invariant_is_caught(ledger):
         (refund_shape, {"refund_postings"}),
         (settlement_shape, {"settlement_postings"}),
         (adjustment_shape, {"adjustment_postings"}),
-        (reversal_shape, {"reversal_not_opposite"}),
-        (reversed_pair_net, {"reversed_pair_not_net_zero"}),
-        (cross_path, {"cross_path_spending_mismatch"}),
-        (balance_view, {"balance_view_mismatch"}),
         (owed_view, {"owed_from_unexpected_kind"}),
         (schedule_capacity, {"schedule_payment_capacity"}),
         (uncommitted_import, {"movement_from_uncommitted_import"}),
         (unverified_import, {"unverified_import_committed"}),
         (person_without_payee, {"person_account_without_payee"}),
-        (movement_without_transfer, {"movement_without_transfer"}),
+        (movement_without_leg, {"movement_without_leg"}),
     )
     assert card["id"]
     assert equity["id"]
@@ -861,6 +744,11 @@ async def test_each_invariant_is_caught(ledger):
         assert not missing, (
             f"{mutate.__name__} did not fire {sorted(missing)}; got {sorted(_codes(violations))}"
         )
+
+    # The four spending paths all read the same legs, so a disagreement is planted in one of them.
+    with monkeypatch.context() as patch:
+        patch.setattr("tests.invariants._spending_from_summary", _doubled_summary)
+        assert "cross_path_spending_mismatch" in _codes(await check_ledger(ledger))
 
     # The rolled-back cases left the baseline ledger untouched.
     _clean(await check_ledger(ledger))

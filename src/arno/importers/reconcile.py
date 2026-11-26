@@ -53,9 +53,7 @@ async def insert_lines(
         return []
     # Ids from one instant do not sort in insertion order, so the parser's own row order is
     # stored beside the line. The gate's replay and the transfer suggestions read it.
-    ids = await conn.fetch(
-        "SELECT pgledger_generate_id('stl') AS id FROM generate_series(1, $1)", len(rows)
-    )
+    ids = await conn.fetch("SELECT new_id('stl') AS id FROM generate_series(1, $1)", len(rows))
     batch: list[dict[str, Any]] = []
     seen: dict[str, int] = {}
     for index, row in enumerate(rows):
@@ -167,7 +165,6 @@ async def _preload(
             account["id"],
         )
     }
-    ledger_id = account["ledger_account_id"]
     days = [_as_date(line["date"]) for line in lines]
     rows = await conn.fetch(
         """
@@ -178,8 +175,8 @@ async def _preload(
             m.kind,
             sum(
                 CASE
-                    WHEN t.from_account_id = $1 THEN -t.amount
-                    WHEN t.to_account_id = $1 THEN t.amount
+                    WHEN ml.from_account_id = $1 THEN -ml.amount_paise
+                    WHEN ml.to_account_id = $1 THEN ml.amount_paise
                     ELSE 0
                 END
             )::bigint AS net_paise,
@@ -200,16 +197,13 @@ async def _preload(
                   AND i.account_id = $4
             ), '{}') AS claimed_by
         FROM movements m
-        JOIN v_movement_state ms ON ms.movement_id = m.id
         JOIN movement_legs ml ON ml.movement_id = m.id
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
-        WHERE ms.is_effective
-          AND m.date BETWEEN $2 AND $3
-          AND (t.from_account_id = $1 OR t.to_account_id = $1)
+        WHERE m.date BETWEEN $2 AND $3
+          AND (ml.from_account_id = $1 OR ml.to_account_id = $1)
         GROUP BY m.id, m.date, m.description, m.kind
         ORDER BY m.date, m.id
         """,
-        ledger_id,
+        account["id"],
         min(days) - timedelta(days=3),
         max(days) + timedelta(days=3),
         account["id"],
@@ -570,7 +564,6 @@ async def _logged_not_on_statement(
 ) -> list[dict[str, Any]]:
     if period is None:
         return []
-    ledger_id = account["ledger_account_id"]
     rows = await conn.fetch(
         """
         SELECT
@@ -579,18 +572,15 @@ async def _logged_not_on_statement(
             m.description,
             abs(sum(
                 CASE
-                    WHEN t.from_account_id = $1 THEN t.amount
-                    WHEN t.to_account_id = $2 THEN -t.amount
+                    WHEN ml.from_account_id = $1 THEN ml.amount_paise
+                    WHEN ml.to_account_id = $1 THEN -ml.amount_paise
                     ELSE 0
                 END
             ))::bigint AS amount_paise
         FROM movements m
-        JOIN v_movement_state ms ON ms.movement_id = m.id
         JOIN movement_legs ml ON ml.movement_id = m.id
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
-        WHERE ms.is_effective
-          AND m.date BETWEEN $3 AND $4
-          AND (t.from_account_id = $5 OR t.to_account_id = $6)
+        WHERE m.date BETWEEN $2 AND $3
+          AND (ml.from_account_id = $1 OR ml.to_account_id = $1)
           AND EXISTS (
               SELECT 1 FROM captures c
               WHERE c.movement_id = m.id AND c.kind IN ('chat', 'photo', 'voice')
@@ -602,12 +592,9 @@ async def _logged_not_on_statement(
         GROUP BY m.id, m.date, m.description
         ORDER BY m.date, m.id
         """,
-        ledger_id,
-        ledger_id,
+        account["id"],
         period[0],
         period[1],
-        ledger_id,
-        ledger_id,
     )
     return [
         {

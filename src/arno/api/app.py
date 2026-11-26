@@ -36,12 +36,7 @@ from arno.api.middleware import SecurityHeadersMiddleware
 from arno.api.problems import problem
 from arno.config import Settings, get_settings
 from arno.db.bootstrap import set_agent_ro_password, set_backup_password, warn_if_superuser
-from arno.db.conn import (
-    ConnectionCache,
-    bind_connection_cache,
-    close_connection_cache,
-    connect,
-)
+from arno.db.conn import close_pool, connect, open_pool
 from arno.db.migrate import run_migrations
 from arno.db.pre_migration import dump_before_migrating
 from arno.jobs import loop as job_loop
@@ -77,13 +72,13 @@ async def _bootstrap(settings: Settings) -> list[int]:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-    db_cache: ConnectionCache | None = None
+    pool: asyncpg.Pool | None = None
     await _bootstrap(app.state.settings)
     async with connect(app.state.settings.database_url) as conn:
         recovered = await recover_crashed_runs(conn)
         if recovered:
             logger.warning("recovered %d interrupted chat turn(s)", len(recovered))
-    db_cache = bind_connection_cache(app.state.settings.database_url)
+    pool = await open_pool(app.state.settings.database_url)
     try:
         app.state.agent = build_agent()
         app.state.turns = TurnManager(app.state.agent)
@@ -105,8 +100,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
             if turns is not None:
                 await turns.drain()
         finally:
-            if db_cache is not None:
-                await close_connection_cache(db_cache)
+            if pool is not None:
+                await close_pool(pool)
             shutdown_observability()
 
 

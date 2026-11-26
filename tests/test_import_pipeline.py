@@ -86,15 +86,15 @@ async def test_a_statement_reaches_review_and_commits(ledger):
     assert attachment["data"] is not None and attachment["purged_at"] is None
 
     account_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
-    assert await ledger_balance(ledger, account_row["ledger_account_id"]) == 34402890
+    assert await ledger_balance(ledger, account_row["id"]) == 34402890
     assert account_row["statement_balance_paise"] == 34402890
     assert str(account_row["statement_balance_as_of"]) == "2026-04-30"
 
     undo = await undo_import(ledger, row["id"])
     assert undo["status"] == "undone"
     account_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
-    # Every imported movement was reversed; the opening balance remains.
-    assert await ledger_balance(ledger, account_row["ledger_account_id"]) == 24567890
+    # Every imported movement was deleted; the opening balance remains.
+    assert await ledger_balance(ledger, account_row["id"]) == 24567890
     assert account_row["statement_balance_paise"] == 24567890
     assert str(account_row["statement_balance_as_of"]) == "2026-03-31"
 
@@ -434,7 +434,7 @@ async def test_commit_books_an_own_account_line_as_a_transfer(ledger):
         opening_balance_as_of=date(2026, 3, 31),
     )
     spending = await system_account(ledger, "spending")
-    spending_before = await ledger_balance(ledger, spending["ledger_account_id"])
+    spending_before = await ledger_balance(ledger, spending["id"])
 
     import_id, _raw_account = await _review_import(
         ledger,
@@ -488,11 +488,9 @@ async def test_commit_books_an_own_account_line_as_a_transfer(ledger):
 
     account_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
     other_after = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", other["id"])
-    assert (
-        await ledger_balance(ledger, account_row["ledger_account_id"]) == 24567890 - 45000 - 120000
-    )
-    assert await ledger_balance(ledger, other_after["ledger_account_id"]) == 100000 + 45000
-    assert await ledger_balance(ledger, spending["ledger_account_id"]) == spending_before + 120000
+    assert await ledger_balance(ledger, account_row["id"]) == 24567890 - 45000 - 120000
+    assert await ledger_balance(ledger, other_after["id"]) == 100000 + 45000
+    assert await ledger_balance(ledger, spending["id"]) == spending_before + 120000
 
     first = await ledger.fetchrow(
         """
@@ -521,7 +519,7 @@ async def test_commit_books_an_own_account_line_as_a_transfer(ledger):
 
     await undo_import(ledger, import_id)
     account_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", account["id"])
-    assert await ledger_balance(ledger, account_row["ledger_account_id"]) == 24567890
+    assert await ledger_balance(ledger, account_row["id"]) == 24567890
 
 
 async def _card(conn, *, opening_paise: int | None = 0, last4: str = "4242") -> dict:
@@ -573,7 +571,7 @@ async def _line(conn, import_id: str, index: int = 0) -> dict:
 async def test_a_card_refund_offsets_spending_and_never_becomes_income(ledger):
     card = await _card(ledger)
     spending = await system_account(ledger, "spending")
-    before = await ledger_balance(ledger, spending["ledger_account_id"])
+    before = await ledger_balance(ledger, spending["id"])
     food = await ledger.fetchrow("SELECT id FROM categories WHERE name = 'Food & Dining'")
     import_id, _ = await _review_import(
         ledger,
@@ -593,9 +591,9 @@ async def test_a_card_refund_offsets_spending_and_never_becomes_income(ledger):
     )
     await commit_import(ledger, import_id)
 
-    assert await ledger_balance(ledger, spending["ledger_account_id"]) == before - 10395
+    assert await ledger_balance(ledger, spending["id"]) == before - 10395
     card_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", card["id"])
-    assert await ledger_balance(ledger, card_row["ledger_account_id"]) == 10395
+    assert await ledger_balance(ledger, card_row["id"]) == 10395
     movement = await ledger.fetchrow(
         """
         SELECT m.id, m.kind FROM statement_lines sl JOIN movements m ON m.id = sl.movement_id
@@ -622,7 +620,7 @@ async def test_a_card_repayment_debits_the_chosen_bank_and_reduces_the_card_liab
     )
     card = await _card(ledger, opening_paise=-100000)
     spending = await system_account(ledger, "spending")
-    spending_before = await ledger_balance(ledger, spending["ledger_account_id"])
+    spending_before = await ledger_balance(ledger, spending["id"])
     import_id, _ = await _review_import(
         ledger,
         card,
@@ -643,9 +641,9 @@ async def test_a_card_repayment_debits_the_chosen_bank_and_reduces_the_card_liab
 
     bank_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", bank["id"])
     card_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", card["id"])
-    assert await ledger_balance(ledger, bank_row["ledger_account_id"]) == 100000 - 42800
-    assert await ledger_balance(ledger, card_row["ledger_account_id"]) == -100000 + 42800
-    assert await ledger_balance(ledger, spending["ledger_account_id"]) == spending_before
+    assert await ledger_balance(ledger, bank_row["id"]) == 100000 - 42800
+    assert await ledger_balance(ledger, card_row["id"]) == -100000 + 42800
+    assert await ledger_balance(ledger, spending["id"]) == spending_before
     assert await ledger.fetchval("SELECT count(*) FROM movements WHERE kind = 'income'") == 0
     movement = await ledger.fetchrow(
         """
@@ -740,7 +738,7 @@ async def test_a_card_repayment_rejects_a_missing_same_or_system_funding_account
 async def test_explicit_other_income_is_still_possible_for_a_card_credit(ledger):
     card = await _card(ledger)
     spending = await system_account(ledger, "spending")
-    spending_before = await ledger_balance(ledger, spending["ledger_account_id"])
+    spending_before = await ledger_balance(ledger, spending["id"])
     import_id, _ = await _review_import(
         ledger,
         card,
@@ -766,7 +764,7 @@ async def test_explicit_other_income_is_still_possible_for_a_card_credit(ledger)
         line["id"],
     )
     assert movement["kind"] == "income"
-    assert await ledger_balance(ledger, spending["ledger_account_id"]) == spending_before
+    assert await ledger_balance(ledger, spending["id"]) == spending_before
 
 
 async def test_a_confirmed_suggested_transfer_on_a_card_credit_still_commits(ledger):
@@ -807,7 +805,7 @@ async def test_a_confirmed_suggested_transfer_on_a_card_credit_still_commits(led
     )
     assert movement["kind"] == "transfer"
     bank_row = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", bank["id"])
-    assert await ledger_balance(ledger, bank_row["ledger_account_id"]) == 100000 - 42800
+    assert await ledger_balance(ledger, bank_row["id"]) == 100000 - 42800
 
 
 async def _assumed_zero_review(conn, account: dict, rows: list[dict], closing: int) -> str:
@@ -954,7 +952,7 @@ async def test_a_failed_commit_writes_nothing_and_stays_in_review(ledger):
         "SELECT match_state, movement_id FROM statement_lines WHERE import_id = $1", import_id
     )
     assert all(line["match_state"] == "new" and line["movement_id"] is None for line in lines)
-    assert await ledger_balance(ledger, account["ledger_account_id"]) == 100000
+    assert await ledger_balance(ledger, account["id"]) == 100000
 
     # The import is not wedged: ignoring the bad row lets the rest commit exactly once.
     zero = await ledger.fetchrow(
@@ -963,7 +961,7 @@ async def test_a_failed_commit_writes_nothing_and_stays_in_review(ledger):
     await resolve_line(ledger, import_id=import_id, line_id=zero["id"], resolution="ignore")
     await commit_import(ledger, import_id)
     assert await ledger.fetchval("SELECT count(*) FROM movements WHERE kind = 'expense'") == 1
-    assert await ledger_balance(ledger, account["ledger_account_id"]) == 100000 - 45000
+    assert await ledger_balance(ledger, account["id"]) == 100000 - 45000
 
 
 async def test_committing_twice_books_once(ledger):
@@ -976,7 +974,7 @@ async def test_committing_twice_books_once(ledger):
     assert first["status"] == "committed"
     assert second["already"] is True
     assert await ledger.fetchval("SELECT count(*) FROM movements WHERE kind = 'expense'") == 1
-    assert await ledger_balance(ledger, account["ledger_account_id"]) == 100000 - 45000
+    assert await ledger_balance(ledger, account["id"]) == 100000 - 45000
 
 
 async def test_two_concurrent_commits_book_once(ledger):
@@ -993,7 +991,7 @@ async def test_two_concurrent_commits_book_once(ledger):
     assert {result["status"] for result in results} == {"committed"}
     assert sum(1 for result in results if not result.get("already")) == 1
     assert await ledger.fetchval("SELECT count(*) FROM movements WHERE kind = 'expense'") == 1
-    assert await ledger_balance(ledger, account["ledger_account_id"]) == 100000 - 45000
+    assert await ledger_balance(ledger, account["id"]) == 100000 - 45000
 
 
 async def test_a_failed_undo_leaves_the_import_whole(ledger):
@@ -1018,18 +1016,17 @@ async def test_a_failed_undo_leaves_the_import_whole(ledger):
     with pytest.raises(ConflictLedgerError):
         await undo_import(ledger, import_id)
 
-    # Nothing is half-reverted: the second line's movement is still effective.
-    assert await ledger_balance(ledger, account["ledger_account_id"]) == 100000 - 65000
+    # Nothing is half-undone: the second line's movement is still effective.
+    assert await ledger_balance(ledger, account["id"]) == 100000 - 65000
     assert await ledger.fetchval("SELECT status FROM imports WHERE id = $1", import_id) == (
         "committed"
     )
-    assert await ledger.fetchval("SELECT count(*) FROM movements WHERE kind = 'reversal'") == 0
 
 
 async def test_a_closing_adjustment_is_visible_and_never_consumption(ledger):
     account = await helpers.bank(ledger)
     spending = await system_account(ledger, "spending")
-    before = await ledger_balance(ledger, spending["ledger_account_id"])
+    before = await ledger_balance(ledger, spending["id"])
     # The ledger holds one logged row the statement does not, and the statement's closing is
     # lower than the ledger, so commit writes a visible adjustment.
     await movements_mod.record_expense(
@@ -1048,9 +1045,9 @@ async def test_a_closing_adjustment_is_visible_and_never_consumption(ledger):
     result = await commit_import(ledger, import_id, adjustment_confirmed=True)
 
     assert result["adjustment_paise"] == -5000
-    assert await ledger_balance(ledger, account["ledger_account_id"]) == 45000
+    assert await ledger_balance(ledger, account["id"]) == 45000
     # Spending rose by the statement row only; the adjustment touches equity, not spending.
-    assert await ledger_balance(ledger, spending["ledger_account_id"]) == before + 5000 + 45000
+    assert await ledger_balance(ledger, spending["id"]) == before + 5000 + 45000
     adjustment = await ledger.fetchrow(
         "SELECT * FROM movements WHERE kind = 'adjustment' ORDER BY created_at DESC"
     )
@@ -1058,11 +1055,10 @@ async def test_a_closing_adjustment_is_visible_and_never_consumption(ledger):
     to_spending = await ledger.fetchval(
         """
         SELECT count(*) FROM movement_legs ml
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
-        WHERE ml.movement_id = $1 AND t.to_account_id = $2
+        WHERE ml.movement_id = $1 AND ml.to_account_id = $2
         """,
         adjustment["id"],
-        spending["ledger_account_id"],
+        spending["id"],
     )
     assert to_spending == 0
 
@@ -1111,7 +1107,7 @@ async def test_a_wrong_direction_merge_is_refused_before_any_write(ledger):
 async def test_a_card_statement_with_the_ledger_opening_books_no_adjustment(ledger):
     card = await helpers.card(ledger, opening_paise=-100000)
     spending = await system_account(ledger, "spending")
-    spending_before = await ledger_balance(ledger, spending["ledger_account_id"])
+    spending_before = await ledger_balance(ledger, spending["id"])
     payload = card_statement(
         [
             ("03/04/2026", "SWIGGY BANGALORE", "-350.00"),
@@ -1136,9 +1132,9 @@ async def test_a_card_statement_with_the_ledger_opening_books_no_adjustment(ledg
     committed = await commit_import(ledger, import_id)
     assert committed["adjustment_paise"] == 0
     account = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", card["id"])
-    assert await ledger_balance(ledger, account["ledger_account_id"]) == -255000
+    assert await ledger_balance(ledger, account["id"]) == -255000
     assert account["statement_balance_paise"] == -255000
-    assert await ledger_balance(ledger, spending["ledger_account_id"]) == spending_before + 155000
+    assert await ledger_balance(ledger, spending["id"]) == spending_before + 155000
 
 
 async def test_every_card_statement_waiting_for_its_opening_keeps_its_rows(ledger):
@@ -1166,7 +1162,7 @@ async def test_the_amount_owed_answer_unblocks_a_first_card_statement(ledger):
 
     card = await helpers.card(ledger)
     spending = await system_account(ledger, "spending")
-    spending_before = await ledger_balance(ledger, spending["ledger_account_id"])
+    spending_before = await ledger_balance(ledger, spending["id"])
     import_id = await helpers.upload(
         ledger,
         card_statement([("01/04/2026", "BLINKIT", "-428.00")], "1,428.00"),
@@ -1193,8 +1189,8 @@ async def test_the_amount_owed_answer_unblocks_a_first_card_statement(ledger):
 
     await commit_import(ledger, import_id)
     account = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", card["id"])
-    assert await ledger_balance(ledger, account["ledger_account_id"]) == -142800
-    assert await ledger_balance(ledger, spending["ledger_account_id"]) == spending_before + 42800
+    assert await ledger_balance(ledger, account["id"]) == -142800
+    assert await ledger_balance(ledger, spending["id"]) == spending_before + 42800
 
 
 async def test_an_opening_that_does_not_add_up_keeps_the_import_blocked(ledger):
@@ -1213,7 +1209,7 @@ async def test_an_opening_that_does_not_add_up_keeps_the_import_blocked(ledger):
     assert detail["opening_evidenced"] is False
     with pytest.raises((ConflictLedgerError, InvalidLedgerError)):
         await commit_import(ledger, import_id)
-    assert await ledger_balance(ledger, card["ledger_account_id"]) == 0
+    assert await ledger_balance(ledger, card["id"]) == 0
 
 
 async def test_an_overpaid_card_books_a_credit_balance(ledger):
@@ -1244,7 +1240,7 @@ async def test_an_overpaid_card_books_a_credit_balance(ledger):
     )
     await commit_import(ledger, import_id)
     account = await ledger.fetchrow("SELECT * FROM accounts WHERE id = $1", card["id"])
-    assert await ledger_balance(ledger, account["ledger_account_id"]) == 50000
+    assert await ledger_balance(ledger, account["id"]) == 50000
     assert account["statement_balance_paise"] == 50000
 
 
@@ -1280,7 +1276,7 @@ async def test_a_closing_adjustment_is_stated_on_the_review_and_needs_confirmati
 
     committed = await commit_import(ledger, second, adjustment_confirmed=True)
     assert committed["adjustment_paise"] == 12000
-    assert await ledger_balance(ledger, account["ledger_account_id"]) == 107000
+    assert await ledger_balance(ledger, account["id"]) == 107000
 
 
 # A movement logged after the review ----------------------------------------------------------
@@ -1293,15 +1289,13 @@ async def _movements_for(conn, account: dict, kind: str) -> list[dict]:
         WHERE kind = $1
           AND EXISTS (
               SELECT 1 FROM movement_legs ml
-              JOIN pgledger_transfers t ON t.id = ml.transfer_id
               WHERE ml.movement_id = movements.id
-                AND (t.from_account_id = $2 OR t.to_account_id = $3)
+                AND (ml.from_account_id = $2 OR ml.to_account_id = $2)
           )
         ORDER BY date, id
         """,
         kind,
-        account["ledger_account_id"],
-        account["ledger_account_id"],
+        account["id"],
     )
 
 
@@ -1336,7 +1330,7 @@ async def test_a_movement_logged_after_the_review_merges_instead_of_booking_twic
     incomes = await _movements_for(ledger, account, "income")
     assert [str(row["id"]) for row in incomes] == [str(logged["id"])]
     assert result["adjustment_paise"] == 0
-    assert await ledger_balance(ledger, account["ledger_account_id"]) == 38945000
+    assert await ledger_balance(ledger, account["id"]) == 38945000
     line = await ledger.fetchrow(
         "SELECT match_state, movement_id FROM statement_lines "
         "WHERE import_id = $1 AND amount_paise = 10000000",
@@ -1394,7 +1388,7 @@ async def test_a_new_identical_amount_on_another_day_stays_its_own_income(ledger
         if row["date"] >= date(2026, 4, 1)
     ]
     assert len(adjustments) == 1
-    assert await ledger_balance(ledger, account["ledger_account_id"]) == 38975000
+    assert await ledger_balance(ledger, account["id"]) == 38975000
 
 
 async def test_two_movements_logged_after_the_review_send_the_line_back_to_review(ledger):
@@ -1428,7 +1422,7 @@ async def test_two_movements_logged_after_the_review_send_the_line_back_to_revie
     assert line["match_state"] == "ambiguous"
     assert len(line["candidates"]) == 2
     # Nothing was written by the refused commit.
-    assert await ledger_balance(ledger, account["ledger_account_id"]) == 29020000 - 90000
+    assert await ledger_balance(ledger, account["id"]) == 29020000 - 90000
 
 
 async def test_a_refund_merge_takes_the_statements_date(ledger):
@@ -1460,7 +1454,7 @@ async def test_a_refund_merge_takes_the_statements_date(ledger):
     refunds = await _movements_for(ledger, account, "refund")
     assert [str(row["id"]) for row in refunds] == [str(logged["id"])]
     assert refunds[0]["date"] == date(2026, 11, 9)
-    assert await ledger_balance(ledger, account["ledger_account_id"]) == 20000
+    assert await ledger_balance(ledger, account["id"]) == 20000
 
 
 # Cash, wallet, and a file naming another account --------------------------------------------
@@ -1639,15 +1633,15 @@ async def test_rejecting_a_running_import_sticks_against_every_late_extraction_w
 async def test_a_rejected_import_leaves_balances_and_spending_alone(ledger):
     account = await helpers.bank(ledger)
     spending = await system_account(ledger, "spending")
-    before = await ledger_balance(ledger, spending["ledger_account_id"])
+    before = await ledger_balance(ledger, spending["id"])
     import_id = await helpers.review_import(ledger, account, [helpers.row("SWIGGY", debit=45000)])
 
     await reject_import(ledger, import_id, "not mine")
 
     booked = "('expense', 'income', 'transfer', 'refund', 'split', 'loan', 'settlement')"
     assert await ledger.fetchval(f"SELECT count(*) FROM movements WHERE kind IN {booked}") == 0
-    assert await ledger_balance(ledger, account["ledger_account_id"]) == 100000
-    assert await ledger_balance(ledger, spending["ledger_account_id"]) == before
+    assert await ledger_balance(ledger, account["id"]) == 100000
+    assert await ledger_balance(ledger, spending["id"]) == before
     assert await ledger.fetchval("SELECT status FROM imports WHERE id = $1", import_id) == (
         "rejected"
     )
@@ -1674,7 +1668,7 @@ async def test_undo_removes_the_payee_the_import_created(ledger):
 
     payee = await ledger.fetchrow("SELECT * FROM payees WHERE id = $1", payee["id"])
     assert payee["active"] is False
-    assert await ledger_balance(ledger, account["ledger_account_id"]) == 100000
+    assert await ledger_balance(ledger, account["id"]) == 100000
 
 
 async def test_the_second_months_wallet_statement_commits(ledger):

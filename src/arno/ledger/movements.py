@@ -1,12 +1,15 @@
-"""Movements: one real-world money movement, written as one balanced pgledger batch.
+"""Movements: one real-world money movement, written as plain double entry.
 
-The kinds the agent and API can record are expense, income, transfer, split, loan, refund,
-settlement and adjustment. A correction never edits a pgledger row: it appends a reversal and, for
-an amount or account fix, a corrected movement in the same write group.
+A movement is a `movements` row plus one or more `movement_legs`; each leg moves an amount out of
+one account and into another, so every movement balances by construction. The kinds the agent and
+API can record are expense, income, transfer, split, loan, refund, settlement and adjustment. A
+correction updates the movement in place and a delete removes it; both are snapshotted into the
+undo log, so undo restores the exact rows.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from typing import Any
@@ -22,17 +25,214 @@ from arno.ledger.common import (
     SYSTEM_KINDS,
     get_account_row,
     ledger_balance,
+    require_active_account,
     resolve_account,
     system_account,
     today,
 )
-from arno.ledger.errors import ConflictLedgerError, InvalidLedgerError, NotFoundLedgerError
+from arno.ledger.errors import InvalidLedgerError, NotFoundLedgerError
 from arno.ledger.payees import ensure_person_account, get_payee
-from arno.ledger.postings import MovementRecord, TransferSpec, create_movement_in_group
 
 CORRECTABLE_SCOPES = ("this", "future", "all")
 _LEDGER_CHANGE_KINDS = ("expense", "income", "transfer", "refund", "settlement", "split", "loan")
 _LEDGER_CHANGE_KEYS = ("amount_paise", "account_id", "my_share_paise", "shares")
+MOVEMENT_KINDS = (
+    "expense",
+    "income",
+    "transfer",
+    "split",
+    "loan",
+    "refund",
+    "settlement",
+    "adjustment",
+)
+
+
+@dataclass(frozen=True, slots=True)
+class TransferSpec:
+    """One leg to write: `amount_paise` moves out of one account and into another."""
+
+    from_account_id: str
+    to_account_id: str
+    amount_paise: int
+    category_id: str | None = None
+    payee_id: str | None = None
+    expected_date: date | None = None
+    note: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class MovementRecord:
+    movement: dict[str, Any]
+    transfer_ids: tuple[str, ...]
+
+    @property
+    def id(self) -> str:
+        return str(self.movement["id"])
+
+
+async def _validated_transfers(
+    conn: Connection, transfers: list[TransferSpec], accounts: dict[str, dict[str, Any]] | None
+) -> None:
+    if not transfers:
+        raise InvalidLedgerError("A movement needs at least one transfer")
+    known = accounts or {}
+    for transfer in transfers:
+        if transfer.amount_paise <= 0:
+            raise InvalidLedgerError("Transfer amounts must be positive")
+        if transfer.from_account_id == transfer.to_account_id:
+            raise InvalidLedgerError("A transfer needs two different accounts")
+        for account_id in (transfer.from_account_id, transfer.to_account_id):
+            account = known.get(account_id)
+            if account is None or not account["active"]:
+                await require_active_account(conn, account_id)
+
+
+async def _insert_legs(
+    conn: Connection, movement_id: str, transfers: list[TransferSpec]
+) -> list[dict[str, Any]]:
+    """All legs of a movement in one statement."""
+    params: list[Any] = [movement_id]
+    rows: list[str] = []
+    for transfer in transfers:
+        start = len(params) + 1
+        rows.append("($1, " + ", ".join(f"${start + i}" for i in range(7)) + ")")
+        params.extend(
+            [
+                transfer.from_account_id,
+                transfer.to_account_id,
+                transfer.amount_paise,
+                transfer.category_id,
+                transfer.payee_id,
+                transfer.expected_date,
+                transfer.note,
+            ]
+        )
+    return await conn.fetch(
+        f"""
+        INSERT INTO movement_legs
+            (movement_id, from_account_id, to_account_id, amount_paise, category_id, payee_id,
+             expected_date, note)
+        VALUES {", ".join(rows)}
+        RETURNING *
+        """,  # noqa: S608 - only generated placeholders are interpolated
+        *params,
+    )
+
+
+async def _existing_record(conn: Connection, existing: dict[str, Any]) -> MovementRecord:
+    legs = await conn.fetch(
+        "SELECT transfer_id FROM movement_legs WHERE movement_id = $1 ORDER BY transfer_id",
+        existing["id"],
+    )
+    return MovementRecord(existing, tuple(leg["transfer_id"] for leg in legs))
+
+
+async def create_movement_in_group(
+    conn: Connection,
+    group: WriteGroup,
+    *,
+    date: date,
+    description: str,
+    kind: str,
+    transfers: list[TransferSpec],
+    idempotency_key: str | None = None,
+    one_off: bool = False,
+    import_id: str | None = None,
+    capture: dict[str, Any] | None = None,
+    accounts: dict[str, dict[str, Any]] | None = None,
+) -> MovementRecord:
+    if kind not in MOVEMENT_KINDS:
+        raise InvalidLedgerError(f"Unknown movement kind {kind}")
+    if not description.strip():
+        raise InvalidLedgerError("A movement needs a description")
+    if idempotency_key:
+        existing = await conn.fetchrow(
+            "SELECT * FROM movements WHERE idempotency_key = $1", idempotency_key
+        )
+        if existing is not None:
+            return await _existing_record(conn, existing)
+    await _validated_transfers(conn, transfers, accounts)
+
+    movement = await conn.fetchrow(
+        """
+        INSERT INTO movements (date, description, kind, idempotency_key, one_off, import_id)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        ON CONFLICT (idempotency_key) DO NOTHING
+        RETURNING *
+        """,
+        date,
+        description.strip(),
+        kind,
+        idempotency_key,
+        one_off,
+        import_id,
+    )
+    if movement is None:
+        # A concurrent call with the same key committed first: return its movement, not a second.
+        existing = await conn.fetchrow(
+            "SELECT * FROM movements WHERE idempotency_key = $1", idempotency_key
+        )
+        if existing is None:  # pragma: no cover - the unique index guarantees the row exists
+            raise InvalidLedgerError("An idempotency key conflict left no movement")
+        return await _existing_record(conn, existing)
+    group.record_created("movements", movement)
+    legs = await _insert_legs(conn, movement["id"], transfers)
+    for leg in legs:
+        group.record_created("movement_legs", leg)
+    if capture is not None:
+        capture_row = await conn.fetchrow_required(
+            """
+            INSERT INTO captures (movement_id, kind, ref, upi_ref, confidence)
+            VALUES ($1, $2, $3, $4, $5) RETURNING *
+            """,
+            movement["id"],
+            capture.get("kind", "chat"),
+            capture.get("ref"),
+            capture.get("upi_ref"),
+            capture.get("confidence"),
+        )
+        group.record_created("captures", capture_row)
+    return MovementRecord(movement, tuple(leg["transfer_id"] for leg in legs))
+
+
+async def delete_movement_in_group(group: WriteGroup, movement_id: str) -> dict[str, Any]:
+    """Delete a movement and everything that hangs off it, recording each row for undo.
+
+    Its schedule payments and captures go with it. A statement line that was matched to it is
+    left unmatched and ignored, as when an import is undone: the user removed that money, so the
+    line must not resurface as new. Returns the deleted movement row.
+    """
+    conn = group.conn
+    movement = await conn.fetchrow("SELECT * FROM movements WHERE id = $1 FOR UPDATE", movement_id)
+    if movement is None:
+        raise NotFoundLedgerError(f"No movement {movement_id}")
+    for table in ("schedule_payments", "captures"):
+        for row in await conn.fetch(
+            f"DELETE FROM {table} WHERE movement_id = $1 RETURNING *",  # noqa: S608
+            movement_id,
+        ):
+            group.record_deleted(table, row)
+    for line in await conn.fetch(
+        "SELECT * FROM statement_lines WHERE movement_id = $1 ORDER BY id FOR UPDATE",
+        movement_id,
+    ):
+        after = await conn.fetchrow_required(
+            """
+            UPDATE statement_lines
+            SET match_state = 'ignored', movement_id = NULL, updated_at = now()
+            WHERE id = $1 RETURNING *
+            """,
+            line["id"],
+        )
+        group.record_updated("statement_lines", line["id"], line, after)
+    for leg in await conn.fetch(
+        "DELETE FROM movement_legs WHERE movement_id = $1 RETURNING *", movement_id
+    ):
+        group.record_deleted("movement_legs", leg)
+    await conn.execute("DELETE FROM movements WHERE id = $1", movement_id)
+    group.record_deleted("movements", movement)
+    return movement
 
 
 async def _movement_row(conn: Connection, movement_id: str) -> dict[str, Any]:
@@ -48,37 +248,17 @@ async def _transfer_rows_for_movements(
     if not movement_ids:
         return {}
     # Routing `unnest($1::text[])` through a subquery creates an InitPlan so Postgres caches a
-    # generic plan instead of re-planning every call (plain `= ANY($1::text[])` stayed at 0
-    # generic plans and ran 1.78x slower than `= $1` on single-id calls vs 0.96x with the index).
+    # generic plan instead of re-planning every call.
     rows = await conn.fetch(
         """
-            SELECT
-                ml.movement_id,
-                t.id,
-                t.from_account_id AS from_ledger_id,
-                t.to_account_id AS to_ledger_id,
-                t.amount::bigint AS amount_paise,
-                fa.id AS from_account_id,
-                fa.name AS from_name,
-                fa.kind AS from_kind,
-                ta.id AS to_account_id,
-                ta.name AS to_name,
-                ta.kind AS to_kind,
-                ml.category_id,
-                c.name AS category_name,
-                ml.payee_id,
-                p.display_name AS payee_name,
-                ml.expected_date,
-                ml.note
-            FROM movement_legs ml
-            JOIN pgledger_transfers t ON t.id = ml.transfer_id
-            JOIN v_accounts fa ON fa.ledger_account_id = t.from_account_id
-            JOIN v_accounts ta ON ta.ledger_account_id = t.to_account_id
-            LEFT JOIN categories c ON c.id = ml.category_id
-            LEFT JOIN payees p ON p.id = ml.payee_id
-            WHERE ml.movement_id = ANY(ARRAY(SELECT unnest($1::text[])))
-            ORDER BY ml.movement_id, t.id
-            """,
+        SELECT movement_id, transfer_id AS id, amount_paise,
+               from_account_id, from_account_name AS from_name, from_account_kind AS from_kind,
+               to_account_id, to_account_name AS to_name, to_account_kind AS to_kind,
+               category_id, category_name, payee_id, payee_name, expected_date, note
+        FROM v_legs
+        WHERE movement_id = ANY(ARRAY(SELECT unnest($1::text[])))
+        ORDER BY movement_id, transfer_id
+        """,
         movement_ids,
     )
     grouped: dict[str, list[dict[str, Any]]] = {movement_id: [] for movement_id in movement_ids}
@@ -97,7 +277,6 @@ async def _capture_rows_for_movements(
 ) -> dict[str, list[dict[str, Any]]]:
     if not movement_ids:
         return {}
-    # Same `ARRAY(SELECT unnest(...))` generic-plan idiom as `_transfer_rows_for_movements`.
     rows = await conn.fetch(
         """
         SELECT movement_id, kind, ref, upi_ref, confidence
@@ -133,67 +312,11 @@ def _transfer_payload(row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-async def _reversal_state(
-    conn: Connection, movement_ids: list[str], *, as_of: date | None = None
-) -> dict[str, dict[str, Any]]:
-    """Whether each movement is effectively reversed, from `movement_reversal_state`."""
-    if not movement_ids:
-        return {}
-    rows = await conn.fetch(
-        """
-        WITH state AS MATERIALIZED (
-            SELECT movement_id, is_reversed
-            FROM movement_reversal_state($2)
-        )
-        SELECT
-            s.movement_id,
-            s.is_reversed,
-            CASE
-                WHEN s.is_reversed THEN (
-                    SELECT c.id
-                    FROM movements c
-                    LEFT JOIN state cs ON cs.movement_id = c.id
-                    WHERE c.reverses_id = s.movement_id
-                      AND ($2::date IS NULL OR c.date <= $2)
-                      AND NOT coalesce(cs.is_reversed, false)
-                    ORDER BY c.date DESC, c.id DESC
-                    LIMIT 1
-                )
-                ELSE NULL
-            END AS reversed_by
-        FROM state s
-        WHERE s.movement_id = ANY($1::text[])
-        """,
-        movement_ids,
-        as_of,
-    )
-    by_id = {
-        str(row["movement_id"]): {
-            "reversed": bool(row["is_reversed"]),
-            "reversed_by": str(row["reversed_by"]) if row["reversed_by"] is not None else None,
-        }
-        for row in rows
-    }
-    return {
-        movement_id: by_id.get(movement_id, {"reversed": False, "reversed_by": None})
-        for movement_id in movement_ids
-    }
-
-
-async def _effectively_reversed_ids(conn: Connection) -> list[str]:
-    """Movements hidden from activity because a reversal still cancels them."""
-    rows = await conn.fetch(
-        "SELECT movement_id FROM movement_reversal_state() WHERE is_reversed ORDER BY movement_id"
-    )
-    return [str(row["movement_id"]) for row in rows]
-
-
 def _assemble_movement_payload(
     movement: dict[str, Any],
     *,
     transfers: list[dict[str, Any]],
     captures: list[dict[str, Any]],
-    state: dict[str, Any],
     undo_id: str | None,
 ) -> dict[str, Any]:
     movement_id = str(movement["id"])
@@ -216,9 +339,6 @@ def _assemble_movement_payload(
         "date": movement["date"].isoformat(),
         "kind": movement["kind"],
         "description": movement["description"],
-        "reverses_id": movement["reverses_id"],
-        "reversed_by": state.get("reversed_by"),
-        "reversed": bool(state.get("reversed")),
         "one_off": bool(movement["one_off"]),
         "amount_paise": sum(int(row["amount_paise"]) for row in transfers),
         "category_name": category,
@@ -233,7 +353,6 @@ async def movement_payloads(
     conn: Connection,
     movements: list[dict[str, Any]],
     *,
-    states: dict[str, dict[str, Any]] | None = None,
     undo_ids: dict[str, str | None] | None = None,
 ) -> list[dict[str, Any]]:
     if not movements:
@@ -241,7 +360,6 @@ async def movement_payloads(
     movement_ids = [str(row["id"]) for row in movements]
     transfers_by_id = await _transfer_rows_for_movements(conn, movement_ids)
     captures_by_id = await _capture_rows_for_movements(conn, movement_ids)
-    resolved_states = states if states is not None else await _reversal_state(conn, movement_ids)
     resolved_undo_ids = (
         undo_ids if undo_ids is not None else await groups_for_rows(conn, "movements", movement_ids)
     )
@@ -250,7 +368,6 @@ async def movement_payloads(
             row,
             transfers=transfers_by_id[str(row["id"])],
             captures=captures_by_id[str(row["id"])],
-            state=resolved_states[str(row["id"])],
             undo_id=resolved_undo_ids[str(row["id"])],
         )
         for row in movements
@@ -261,12 +378,9 @@ async def movement_payload(
     conn: Connection,
     movement: dict[str, Any],
     *,
-    state: dict[str, Any] | None = None,
     undo_ids: dict[str, str | None] | None = None,
 ) -> dict[str, Any]:
-    movement_id = str(movement["id"])
-    states = {movement_id: state} if state is not None else None
-    return (await movement_payloads(conn, [movement], states=states, undo_ids=undo_ids))[0]
+    return (await movement_payloads(conn, [movement], undo_ids=undo_ids))[0]
 
 
 async def get_movement(conn: Connection, movement_id: str) -> dict[str, Any]:
@@ -281,16 +395,11 @@ async def _finish_movement(
     status: str = "recorded",
 ) -> dict[str, Any]:
     created_now = any(
-        entry["table_name"] == "movements"
-        and entry["row_id"] == record.id
-        and entry["before"] is None
+        entry["table"] == "movements" and entry["key"] == record.id and entry["before"] is None
         for entry in group.entries
     )
     payload = await movement_payload(
-        conn,
-        record.movement,
-        state={"reversed": False, "reversed_by": None} if created_now else None,
-        undo_ids={record.id: group.group_id} if created_now else None,
+        conn, record.movement, undo_ids={record.id: group.group_id} if created_now else None
     )
     undo_id = group.group_id if created_now else payload["undo_id"]
     return payload | {"status": status, "undo_id": undo_id}
@@ -847,7 +956,12 @@ async def record_loan_payment(
 
 
 async def loan_payment_parts(
-    conn: Connection, loan: dict[str, Any], amount_paise: int, *, on: date
+    conn: Connection,
+    loan: dict[str, Any],
+    amount_paise: int,
+    *,
+    on: date,
+    excluding: str | None = None,
 ) -> tuple[int, int]:
     """Principal and interest of one loan payment, the single rule every path shares.
 
@@ -856,12 +970,27 @@ async def loan_payment_parts(
     calendar month per loan: the first payment in a month carries the month's interest, and a
     later payment in the same month is a prepayment, all principal. A loan with no rate has
     unknown interest, so the payment is all principal; the caller says so instead of implying
-    zero interest.
+    zero interest. `excluding` is a payment being corrected: it is left out of both the balance
+    and the month's interest, as if it had not been booked.
     """
-    outstanding = max(-await ledger_balance(conn, loan["ledger_account_id"]), 0)
+    balance = await ledger_balance(conn, loan["id"])
+    if excluding:
+        balance -= int(
+            await conn.fetchval(
+                """
+                SELECT coalesce(sum(CASE WHEN to_account_id = $2 THEN amount_paise
+                                         ELSE -amount_paise END), 0)
+                FROM movement_legs WHERE movement_id = $1 AND $2 IN (to_account_id, from_account_id)
+                """,
+                excluding,
+                loan["id"],
+            )
+            or 0
+        )
+    outstanding = max(-balance, 0)
     if not loan["rate_bps"]:
         return amount_paise, 0
-    if await _interest_booked(conn, loan, on):
+    if await _interest_booked(conn, loan, on, excluding):
         return amount_paise, 0
     monthly = Decimal(loan["rate_bps"]) / Decimal(10000) / Decimal(12)
     interest = int((Decimal(outstanding) * monthly).quantize(Decimal("1")))
@@ -869,12 +998,13 @@ async def loan_payment_parts(
     return amount_paise - interest, interest
 
 
-async def _interest_booked(conn: Connection, loan: dict[str, Any], on: date) -> bool:
+async def _interest_booked(
+    conn: Connection, loan: dict[str, Any], on: date, excluding: str | None
+) -> bool:
     """Whether a live loan payment this calendar month already booked the month's interest.
 
     A payment that booked interest has a leg into Spending (the interest is consumption); a
-    prepayment does not. A reversed payment booked nothing.
-    """
+    prepayment does not."""
     start = on.replace(day=1)
     end = date(start.year + (start.month == 12), start.month % 12 + 1, 1)
     return bool(
@@ -883,25 +1013,22 @@ async def _interest_booked(conn: Connection, loan: dict[str, Any], on: date) -> 
             SELECT EXISTS (
                 SELECT 1
                 FROM movements m
-                JOIN v_movement_state ms ON ms.movement_id = m.id
-                WHERE m.kind = 'loan' AND m.date >= $2 AND m.date < $3
-                  AND ms.is_effective
+                WHERE m.kind = 'loan' AND m.date >= $2 AND m.date < $3 AND m.id IS DISTINCT FROM $4
                   AND EXISTS (
                       SELECT 1 FROM movement_legs ml
-                      JOIN pgledger_transfers tp ON tp.id = ml.transfer_id
-                      WHERE ml.movement_id = m.id AND tp.to_account_id = $1
+                      WHERE ml.movement_id = m.id AND ml.to_account_id = $1
                   )
                   AND EXISTS (
                       SELECT 1 FROM movement_legs ml
-                      JOIN pgledger_transfers ti ON ti.id = ml.transfer_id
-                      JOIN accounts ta ON ta.ledger_account_id = ti.to_account_id
+                      JOIN accounts ta ON ta.id = ml.to_account_id
                       WHERE ml.movement_id = m.id AND ta.kind = 'spending'
                   )
             )
             """,
-            loan["ledger_account_id"],
+            loan["id"],
             start,
             end,
+            excluding,
         )
     )
 
@@ -937,55 +1064,6 @@ async def record_goal_contribution(
     )
 
 
-async def reverse_movement(
-    group: WriteGroup,
-    movement_id: str,
-    *,
-    note: str | None = None,
-    date: date | None = None,
-) -> MovementRecord:
-    """Append the opposite transfer batch in one movement."""
-    conn = group.conn
-    movement = await conn.fetchrow(
-        "SELECT * FROM movements WHERE id = $1 FOR UPDATE",
-        movement_id,
-    )
-    if movement is None:
-        raise NotFoundLedgerError(f"No movement {movement_id}")
-    # Undo-of-undo reverses a reversal, and that target is active. A movement that a live
-    # reversal already cancels has no money to reverse: reversing it again would mint money.
-    if (await _reversal_state(conn, [movement_id]))[movement_id]["reversed"]:
-        raise ConflictLedgerError(
-            "That entry was already corrected or removed; undo that change first."
-        )
-    transfers = await _transfer_rows(conn, movement_id)
-    if not transfers:
-        raise InvalidLedgerError(f"Movement {movement_id} has no transfers")
-    opposite: list[TransferSpec] = []
-    for row in transfers:
-        opposite.append(
-            TransferSpec(
-                from_account_id=row["to_account_id"],
-                to_account_id=row["from_account_id"],
-                amount_paise=int(row["amount_paise"]),
-                category_id=row["category_id"],
-                payee_id=row["payee_id"],
-                expected_date=row["expected_date"],
-                note=note if note is not None else row["note"],
-            )
-        )
-    record = await create_movement_in_group(
-        conn,
-        group,
-        date=date or movement["date"],
-        description=f"Reversal of {movement['description']}",
-        kind="reversal",
-        transfers=opposite,
-        reverses_id=movement_id,
-    )
-    return record
-
-
 async def _update_labels(
     conn: Connection,
     group: WriteGroup,
@@ -1012,9 +1090,8 @@ async def _update_labels(
                 """
                 SELECT ml.transfer_id
                 FROM movement_legs ml
-                JOIN pgledger_transfers t ON t.id = ml.transfer_id
-                JOIN accounts fa ON fa.ledger_account_id = t.from_account_id
-                JOIN accounts ta ON ta.ledger_account_id = t.to_account_id
+                JOIN accounts fa ON fa.id = ml.from_account_id
+                JOIN accounts ta ON ta.id = ml.to_account_id
                 WHERE ml.movement_id = $1 AND 'person' IN (fa.kind, ta.kind)
                 """,
                 movement_id,
@@ -1243,7 +1320,9 @@ async def _corrected_transfer_specs(
             else sum(int(row["amount_paise"]) for row in transfers)
         )
         loan = await resolve_account(conn, principal_row["to_account_id"])
-        principal, interest = await loan_payment_parts(conn, loan, total, on=date)
+        principal, interest = await loan_payment_parts(
+            conn, loan, total, on=date, excluding=movement["id"]
+        )
         paid_from = account_id or principal_row["from_account_id"]
         specs = [
             TransferSpec(
@@ -1295,12 +1374,6 @@ async def correct_movement(
     if changes.get("my_share_paise") is not None and changes["my_share_paise"] < 0:
         raise InvalidLedgerError("Your share cannot be negative")
     movement = await _movement_row(conn, movement_id)
-    if movement["kind"] == "reversal":
-        raise InvalidLedgerError("A reversal is not edited")
-    state = (await _reversal_state(conn, [movement_id]))[movement_id]
-    if state["reversed"]:
-        raise ConflictLedgerError("That movement has already been reversed")
-
     transfers = await _transfer_rows(conn, movement_id)
     existing_labels = next(
         (
@@ -1348,57 +1421,59 @@ async def correct_movement(
     }
 
     async with write_group(conn, actor=actor, message_id=message_id) as group:
-        if label_only:
+        deleted_payload = None
+        if changes.get("delete"):
+            deleted_payload = await movement_payload(
+                conn, movement, undo_ids={movement_id: group.group_id}
+            )
+            await delete_movement_in_group(group, movement_id)
+            rows_changed = 1
+        elif label_only:
             if label_changes:
                 rows_changed += await _update_labels(conn, group, movement_id, label_changes)
-            result_movement_id = movement_id
-            reversal_id = None
         else:
-            reversal = await reverse_movement(group, movement_id)
-            reversal_id = reversal.id
-            if changes.get("delete"):
-                result_movement_id = reversal.id
-            else:
-                corrected = await _corrected_transfer_specs(
-                    conn,
-                    movement,
-                    transfers,
-                    amount_paise=changes.get("amount_paise"),
-                    account_id=changes.get("account_id"),
-                    labels=merged_labels,
-                    date=changes.get("date") or movement["date"],
-                    my_share_paise=changes.get("my_share_paise"),
-                    shares=changes.get("shares"),
-                )
-                record = await create_movement_in_group(
-                    conn,
-                    group,
-                    date=changes.get("date") or movement["date"],
-                    description=movement["description"],
-                    kind=movement["kind"],
-                    transfers=corrected,
-                    one_off=bool(movement["one_off"]),
-                )
-                result_movement_id = record.id
+            locked = await conn.fetchrow_required(
+                "SELECT * FROM movements WHERE id = $1 FOR UPDATE", movement_id
+            )
+            corrected = await _corrected_transfer_specs(
+                conn,
+                locked,
+                transfers,
+                amount_paise=changes.get("amount_paise"),
+                account_id=changes.get("account_id"),
+                labels=merged_labels,
+                date=changes.get("date") or movement["date"],
+                my_share_paise=changes.get("my_share_paise"),
+                shares=changes.get("shares"),
+            )
+            await _validated_transfers(conn, corrected, None)
+            for leg in await conn.fetch(
+                "DELETE FROM movement_legs WHERE movement_id = $1 RETURNING *", movement_id
+            ):
+                group.record_deleted("movement_legs", leg)
+            for leg in await _insert_legs(conn, movement_id, corrected):
+                group.record_created("movement_legs", leg)
             rows_changed = 1
 
-        if movement_updates and not changes.get("delete"):
-            before = movement if label_only else await _movement_row(conn, result_movement_id)
+        # A rebuilt movement is recorded as edited too, so later writes see it as touched.
+        if not changes.get("delete") and (movement_updates or not label_only):
+            before = await conn.fetchrow_required(
+                "SELECT * FROM movements WHERE id = $1 FOR UPDATE", movement_id
+            )
             columns = list(movement_updates)
             assignments = ", ".join(
-                f"{column} = ${index}" for index, column in enumerate(columns, start=1)
+                [f"{column} = ${index}" for index, column in enumerate(columns, start=1)]
+                + ["updated_at = now()"]
             )
             statement = (
                 f"UPDATE movements SET {assignments} "
                 f"WHERE id = ${len(columns) + 1} RETURNING *"  # noqa: S608 - columns are constants
             )
             after = await conn.fetchrow_required(
-                statement,
-                *[movement_updates[column] for column in columns],
-                result_movement_id,
+                statement, *[movement_updates[column] for column in columns], movement_id
             )
-            group.record_updated("movements", result_movement_id, before, after)
-            rows_changed += 1
+            group.record_updated("movements", movement_id, before, after)
+            rows_changed += int(bool(movement_updates))
 
         if scope != "this":
             correction = await _apply_payee_correction_in_group(
@@ -1412,11 +1487,10 @@ async def correct_movement(
         else:
             correction = {"rule": None, "rows_changed": 0}
 
-    payload = await movement_payload(conn, await _movement_row(conn, result_movement_id))
+    payload = deleted_payload or await get_movement(conn, movement_id)
     return {
-        "status": "corrected" if not changes.get("delete") else "deleted",
-        "movement_id": result_movement_id,
-        "reversal_id": reversal_id,
+        "status": "deleted" if deleted_payload else "corrected",
+        "movement_id": movement_id,
         "rows_changed": rows_changed,
         "rule": correction["rule"],
         "movement": payload,
@@ -1430,16 +1504,13 @@ async def ledger_span(conn: Connection) -> dict[str, Any]:
     The first-run screens read it: an empty ledger has nothing to notice or recap, and a recap
     period before the first row has nothing to tell.
     """
-    # ponytail: counts include movements a later reversal cancelled; the screens only ask
-    # "anything yet?" and "since when?", where that is close enough.
     # An aggregate with no GROUP BY always yields its one row.
     row = await conn.fetchrow_required(
         """
-        SELECT count(*) FILTER (WHERE NOT ms.is_reversal) AS movements,
-               count(*) FILTER (WHERE m.kind = 'expense') AS spending,
-               min(m.date) FILTER (WHERE NOT ms.is_reversal) AS first_date
-        FROM movements m
-        JOIN v_movement_state ms ON ms.movement_id = m.id
+        SELECT count(*) AS movements,
+               count(*) FILTER (WHERE kind = 'expense') AS spending,
+               min(date) AS first_date
+        FROM movements
         """
     )
     return {
@@ -1460,7 +1531,6 @@ async def list_movements(
     kind: str | None = None,
     limit: int = 50,
     cursor: str | None = None,
-    include_reversed: bool = False,
 ) -> dict[str, Any]:
     if limit < 1 or limit > 200:
         raise InvalidLedgerError("limit must be between 1 and 200")
@@ -1481,11 +1551,9 @@ async def list_movements(
             f"""
             EXISTS (
                 SELECT 1 FROM movement_legs ml
-                JOIN pgledger_transfers tx ON tx.id = ml.transfer_id
-                JOIN accounts fa ON fa.ledger_account_id = tx.from_account_id
-                JOIN accounts ta ON ta.ledger_account_id = tx.to_account_id
                 WHERE ml.movement_id = m.id
-                  AND (fa.id = ${len(params) - 1} OR ta.id = ${len(params)})
+                  AND (ml.from_account_id = ${len(params) - 1}
+                       OR ml.to_account_id = ${len(params)})
             )
             """
         )
@@ -1500,17 +1568,6 @@ async def list_movements(
         clauses.append(
             f"EXISTS (SELECT 1 FROM movement_legs ml WHERE {' AND '.join(label_clauses)})"
         )
-    if not include_reversed:
-        # In SQL, not after LIMIT, so a page is never short and total_count agrees.
-        hidden = [
-            str(row["movement_id"])
-            for row in await conn.fetch(
-                "SELECT movement_id FROM v_movement_state WHERE NOT is_effective"
-            )
-        ]
-        if hidden:
-            params.append(hidden)
-            clauses.append(f"NOT (m.id = ANY(${len(params)}))")
 
     cursor_key: tuple[date, str] | None = None
     if cursor:
@@ -1544,12 +1601,11 @@ async def list_movements(
     )
     has_more = len(rows) > limit
     rows = rows[:limit]
-    states = await _reversal_state(conn, [str(row["id"]) for row in rows])
     next_cursor = None
     if has_more and rows:
         last = rows[-1]
         next_cursor = f"{last['date'].isoformat()}|{last['id']}"
-    items = await movement_payloads(conn, rows, states=states)
+    items = await movement_payloads(conn, rows)
     return {
         "items": items,
         "total_count": total,

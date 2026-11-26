@@ -653,7 +653,7 @@ async def _nth_line(conn, import_id: str, index: int) -> dict:
     )[index]
 
 
-async def test_a_reversed_logged_row_does_not_absorb_a_statement_line(ledger):
+async def test_a_deleted_logged_row_does_not_absorb_a_statement_line(ledger):
     from arno.ledger.audit import undo_group
 
     account = await helpers.bank(ledger)
@@ -673,11 +673,11 @@ async def test_a_reversed_logged_row_does_not_absorb_a_statement_line(ledger):
     line = await ledger.fetchrow(
         "SELECT match_state, movement_id FROM statement_lines WHERE import_id = $1", import_id
     )
-    # The logged row was undone, so the statement's row is new money, not a merge.
+    # The logged row was deleted, so the statement's row is new money, not a merge.
     assert line["match_state"] == "new"
     assert line["movement_id"] is None
 
-    # An undo of that undo makes the logged row effective again, and then it matches.
+    # An undo of that undo restores the logged row, and then it matches.
     await undo_group(ledger, deleted["undo_id"])
     await reconcile(ledger, import_id=import_id, account=account, period=helpers.PERIOD)
     line = await ledger.fetchrow(
@@ -747,9 +747,8 @@ async def test_confirming_a_matched_transfer_keeps_its_one_movement(ledger):
     assert committed["adjustment_paise"] == 0
     transfers = await ledger.fetch(
         """
-        SELECT t.amount FROM pgledger_transfers t
-        JOIN accounts a ON a.ledger_account_id = t.from_account_id
-        WHERE a.id = $1 AND t.amount = 125000
+        SELECT amount_paise FROM movement_legs
+        WHERE from_account_id = $1 AND amount_paise = 125000
         """,
         here["id"],
     )

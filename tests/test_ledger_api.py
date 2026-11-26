@@ -146,7 +146,7 @@ async def test_transfer_split_and_people_payloads(session_client):
     assert ravi_row["next_expected_date"] == "2026-12-01"
 
 
-async def test_correction_endpoint_edits_labels_without_a_reversal(session_client):
+async def test_correction_endpoint_edits_labels_in_place(session_client):
     bank = session_client.post(
         "/api/accounts", json={"kind": "bank", "name": "HDFC", "opening_balance_paise": 10_000_000}
     ).json()

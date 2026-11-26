@@ -115,8 +115,9 @@ async def test_a_commit_and_an_undo_of_two_imports_on_one_account_never_deadlock
     )
     assert (
         await ledger.fetchval(
-            "SELECT coalesce(sum(e.amount), 0) FROM pgledger_entries e "
-            "JOIN accounts a ON a.ledger_account_id = e.account_id WHERE a.id = $1",
+            "SELECT coalesce(sum(CASE WHEN to_account_id = $1 THEN amount_paise "
+            "ELSE -amount_paise END), 0) FROM movement_legs "
+            "WHERE to_account_id = $1 OR from_account_id = $1",
             account["id"],
         )
         == 100_000 + booked
@@ -198,14 +199,14 @@ async def _committed_expense(ledger) -> tuple[str, str, str]:
             "SELECT movement_id FROM statement_lines WHERE import_id = $1", import_id
         )
     )
-    return import_id, movement_id, str(account["ledger_account_id"])
+    return import_id, movement_id, str(account["id"])
 
 
 async def test_the_categorizer_waits_for_the_import_lock_instead_of_deadlocking_the_undo(
     ledger,
 ):
     """The undo locks `imports` first and labels later; the save must do the same or deadlock."""
-    import_id, movement_id, _ledger_account_id = await _committed_expense(ledger)
+    import_id, movement_id, _ledger_account = await _committed_expense(ledger)
     dsn = os.environ["DATABASE_URL"]
 
     async with connect(dsn) as undo_conn, connect(dsn) as save_conn, connect(dsn) as observer:
@@ -228,7 +229,7 @@ async def test_the_categorizer_waits_for_the_import_lock_instead_of_deadlocking_
 
 async def test_the_rules_engine_also_takes_the_import_lock_before_labelling(ledger, monkeypatch):
     """The job's first write is the rules phase, so it needs the same order as the undo."""
-    import_id, movement_id, _ledger_account_id = await _committed_expense(ledger)
+    import_id, movement_id, _ledger_account = await _committed_expense(ledger)
     category_id = str(await ledger.fetchval("SELECT id FROM categories WHERE name = $1", LABEL))
     await ledger.execute(
         """
@@ -257,7 +258,7 @@ async def test_an_undo_arriving_during_the_save_takes_the_labels_it_caused_with_
     ledger, monkeypatch
 ):
     """The save commits while the undo waits; the undo then sees and reverts its group."""
-    import_id, movement_id, ledger_account_id = await _committed_expense(ledger)
+    import_id, movement_id, ledger_account = await _committed_expense(ledger)
     dsn = os.environ["DATABASE_URL"]
     recorded = asyncio.Event()
     release = asyncio.Event()
@@ -286,7 +287,7 @@ async def test_an_undo_arriving_during_the_save_takes_the_labels_it_caused_with_
     assert groups
     assert (
         await ledger.fetchval(
-            "SELECT count(*) FROM audit_log WHERE group_id = ANY($1) AND undone_at IS NULL",
+            "SELECT count(*) FROM undo_log WHERE id = ANY($1) AND undone_at IS NULL",
             groups,
         )
         == 0
@@ -296,13 +297,13 @@ async def test_an_undo_arriving_during_the_save_takes_the_labels_it_caused_with_
     assert await ledger.fetchval("SELECT status FROM imports WHERE id = $1", import_id) == (
         "rejected"
     )
-    assert await ledger_balance(ledger, ledger_account_id) == 100000
+    assert await ledger_balance(ledger, ledger_account) == 100000
     assert await check_ledger(ledger) == []
 
 
 async def test_a_save_arriving_after_the_undo_writes_nothing_and_does_not_fail(ledger, monkeypatch):
-    """The undo reversed the rows first; the waiting save finds nothing left to label."""
-    import_id, movement_id, _ledger_account_id = await _committed_expense(ledger)
+    """The undo deleted the rows first; the waiting save finds nothing left to label."""
+    import_id, movement_id, _ledger_account = await _committed_expense(ledger)
     dsn = os.environ["DATABASE_URL"]
 
     async with connect(dsn) as undo_conn, connect(dsn) as save_conn, connect(dsn) as observer:

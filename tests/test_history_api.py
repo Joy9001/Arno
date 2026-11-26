@@ -14,7 +14,7 @@ from arno.tools.write import delete_preference_for_good
 
 
 async def _clear_history(conn: Connection) -> None:
-    await conn.execute("DELETE FROM audit_log")
+    await conn.execute("DELETE FROM undo_log")
 
 
 async def _remember(
@@ -48,7 +48,7 @@ async def _edit(conn: Connection, preference_id: str, body: str) -> str:
 
 async def _stamp(conn: Connection, group_id: str, day: int) -> None:
     await conn.execute(
-        "UPDATE audit_log SET created_at = $2 WHERE group_id = $1",
+        "UPDATE undo_log SET created_at = $2 WHERE id = $1",
         group_id,
         datetime(2026, 1, day, 9, tzinfo=UTC),
     )
@@ -133,9 +133,8 @@ async def test_history_shows_a_group_as_already_undone_after_the_api_undo(sessio
     again = session_client.post(f"/api/undo/{edited}")
     assert again.json()["summary"] == entry["reason"]
     # The undo itself is now the later write on that row, and history says so.
-    restored = _entry(page, remembered)
-    assert restored["undoable"] is False
-    assert "later write" in restored["reason"]
+    # The undo put the row back where the remember left it, so the remember is still undoable.
+    assert _entry(page, remembered)["undoable"] is True
 
 
 async def test_history_names_the_agent_and_the_conversation_that_recorded_a_write(

@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from arno.api.deps import Database, current_session
 from arno.engine.money import MAX_PAISE
-from arno.engine.projection import Projection, ProjectionInput
+from arno.engine.projection import Projection
 from arno.ledger import (
     accounts,
     categories,
@@ -28,7 +28,6 @@ from arno.ledger import (
     schedules,
     settings,
     uncategorized,
-    workbook,
 )
 from arno.ledger.common import today as ledger_today
 from arno.tools import projection as projection_tools
@@ -400,7 +399,6 @@ async def get_movements(
     kind: str | None = None,
     limit: int = Query(default=50, ge=1, le=200),
     cursor: str | None = None,
-    include_reversed: bool = False,
 ) -> dict[str, Any]:
     return await movements.list_movements(
         conn,
@@ -412,7 +410,6 @@ async def get_movements(
         kind=kind,
         limit=limit,
         cursor=cursor,
-        include_reversed=include_reversed,
     )
 
 
@@ -625,7 +622,8 @@ async def delete_goal(goal_id: str, conn: Database) -> dict[str, Any]:
 
 
 # The payload is typed for the checker, not re-validated: the engine owns its shape.
-async def _projection_request(
+@router.get("/projection", response_model=None)
+async def get_projection(
     conn: Database,
     horizon_days: int | None = Query(default=None, ge=1, le=3650),
     cut_percent: int = Query(default=0, ge=0, le=50),
@@ -638,8 +636,8 @@ async def _projection_request(
     emi_fee_paise: int | None = Query(default=None, ge=0, le=MAX_PAISE),
     no_cost: bool = False,
     changes: str | None = Query(default=None),
-) -> tuple[ProjectionInput, Projection, dict[str, Any]]:
-    """Load and calculate the projection shared by both response formats."""
+) -> Projection:
+    """The read-only projection panel and the inline projection card share this payload."""
     hypothetical = None
     if amount_paise is not None:
         if date is None:
@@ -664,46 +662,16 @@ async def _projection_request(
             raise HTTPException(status_code=422, detail="changes must be a JSON array")
         parsed_changes = loaded
     try:
-        inputs, result = await projection_tools.project_with_inputs(
+        _, result = await projection_tools.project_with_inputs(
             conn,
             horizon_days=horizon_days,
             cut_percent=cut_percent,
             hypothetical=hypothetical,
             changes=parsed_changes,
         )
-        return (
-            inputs,
-            result,
-            {"hypothetical": hypothetical, "changes": parsed_changes, "cut_percent": cut_percent},
-        )
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-
-@router.get("/projection", response_model=None)
-async def get_projection(
-    computed: Annotated[
-        tuple[ProjectionInput, Projection, dict[str, Any]], Depends(_projection_request)
-    ],
-) -> Projection:
-    """The read-only projection panel and the inline projection card share this payload."""
-    return computed[1]
-
-
-@router.get("/projection/workbook")
-async def get_projection_workbook(
-    computed: Annotated[
-        tuple[ProjectionInput, Projection, dict[str, Any]], Depends(_projection_request)
-    ],
-) -> Response:
-    inputs, result, request = computed
-    return Response(
-        await projection_tools.run_compute(workbook.projection_workbook, inputs, result, request),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={
-            "Content-Disposition": f'attachment; filename="arno-projection-{result["as_of"]}.xlsx"'
-        },
-    )
 
 
 @router.get("/people")

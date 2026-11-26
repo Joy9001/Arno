@@ -17,7 +17,6 @@ from pydantic import TypeAdapter
 from pydantic_ai.ui.vercel_ai.request_types import RequestData
 
 from arno.ledger.movements import (
-    _effectively_reversed_ids,  # noqa: PLC2701 - the ledger's own rule
     correct_movement,
     record_expense,
 )
@@ -345,12 +344,11 @@ async def test_the_drivers_spending_agrees_with_the_ledger_after_undo_of_undo(le
         date=today(),
     )
     corrected = await correct_movement(ledger, created["id"], changes={"amount_paise": 40_500})
-    await undo_group(ledger, corrected["undo_id"])
-    await undo_group(ledger, created["undo_id"])
+    undone = await undo_group(ledger, corrected["undo_id"])
+    await undo_group(ledger, undone["undo_undo_id"])
 
-    # The forest the parity rule misreads: one reversal child already restored, one still live.
-    assert created["id"] in await _effectively_reversed_ids(ledger)
+    # The correction is back after undoing its undo; the driver reads the same single movement.
     summary = await asyncio.to_thread(ledger_summary)
-    assert summary["spending"] == []
+    assert [row["amount_paise"] for row in summary["spending"]] == [40_500]
     violations = await check_ledger(ledger)
     assert violations == [], [violation.code for violation in violations]

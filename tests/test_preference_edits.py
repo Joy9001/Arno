@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from tests.fixtures.undo import snapshot_entries
+
 
 async def _insert_preference(
     db, body: str, *, active: bool = True, created_by: str = "agent"
@@ -38,14 +40,7 @@ async def test_edit_rewrites_body_and_keeps_identity_and_audits_as_user(session_
         str(preference["updated_at"])
     )
 
-    audit = await db.fetchrow(
-        """
-        SELECT actor, before, after FROM audit_log
-        WHERE table_name = 'preferences' AND row_id = $1
-        ORDER BY created_at DESC LIMIT 1
-        """,
-        preference["id"],
-    )
+    audit = (await snapshot_entries(db, "preferences", preference["id"]))[-1]
     assert audit["actor"] == "user"
     assert audit["before"]["body"] == "Prefers UPI for groceries"
     assert audit["after"]["body"] == "Prefers cards for groceries"
@@ -100,13 +95,7 @@ async def test_delete_for_good_scrubs_the_edit_history_too(session_client, db):
     assert (
         await db.fetchrow("SELECT count(*) AS n FROM preferences WHERE id = $1", preference["id"])
     )["n"] == 0
-    rows = await db.fetch(
-        """
-        SELECT before, after FROM audit_log
-        WHERE table_name = 'preferences' AND row_id = $1
-        """,
-        preference["id"],
-    )
+    rows = await snapshot_entries(db, "preferences", preference["id"])
     assert len(rows) >= 2
     for row in rows:
         assert marker not in str(row["before"])

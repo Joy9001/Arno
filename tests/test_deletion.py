@@ -25,7 +25,7 @@ async def test_the_everything_preview_counts_exactly_what_the_erase_removes(demo
     assert counts["movements"] > 0
     assert counts["payees"] > 0
     assert counts["accounts"] > 3, "the demo's own accounts count; the system three do not"
-    assert counts["audit_log"] > 0
+    assert counts["undo_log"] > 0
 
 
 async def test_after_the_erase_nothing_remains_to_preview_and_the_ledger_still_checks(demo_ledger):
@@ -124,7 +124,7 @@ async def test_the_preview_states_the_backup_window_and_that_no_purge_date_is_gu
     assert "off-site snapshots" in note
 
 
-async def test_the_memory_preview_counts_the_row_and_names_the_scrubbed_audit_rows(db):
+async def test_the_memory_preview_counts_the_row_and_names_the_scrubbed_history_entries(db):
     memory = await db.fetchrow(
         "INSERT INTO preferences (body, created_by) VALUES ('Keeps filter coffee', 'user') "
         "RETURNING *"
@@ -137,7 +137,7 @@ async def test_the_memory_preview_counts_the_row_and_names_the_scrubbed_audit_ro
     preview = await deletion.preview(db, "memory", memory["id"])
 
     assert _counts(preview) == {"preferences": 1}
-    assert any("audit rows" in item["what"] for item in preview["retains"])
+    assert any("undo-history entries" in item["what"] for item in preview["retains"])
     assert any("chat history" in item["why"] for item in preview["retains"])
 
 

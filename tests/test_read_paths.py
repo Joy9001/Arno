@@ -1,7 +1,7 @@
 """Read paths: every report and aggregate must agree on the same money.
 
 The dataset is built with the real write functions (not raw SQL), so the ledger, labels,
-reversals, and adjustments are exactly what the app produces. Each test pins one number that
+corrections, and adjustments are exactly what the app produces. Each test pins one number that
 several read paths must report identically.
 """
 
@@ -223,12 +223,6 @@ def _spend_from_transfers(transfers: list[dict]) -> int:
     return total
 
 
-async def _spending_ledger_id(conn) -> str:
-    return str(
-        await conn.fetchval("SELECT ledger_account_id FROM accounts WHERE kind = 'spending'")
-    )
-
-
 async def test_a_covered_month_with_no_spend_is_zero_not_unknown(ledger):
     from tests.fixtures.synthetic_statements import seed_committed_statement
 
@@ -406,8 +400,7 @@ async def test_answering_a_group_labels_only_the_spending_side_and_catches_a_bar
         """
         SELECT tl.category_id
         FROM movement_legs tl
-        JOIN pgledger_transfers t ON t.id = tl.transfer_id
-        JOIN accounts ta ON ta.ledger_account_id = t.to_account_id
+        JOIN accounts ta ON ta.id = tl.to_account_id
         WHERE tl.movement_id = $1 AND ta.kind = 'person'
         """,
         split["id"],
@@ -456,9 +449,9 @@ async def test_a_row_with_no_payee_is_named_by_its_description_in_the_biggest_st
     assert note in biggest["line"]
 
 
-async def test_a_fully_reversed_category_leaves_no_zero_group(ledger):
+async def test_a_fully_deleted_category_leaves_no_zero_group(ledger):
     bank = (
-        await create_account(ledger, kind="bank", name="Reversal bank", opening_balance_paise=0)
+        await create_account(ledger, kind="bank", name="Deleted bank", opening_balance_paise=0)
     )["id"]
     shopping = await _category(ledger, "Shopping")
     movement = await record_expense(
@@ -473,7 +466,8 @@ async def test_a_fully_reversed_category_leaves_no_zero_group(ledger):
 
     result = await recap_tools.summarize_spending(ledger, group_by="category", period=MONTH)
     assert result["groups"] == []
-    assert result["total"] == {"paise": 0, "text": "₹0"}
+    # Nothing is left to sum and no statement covers the month, so the total is unknown.
+    assert result["total"] is None
 
 
 async def test_a_deleted_day_is_not_listed_as_a_spending_day(ledger):
@@ -614,7 +608,7 @@ async def test_recap_routes_serve_the_badge_and_the_rows_behind_a_figure(session
 async def test_run_query_cannot_read_auth_or_secret_tables(ledger):
     import asyncpg
 
-    for sql in ("SELECT count(*) FROM audit_log",):
+    for sql in ("SELECT count(*) FROM undo_log",):
         with pytest.raises(asyncpg.InsufficientPrivilegeError):
             await read_tools.run_query(sql)
     readable = await read_tools.run_query("SELECT count(*) AS n FROM v_spending")

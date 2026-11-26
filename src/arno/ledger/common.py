@@ -70,72 +70,68 @@ async def system_account(conn: Connection, kind: str) -> dict[str, Any]:
     return row
 
 
-async def ledger_balances(conn: Connection, ledger_account_ids: list[str]) -> dict[str, int]:
-    if not ledger_account_ids:
+# An account's balance is what moved in minus what moved out of it, whatever its kind.
+_LEG_DELTAS = """
+    SELECT to_account_id AS account_id, movement_id, amount_paise AS delta
+    FROM movement_legs WHERE to_account_id = ANY(ARRAY(SELECT unnest($1::text[])))
+    UNION ALL
+    SELECT from_account_id, movement_id, -amount_paise
+    FROM movement_legs WHERE from_account_id = ANY(ARRAY(SELECT unnest($1::text[])))
+"""
+
+
+async def ledger_balances(conn: Connection, account_ids: list[str]) -> dict[str, int]:
+    if not account_ids:
         return {}
-    # Routing `unnest($1::text[])` through a subquery creates an InitPlan so Postgres caches a
-    # generic plan while still using the primary-key index.
     rows = await conn.fetch(
-        """
-        SELECT id, coalesce(balance, 0)::bigint AS balance
-        FROM pgledger_accounts
-        WHERE id = ANY(ARRAY(SELECT unnest($1::text[])))
-        """,
-        ledger_account_ids,
+        f"SELECT account_id, sum(delta)::bigint AS balance FROM ({_LEG_DELTAS}) d "  # noqa: S608
+        "GROUP BY account_id",
+        account_ids,
     )
-    by_id = {str(row["id"]): int(row["balance"]) for row in rows}
-    return {account_id: by_id.get(account_id, 0) for account_id in ledger_account_ids}
+    by_id = {str(row["account_id"]): int(row["balance"]) for row in rows}
+    return {account_id: by_id.get(account_id, 0) for account_id in account_ids}
 
 
-async def ledger_balance(conn: Connection, ledger_account_id: str) -> int:
-    return (await ledger_balances(conn, [ledger_account_id]))[ledger_account_id]
+async def ledger_balance(conn: Connection, account_id: str) -> int:
+    return (await ledger_balances(conn, [account_id]))[account_id]
 
 
 async def ledger_balances_at(
-    conn: Connection, ledger_account_ids: list[str], as_of: date
+    conn: Connection, account_ids: list[str], as_of: date
 ) -> dict[str, int]:
-    if not ledger_account_ids:
+    if not account_ids:
         return {}
     rows = await conn.fetch(
-        """
-        SELECT e.account_id, coalesce(sum(e.amount), 0)::bigint AS balance_paise
-        FROM pgledger_entries e
-        JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
-        JOIN movements m ON m.id = ml.movement_id
-        WHERE e.account_id = ANY(ARRAY(SELECT unnest($1::text[])))
-          AND m.date <= $2
-        GROUP BY e.account_id
-        """,
-        ledger_account_ids,
+        f"""
+        SELECT d.account_id, coalesce(sum(d.delta), 0)::bigint AS balance_paise
+        FROM ({_LEG_DELTAS}) d JOIN movements m ON m.id = d.movement_id
+        WHERE m.date <= $2
+        GROUP BY d.account_id
+        """,  # noqa: S608
+        account_ids,
         as_of,
     )
     by_id = {str(row["account_id"]): int(row["balance_paise"]) for row in rows}
-    return {account_id: by_id.get(account_id, 0) for account_id in ledger_account_ids}
+    return {account_id: by_id.get(account_id, 0) for account_id in account_ids}
 
 
-async def balance_as_of_many(
-    conn: Connection, ledger_account_ids: list[str]
-) -> dict[str, date | None]:
-    if not ledger_account_ids:
+async def balance_as_of_many(conn: Connection, account_ids: list[str]) -> dict[str, date | None]:
+    if not account_ids:
         return {}
-    # Same `ARRAY(SELECT unnest(...))` generic-plan idiom as `ledger_balances`.
     rows = await conn.fetch(
-        """
-        SELECT e.account_id, max(m.date) AS as_of
-        FROM pgledger_entries e
-        JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
-        JOIN movements m ON m.id = ml.movement_id
-        WHERE e.account_id = ANY(ARRAY(SELECT unnest($1::text[])))
-        GROUP BY e.account_id
-        """,
-        ledger_account_ids,
+        f"""
+        SELECT d.account_id, max(m.date) AS as_of
+        FROM ({_LEG_DELTAS}) d JOIN movements m ON m.id = d.movement_id
+        GROUP BY d.account_id
+        """,  # noqa: S608
+        account_ids,
     )
     by_id = {str(row["account_id"]): row["as_of"] for row in rows}
-    return {account_id: by_id.get(account_id) for account_id in ledger_account_ids}
+    return {account_id: by_id.get(account_id) for account_id in account_ids}
 
 
-async def balance_as_of(conn: Connection, ledger_account_id: str) -> date | None:
-    return (await balance_as_of_many(conn, [ledger_account_id]))[ledger_account_id]
+async def balance_as_of(conn: Connection, account_id: str) -> date | None:
+    return (await balance_as_of_many(conn, [account_id]))[account_id]
 
 
 def has_known_balance(account: dict[str, Any]) -> bool:
@@ -226,14 +222,12 @@ def _assemble_account_payload(
 async def account_payloads(conn: Connection, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not rows:
         return []
-    ledger_ids = [str(row["ledger_account_id"]) for row in rows]
-    missing_balance_ids = [
-        str(row["ledger_account_id"]) for row in rows if "balance_paise" not in row
-    ]
+    ids = [str(row["id"]) for row in rows]
+    missing_balance_ids = [str(row["id"]) for row in rows if "balance_paise" not in row]
     fetched_balances = (
         await ledger_balances(conn, missing_balance_ids) if missing_balance_ids else {}
     )
-    as_of_by_id = await balance_as_of_many(conn, ledger_ids)
+    as_of_by_id = await balance_as_of_many(conn, ids)
     today_date = today()
     return [
         _assemble_account_payload(
@@ -241,9 +235,9 @@ async def account_payloads(conn: Connection, rows: list[dict[str, Any]]) -> list
             balance=(
                 int(row["balance_paise"])
                 if "balance_paise" in row
-                else fetched_balances[str(row["ledger_account_id"])]
+                else fetched_balances[str(row["id"])]
             ),
-            as_of=as_of_by_id[str(row["ledger_account_id"])],
+            as_of=as_of_by_id[str(row["id"])],
             today_date=today_date,
         )
         for row in rows

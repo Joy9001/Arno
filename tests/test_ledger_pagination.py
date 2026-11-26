@@ -94,7 +94,7 @@ async def test_cursor_pages_cover_every_visible_row_and_stop_on_the_last(ledger)
     assert empty["next_cursor"] is None
 
 
-async def test_many_hidden_reversals_do_not_shorten_or_strand_a_page(ledger):
+async def test_many_deleted_movements_do_not_shorten_or_strand_a_page(ledger):
     bank = await _bank(ledger)
     food = await _category(ledger)
     visible = [
@@ -135,15 +135,11 @@ async def test_many_hidden_reversals_do_not_shorten_or_strand_a_page(ledger):
     assert last["items"] and last["next_cursor"] is None
     assert set(seen).isdisjoint(hidden)
 
-    everything = await list_movements(ledger, limit=200, include_reversed=True)
-    assert everything["total_count"] == len(everything["items"]) == 2 * len(hidden) + len(visible)
-    assert set(hidden) <= {item["id"] for item in everything["items"]}
-    assert all(
-        item["kind"] != "reversal" for item in (await list_movements(ledger, limit=200))["items"]
-    )
+    assert await ledger.fetchval("SELECT count(*) FROM movements WHERE id = ANY($1)", hidden) == 0
+    assert (await list_movements(ledger, limit=200))["total_count"] == len(visible)
 
 
-async def test_undo_of_undo_is_visible_again_with_parity_and_counts(ledger):
+async def test_undo_of_undo_brings_the_same_movement_back_with_counts(ledger):
     bank = await _bank(ledger)
     food = await _category(ledger)
     movement = await _expense(ledger, bank, food, description="Chai", when=date(2026, 10, 1))
@@ -159,23 +155,6 @@ async def test_undo_of_undo_is_visible_again_with_parity_and_counts(ledger):
     assert [item["id"] for item in page["items"]] == [movement["id"]]
     assert page["total_count"] == 1
     assert page["next_cursor"] is None
-
-    everything = await list_movements(ledger, limit=2, include_reversed=True)
-    assert everything["total_count"] == 3
-    assert len(everything["items"]) == 2
-    assert everything["next_cursor"]
-    rest = await list_movements(
-        ledger, limit=2, cursor=everything["next_cursor"], include_reversed=True
-    )
-    assert rest["total_count"] == 3
-    assert rest["next_cursor"] is None
-
-    rows = everything["items"] + rest["items"]
-    by_id = {row["id"]: row for row in rows}
-    assert by_id[movement["id"]]["reversed"] is False
-    reversal = next(row for row in rows if row["reverses_id"] == movement["id"])
-    assert reversal["reversed"] is True
-    assert by_id[reversal["reversed_by"]]["reverses_id"] == reversal["id"]
 
 
 async def test_same_day_rows_page_by_id_descending_without_duplicates(ledger):
@@ -388,3 +367,28 @@ async def test_record_expense_statement_count_stays_within_budget(ledger):
     )
     assert stmts_with_rules <= 17
     assert stmts_without_rules <= 17
+
+
+async def test_a_plain_expense_is_written_in_at_most_four_statements(ledger):
+    from arno.ledger.audit import write_group
+    from arno.ledger.common import system_account
+    from arno.ledger.movements import TransferSpec, create_movement_in_group
+
+    bank = await _bank(ledger)
+    spending = await system_account(ledger, "spending")
+    accounts = {bank["id"]: bank, spending["id"]: spending}
+
+    async with write_group(ledger) as group:
+        _, stmts = await _count_statements(
+            ledger,
+            lambda: create_movement_in_group(
+                ledger,
+                group,
+                date=date(2026, 10, 10),
+                description="Chai",
+                kind="expense",
+                transfers=[TransferSpec(bank["id"], spending["id"], 50_000)],
+                accounts=accounts,
+            ),
+        )
+    assert stmts <= 4

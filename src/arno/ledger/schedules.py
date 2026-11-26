@@ -473,32 +473,28 @@ async def card_unbilled(
     """Net card charges since the last close, excluding payments and balance adjustments."""
     if not rows:
         return {}
-    ledger_ids = [str(row["ledger_account_id"]) for row in rows]
+    ids = [str(row["id"]) for row in rows]
     closes = [last_statement_close(int(row["statement_day"]), as_of) for row in rows]
     charged = await conn.fetch(
         """
-        SELECT c.ledger_id,
-               coalesce(sum(CASE WHEN t.from_account_id = c.ledger_id THEN t.amount
-                                 ELSE -t.amount END), 0)::bigint AS charged_paise
-        FROM unnest($1::text[], $2::date[]) AS c(ledger_id, closed)
-        JOIN pgledger_transfers t
-          ON t.from_account_id = c.ledger_id OR t.to_account_id = c.ledger_id
-        JOIN movement_legs ml ON ml.transfer_id = t.id
-        JOIN movements m ON m.id = ml.movement_id
-        JOIN v_movement_state ms ON ms.movement_id = m.id
-        JOIN accounts other ON other.ledger_account_id = CASE
-            WHEN t.from_account_id = c.ledger_id THEN t.to_account_id ELSE t.from_account_id END
+        SELECT c.card_id,
+               coalesce(sum(CASE WHEN l.from_account_id = c.card_id THEN l.amount_paise
+                                 ELSE -l.amount_paise END), 0)::bigint AS charged_paise
+        FROM unnest($1::text[], $2::date[]) AS c(card_id, closed)
+        JOIN movement_legs l ON l.from_account_id = c.card_id OR l.to_account_id = c.card_id
+        JOIN movements m ON m.id = l.movement_id
+        JOIN accounts other ON other.id = CASE
+            WHEN l.from_account_id = c.card_id THEN l.to_account_id ELSE l.from_account_id END
         WHERE m.date > c.closed AND m.date <= $3
-          AND ms.is_effective
           AND NOT other.liquid AND other.kind NOT IN ('card', 'equity')
-        GROUP BY c.ledger_id
+        GROUP BY c.card_id
         """,
-        ledger_ids,
+        ids,
         closes,
         as_of,
     )
-    by_ledger = {str(row["ledger_id"]): int(row["charged_paise"]) for row in charged}
-    return {ledger_id: by_ledger.get(ledger_id, 0) for ledger_id in ledger_ids}
+    by_card = {str(row["card_id"]): int(row["charged_paise"]) for row in charged}
+    return {card_id: by_card.get(card_id, 0) for card_id in ids}
 
 
 async def get_occurrence(conn: Connection, schedule_id: str, due_date: date) -> dict[str, Any]:
@@ -540,13 +536,10 @@ async def upcoming(
     cards = await conn.fetch(
         "SELECT * FROM v_accounts WHERE kind = 'card' AND active ORDER BY name"
     )
-    balances = await ledger_balances_at(
-        conn, [str(card["ledger_account_id"]) for card in cards], start
-    )
+    balances = await ledger_balances_at(conn, [str(card["id"]) for card in cards], start)
     unbilled = await card_unbilled(conn, cards, start)
     for card in cards:
-        ledger_id = str(card["ledger_account_id"])
-        outstanding = max(-balances[ledger_id], 0)
+        outstanding = max(-balances[str(card["id"])], 0)
         if outstanding <= 0:
             continue
         # A ledger balance is not a statement: without one, the outstanding is unknown and the
@@ -560,7 +553,7 @@ async def upcoming(
             due_day=card["due_day"],
             outstanding_paise=outstanding,
             credit_limit_paise=card["credit_limit_paise"] or 0,
-            unbilled_paise=unbilled[ledger_id],
+            unbilled_paise=unbilled[card["id"]],
         )
         for due, amount in card_bills(account, start):
             if not first <= due <= end:

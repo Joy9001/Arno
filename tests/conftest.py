@@ -133,15 +133,9 @@ PASSPHRASE = "correct horse battery staple"
 
 # Ordinary cases reset in place. Demo cases keep native template cloning.
 RESET_TABLES = (
-    "model_credentials",
-    "llm_calls",
     "llm_usage",
     "schedule_payments",
     "schedule_occurrences",
-    "pgledger_idempotency_keys",
-    "pgledger_entries",
-    "pgledger_transfers",
-    "pgledger_accounts",
     "accounts",
     "payees",
     "categories",
@@ -160,7 +154,7 @@ RESET_TABLES = (
     "conversations",
     "messages",
     "preferences",
-    "audit_log",
+    "undo_log",
     "notifications",
     "recap_views",
     "backup_runs",
@@ -176,7 +170,6 @@ _TRUNCATE_API = (
 # Insert order: every FK target precedes its children.
 _STATIC_TABLES = (
     "settings",
-    "pgledger_accounts",
     "categories",
     "category_rules",
     "accounts",
@@ -341,7 +334,6 @@ async def _mutable_reset(*, api: bool) -> None:
                     await conn.execute(f"DELETE FROM public.{quote_ident(table)}")
                     await _restore_table(conn, table)
             # System entries share tables with mutable accounts and their balances.
-            await _restore_table(conn, "pgledger_accounts")
             await _restore_table(conn, "accounts")
 
 
@@ -451,7 +443,7 @@ async def clean_database(migrated: list[int], request: pytest.FixtureRequest) ->
         base = _dsn()
         await _clone(await _ensure_template("demo"), str(conninfo_to_dict(base)["dbname"]))
         async with connect(base) as conn:
-            await conn.execute("UPDATE public.audit_log SET created_at = now()")
+            await conn.execute("UPDATE public.undo_log SET created_at = now()")
         return
     await _mutable_reset(api=kind == "api")
 

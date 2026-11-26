@@ -56,7 +56,7 @@ The following table records each domain area in the ledger:
 | People | Splits, lending, borrowing, and reimbursements modeled as ledger balances |
 | Investments | Asset accounts with hand-updated balances (EPF, FD, PPF, NPS, gold, funds); statement-driven net worth stays parked |
 | Categories | Editable defaults with a reducible flag and learned merchant-to-category rules; rules always win over model categorization, and payee corrections can apply retroactively |
-| Memory | Agent-managed typed memories (`preference`, `fact`, or `rule`), keyed by `(kind, subject)` so updates replace active entries while keeping history in `audit_log`; never holds balances owned by the ledger |
+| Memory | Agent-managed typed memories (`preference`, `fact`, or `rule`), keyed by `(kind, subject)` so updates replace active entries while keeping history in `undo_log`; never holds balances owned by the ledger |
 | Conversations | Persistent, searchable chat threads where every ledger write links back to the message that caused it |
 
 ### How data enters
@@ -195,7 +195,7 @@ The following table records the build-versus-buy decision for each component:
 | Model cost | Build: `llm_usage` table + one shared daily cap | One row per model response, priced by `genai-prices` through PydanticAI; $20 a day shared by every role, reset at midnight IST; unpriced models count as $0. Replaces the spend ledger, cost journal, pricing and metering modules, and per-run budgets ([`specs/cost-tracking.md`](specs/cost-tracking.md)) |
 | Model-written Python | Build: isolated `sandbox` service | Stateless container on an internal network with no internet or database route, read-only, resource-capped, and given no secrets; `api` reaches it at `ARNO_SANDBOX_URL` through `run_python` |
 | Web search | Buy: model-native search, else Brave Search | The agent searches only when the model supports it or `BRAVE_API_KEY` is set ([`specs/tools.md`](specs/tools.md#web_search)) |
-| Double-entry ledger core | Buy: vendored `pgledger` | MIT-licensed pure Postgres SQL with idempotency keys |
+| Double-entry ledger core | Build: `movements` and `movement_legs` | Each leg moves a positive amount between two different accounts, so the ledger is zero-sum by `CHECK` constraint and a balance is a sum of legs; corrections edit in place and `undo_log` snapshots make every write undoable |
 | Ledger mapping, projection engine, patterns | Build | Core product differentiator ([`specs/data-and-engine.md`](specs/data-and-engine.md)) |
 
 ### Technology choices
@@ -208,8 +208,8 @@ The following table records the stack for each layer:
 | Agent framework | PydanticAI | Native approvals, caching, history processors, fallback, and web search |
 | API server | FastAPI + Uvicorn | Pydantic-native OpenAPI contracts; also serves the static web build |
 | Database | PostgreSQL 18 (pinned) | Enforces the `agent_ro` read-only role and 2-second timeout natively; supports real date/numeric types and `pgvector` if needed |
-| Data access | Plain SQL over `asyncpg` + per-loop idle connection cache (up to 8 connections) | Schema stays transparent for `run_query`; never-wait cache avoids pool deadlocks on long chat streams ([`specs/platform.md`](specs/platform.md#database-connections-and-integrity)) |
-| Migrations | Numbered `.sql` files + `schema_version` table | Plain transactional SQL with recorded checksums |
+| Data access | Plain SQL over `asyncpg` with one standard pool per event loop (1 to 20 connections) | Schema stays transparent for `run_query`; a standard pool recovers from dropped connections without custom code ([`specs/platform.md`](specs/platform.md#database-connections-and-integrity)) |
+| Migrations | Numbered `.sql` files + `schema_version` table | Plain transactional SQL with recorded checksums; `0001_baseline.sql` squashes the earlier 50, and the migrator refuses a pre-baseline database ([legacy upgrades](operations/legacy-upgrades.md#move-to-the-baseline-schema)) |
 | Type checking | Pyrefly (`strict` preset, zero warnings) | Native Pydantic understanding and per-path strictness ([`operations/typing.md`](operations/typing.md)) |
 | Engine arithmetic | NumPy (integer arrays) | Vectorized 16,384-scenario integer kernel; BSD-3-Clause |
 | Background work | Minute loop and `spawn` in the API process; state on the rows the work touches | Zero broker overhead; state persists in every `pg_dump` |
@@ -282,7 +282,7 @@ owner-setup, and human ship gates are tracked in
 1. Repository layout, `pyproject.toml`, `src/arno/`, `web/`, and `compose.yaml`.
 2. PostgreSQL 18 with numbered transactional SQL migrations (`schema_version`) and four isolated
    roles (`postgres`, `app`, `agent_ro`, `backup`), with `app` demoted to non-superuser.
-3. Vendored `pgledger` core with `THIRD_PARTY_NOTICES.md` and integer-paise schema.
+3. Integer-paise schema with a constraint-balanced double-entry ledger.
 4. Static web shell and `/api/health` served behind `tailscale serve` under a strict content
    security policy.
 5. Authentication: the `Tailscale-User-Login` header matched to `ARNO_OWNER_EMAIL`, or an optional
@@ -293,12 +293,12 @@ owner-setup, and human ship gates are tracked in
 ### L1: Ledger
 
 7. Accounts (bank, credit card with cycle and terms, cash, wallet, loan, asset) and read-only views.
-8. Balanced double-entry movements through `pgledger`, `movement_legs` spine, unified reversal
-   state (`movement_reversal_state`), splits, lending, and reimbursements.
+8. Balanced double-entry movements over `movements` and `movement_legs`, in-place corrections,
+   splits, lending, and reimbursements.
 9. Schedules (income, obligations, family transfers, card installments) with Indian holiday-aware
-   recurrence and explicit reversal-aware payment allocations (`schedule_payments`).
+   recurrence and explicit payment allocations (`schedule_payments`).
 10. Goals with fenced savings, reducible categories, and learned categorization rules.
-11. Audit log with undo for every write and full data export (CSV, JSON excluding secrets, and
+11. Undo log recording every write, with undo, and full data export (CSV, JSON excluding secrets, and
     `pg_dump`).
 12. Encrypted daily backup inside the API (`pg_dump` piped to restic, off-site targets through
     `RESTIC_*`) and verified `arno restore`.
@@ -374,7 +374,7 @@ owner-setup, and human ship gates are tracked in
 45. Debt cost analysis: loan amortization with fees and APR, card payoff at stored or stated card
     rates, and offer comparison, computed by the agent in `run_python`.
 46. Tier-0 acceptance additions: Settings **History** and
-    **Delete everything**, XlsxWriter projection workbook export, `(kind, subject)` memory
+    **Delete everything**, `(kind, subject)` memory
     replacement, vision trace suppression, parse retry, and
     priority-ordered goal deferral.
 
@@ -382,7 +382,7 @@ owner-setup, and human ship gates are tracked in
 
 47. Trust-boundary and off-loop compute guards: block `--source db --publish`, cap projection/money
     bounds and dense-payee history, run `load_snapshot` in one `REPEATABLE READ` transaction, and
-    offload `project()`, `afford()`, and workbook builds via `asyncio.to_thread` behind a semaphore.
+    offload `project()` and `afford()` via `asyncio.to_thread` behind a semaphore.
 48. Financial correctness fixes across projection, affordability, patterns, and money math
     (category-level attribution, shared card billing splits, overdue obligation clamping, strict
     partial-order plan dominance, RBI KFS Annex B APR vector, negative-amortization guard).

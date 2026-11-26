@@ -91,25 +91,14 @@ def test_a_cross_origin_request_gets_no_cors_permission(client):
     )
 
 
-def test_a_migration_include_still_cannot_escape_the_db_directory(tmp_path):
-    migrations = tmp_path / "migrations"
-    migrations.mkdir()
-    (tmp_path / "outside.sql").write_text("SELECT 1;\n", encoding="utf-8")
-    (migrations / "0001_escape.sql").write_text("\\i ../outside.sql\n", encoding="utf-8")
-
-    with pytest.raises(MigrationError, match="escapes the db directory"):
-        discover(migrations)
-
-
 async def test_a_changed_migration_is_refused(tmp_path, clean_database: None):
     del clean_database  # the worker database must exist before the checksum check runs
-    # Expanded copies are self-contained: the vendored includes stay where they belong.
     migrations = tmp_path / "migrations"
     migrations.mkdir()
     for migration in discover():
         path = migrations / f"{migration.version:04d}_{migration.name}.sql"
         path.write_text(migration.sql, encoding="utf-8")
-    first = migrations / "0001_pgledger.sql"
+    first = migrations / "0001_baseline.sql"
     first.write_text(first.read_text(encoding="utf-8") + "\n-- edited after it ran\n")
 
     with pytest.raises(MigrationError, match="changed after it was applied"):
@@ -209,14 +198,15 @@ async def test_restore_verification_catches_a_broken_ledger(demo_ledger):
 
     await demo_ledger.execute(
         """
-        UPDATE pgledger_entries SET amount = amount + 1
-        WHERE id = (SELECT id FROM pgledger_entries ORDER BY id LIMIT 1)
+        DELETE FROM movement_legs
+        WHERE movement_id = (
+            SELECT movement_id FROM movement_legs GROUP BY movement_id HAVING count(*) = 1 LIMIT 1
+        )
         """
     )
     checks = await verify_database(demo_ledger)
 
-    assert checks["ledger_transfers_balance"] is False
-    assert checks["account_balances_match_entries"] is False
+    assert checks["movements_have_legs"] is False
 
 
 def test_a_bad_number_in_the_environment_names_the_variable(monkeypatch):
@@ -261,29 +251,7 @@ async def test_a_future_demo_anchor_is_a_clear_error(db):
 async def test_demo_persona_keeps_every_ledger_invariant_at_any_anchor(db, anchor):
     summary = await seed_demo(db, today=anchor, reset=True)
 
-    unbalanced = await db.fetchval(
-        """
-        SELECT count(*) FROM (
-            SELECT transfer_id FROM pgledger_entries
-            GROUP BY transfer_id HAVING sum(amount) <> 0
-        ) AS bad
-        """
-    )
-    assert unbalanced == 0
-
-    drifted = await db.fetchval(
-        """
-        SELECT count(*) FROM (
-            SELECT a.id
-            FROM pgledger_accounts a
-            LEFT JOIN (
-                SELECT account_id, sum(amount) AS total FROM pgledger_entries GROUP BY account_id
-            ) e ON e.account_id = a.id
-            WHERE coalesce(e.total, 0) <> a.balance
-        ) AS bad
-        """
-    )
-    assert drifted == 0
+    assert await db.fetchval("SELECT sum(balance_paise) FROM v_accounts") == 0
 
     assert await db.fetchval("SELECT count(*) FROM movements WHERE date > $1", anchor) == 0
 
@@ -299,9 +267,7 @@ async def test_demo_persona_keeps_every_ledger_invariant_at_any_anchor(db, ancho
     payments = await db.fetchval("SELECT count(*) FROM movements WHERE kind = 'loan'")
     loan = await db.fetchrow(
         """
-        SELECT pa.balance FROM pgledger_accounts pa
-        JOIN accounts a ON a.ledger_account_id = pa.id
-        WHERE a.name = 'Home loan'
+        SELECT balance_paise AS balance FROM v_accounts WHERE name = 'Home loan'
         """
     )
     interest = await db.fetchval(

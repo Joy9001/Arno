@@ -13,20 +13,24 @@ from typing import Any
 
 from arno.db.conn import Connection, connect
 
-# A memory's last replaced value, straight from the audit row that replaced it: what it said, when
+# A memory's last replaced value, straight from the undo entry that replaced it: what it said, when
 # it was saved, and when it was replaced. Undone edits are not history.
 _PREFERENCE_PREVIOUS = """
     LEFT JOIN LATERAL (
         SELECT jsonb_build_object(
-                   'text', a.before -> 'body',
-                   'changed_at', a.before ->> 'updated_at',
-                   'superseded_at', a.created_at) AS previous,
-               a.created_at AS changed_at
-        FROM audit_log a
-        WHERE a.table_name = 'preferences' AND a.row_id = p.id
-          AND a.undone_at IS NULL AND a.before ? 'body' AND a.after ? 'body'
-          AND a.before ->> 'body' IS DISTINCT FROM a.after ->> 'body'
-        ORDER BY a.created_at DESC, a.id DESC
+                   'text', e.entry -> 'before' -> 'body',
+                   'changed_at', e.entry -> 'before' ->> 'updated_at',
+                   'superseded_at', u.created_at) AS previous,
+               u.created_at AS changed_at
+        FROM undo_log u
+        CROSS JOIN LATERAL jsonb_array_elements(u.snapshot) AS e(entry)
+        WHERE u.snapshot @> jsonb_build_array(
+                  jsonb_build_object('table', 'preferences', 'key', p.id::text))
+          AND e.entry ->> 'table' = 'preferences' AND e.entry ->> 'key' = p.id::text
+          AND u.undone_at IS NULL
+          AND e.entry -> 'before' ? 'body' AND e.entry -> 'after' ? 'body'
+          AND e.entry -> 'before' ->> 'body' IS DISTINCT FROM e.entry -> 'after' ->> 'body'
+        ORDER BY u.created_at DESC, u.id DESC
         LIMIT 1
     ) change ON true
 """

@@ -8,11 +8,9 @@ import pytest
 from arno.ledger import export
 from arno.ledger.errors import UnavailableLedgerError
 
-# The public contract: these tables are credential or key material and never appear
-# in a data export. Kept literal so dropping one from the source makes this test fail.
-EXCLUDED_TABLES = [
-    "model_credentials",
-]
+# The public contract: tables left out of a data export. No table holds credential or key
+# material now, so the list is empty. Kept literal so changing it makes this test fail.
+EXCLUDED_TABLES: list[str] = []
 
 DATABASE_URL = "postgresql://app:secret@db.example:5433/arno"
 

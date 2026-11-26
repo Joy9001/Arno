@@ -23,7 +23,7 @@ export async function readExpenses(start: string, end: string): Promise<Spending
     const params = new URLSearchParams({ start, end, kind: "expense", limit: String(PAGE) });
     if (cursor) params.set("cursor", cursor);
     const list: MovementList = await api<MovementList>(`/api/movements?${params.toString()}`);
-    rows.push(...list.items.filter((movement) => !movement.reversed));
+    rows.push(...list.items);
     cursor = list.next_cursor;
     if (!cursor) return { start, end, rows, truncated: false };
   }

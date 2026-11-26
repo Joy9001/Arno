@@ -3,7 +3,7 @@ import { z } from "zod";
 import { displayText } from "../display-text";
 import { formatDate, formatPaise, isoDate, percent } from "../../format";
 import { ProjectionBody, type ProjectionPayload } from "../../projection";
-import { projectionReadiness, workbookUrl } from "../../projectionData";
+import { projectionReadiness } from "../../projectionData";
 import { parseProjectionReceipt } from "../../projectionReceipt";
 import { Timeline } from "../../panels/Timeline";
 import { ImportsPanel } from "../../panels/Imports";
@@ -85,7 +85,6 @@ export function AffordabilityLab({ seed, initialTimeline = false }: { seed: Proj
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [timeline, setTimeline] = useState(initialTimeline);
-  const [workbook, setWorkbook] = useState(() => workbookUrl(seed.request));
   useEffect(() => {
     if (!edited) return;
     let active = true;
@@ -109,7 +108,6 @@ export function AffordabilityLab({ seed, initialTimeline = false }: { seed: Proj
         if (!active) return;
         const parsed = parseProjectionReceipt(result);
         setData(parsed);
-        if (parsed) setWorkbook(`/api/projection/workbook?${params}`);
         setError(parsed ? null : "The projection response could not be read.");
       }).catch((caught: unknown) => { if (active) setError(errorMessage(caught)); })
         .finally(() => { if (active) setLoading(false); });
@@ -132,7 +130,6 @@ export function AffordabilityLab({ seed, initialTimeline = false }: { seed: Proj
       <button type="button" className="planner-toggle" onClick={() => setTimeline(!timeline)}>{timeline ? "Show projection details" : "Show spending timeline"}</button>
       {timeline ? <TimelineStrip payload={data} /> : <ProjectionBody payload={data} />}
       {readiness.ready && <GoalProgressRing payload={data} />}
-      <a href={workbook} download>Download workbook (.xlsx)</a>
     </>}
   </section>;
 }

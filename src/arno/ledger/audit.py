@@ -1,10 +1,10 @@
-"""Write groups and the audit log.
+"""Write groups and the undo log.
 
-Every ledger write goes through `write_group`. It opens one short transaction, collects one audit
-row for every changed row, and returns an `undo_id` (the audit `group_id`). Undo replays the
-`before` side of a group: ledger rows get an appended reversal, editable rows get their old values
-back, and rows created by the group are archived or deleted. Nothing in the ledger is updated or
-deleted.
+Every ledger write goes through `write_group`. It opens one short transaction, collects a
+`{table, key, before, after}` entry for every changed row, and writes one `undo_log` row (its id
+is the `undo_id`) with a one-line summary. Undo replays the snapshot backwards: rows the group
+created are deleted (or archived when later rows may point at them), rows it deleted are put back,
+and rows it edited get their old values.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid7
 
 import asyncpg
 
@@ -41,12 +41,21 @@ _COMMIT_LOSS_ERRORS = (
     TimeoutError,
 )
 
-# Columns a generic restore may touch. Identity and provenance stay put.
+# Columns an undo never rewrites: identity and provenance stay put.
 _IMMUTABLE_COLUMNS = {"id", "created_at"}
+# Rows other rows may point at: undoing their creation archives them instead of deleting.
+_ARCHIVED_ON_UNDO = {
+    "accounts",
+    "payees",
+    "categories",
+    "schedules",
+    "preferences",
+    "scheduled_questions",
+}
 
 
 def jsonable(value: Any) -> Any:
-    """Turn database values into JSON-safe values for audit rows and exports."""
+    """Turn database values into JSON-safe values for snapshots and exports."""
     if isinstance(value, dict):
         return {str(key): jsonable(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
@@ -63,25 +72,12 @@ def jsonable(value: Any) -> Any:
 
 
 async def new_id(conn: Connection, prefix: str) -> str:
-    # pgledger_generate_id is a scalar function: it always returns one id.
-    row = await conn.fetchrow_required("SELECT pgledger_generate_id($1) AS id", prefix)
-    return str(row["id"])
-
-
-def india_noon(day: date) -> datetime:
-    """The moment a movement's date becomes in pgledger's `event_at`."""
-    from zoneinfo import ZoneInfo
-
-    return datetime.combine(day, time(12), tzinfo=ZoneInfo("Asia/Kolkata"))
+    return str((await conn.fetchrow_required("SELECT new_id($1) AS id", prefix))["id"])
 
 
 def _key_column(table: str) -> str:
-    # movement_legs is keyed by its one-to-one transfer, not by a separate id.
+    # movement_legs is keyed by its transfer id, not by a separate id.
     return "transfer_id" if table == "movement_legs" else "id"
-
-
-def _row_key(table: str, row: dict[str, Any]) -> str:
-    return str(row[_key_column(table)])
 
 
 @dataclass
@@ -91,39 +87,47 @@ class WriteGroup:
     actor: Actor
     message_id: str | None = None
     entries: list[dict[str, Any]] = field(default_factory=list)
+    summary: str | None = None  # set by a caller that knows better than the generic phrasing
 
     def record(
-        self,
-        table: str,
-        row_id: str | None,
-        *,
-        before: dict[str, Any] | None,
-        after: dict[str, Any] | None,
+        self, table: str, key: str, *, before: dict[str, Any] | None, after: dict[str, Any] | None
     ) -> None:
         self.entries.append(
             {
-                "table_name": table,
-                "row_id": row_id,
+                "table": table,
+                "key": key,
                 "before": jsonable(before) if before is not None else None,
                 "after": jsonable(after) if after is not None else None,
             }
         )
 
     def record_created(self, table: str, row: dict[str, Any]) -> None:
-        self.record(table, _row_key(table, row), before=None, after=row)
+        self.record(table, str(row[_key_column(table)]), before=None, after=row)
 
     def record_updated(
-        self, table: str, row_id: str, before: dict[str, Any], after: dict[str, Any]
+        self, table: str, key: str, before: dict[str, Any], after: dict[str, Any]
     ) -> None:
-        self.record(table, row_id, before=before, after=after)
+        self.record(table, key, before=before, after=after)
 
     def record_deleted(self, table: str, row: dict[str, Any]) -> None:
-        self.record(table, _row_key(table, row), before=row, after=None)
+        self.record(table, str(row[_key_column(table)]), before=row, after=None)
+
+
+def _is_closed(conn: Connection) -> bool:
+    """A pooled connection whose backend was lost is detached and raises instead of saying so."""
+    try:
+        return conn.is_closed()
+    except asyncpg.InterfaceError:
+        return True
 
 
 async def _commit_transaction(tx: Any) -> None:
     """Commit the group's transaction (a narrow seam for testing commit-time loss)."""
     await tx.commit()
+
+
+# Groups open on a connection, so a nested `write_group` with the same id joins its outer one.
+_OPEN: dict[tuple[int, str], WriteGroup] = {}
 
 
 @asynccontextmanager
@@ -134,55 +138,62 @@ async def write_group(
     message_id: str | None = None,
     group_id: str | None = None,
 ) -> AsyncGenerator[WriteGroup]:
-    """One transaction whose audit rows share a group and can be undone together.
+    """One transaction whose changes share an `undo_log` row and can be undone together.
 
     The group owns its transaction. `asyncpg` turns a transaction opened inside another one into
-    a savepoint, so a nested group still commits or rolls back with its caller.
+    a savepoint, so a nested group still commits or rolls back with its caller. A nested group
+    with the id of an open one adds its entries to it; only the outermost group writes the row.
     """
     if actor not in {"user", "agent", "system"}:
         raise InvalidLedgerError("actor must be user, agent, or system")
+    parent = _OPEN.get((id(conn), group_id)) if group_id else None
     nested = conn.is_in_transaction()
     tx = conn.transaction()
     await tx.start()
+    group = WriteGroup(
+        conn=conn,
+        group_id=group_id or f"und_{uuid7().hex}",
+        actor=actor,
+        message_id=message_id,
+    )
+    key = (id(conn), group.group_id)
+    if parent is None:
+        _OPEN[key] = group
     try:
-        group = WriteGroup(
-            conn=conn,
-            group_id=group_id or await new_id(conn, "und"),
-            actor=actor,
-            message_id=message_id,
-        )
         yield group
-        if conn.is_closed():
+        if _is_closed(conn):
             raise asyncpg.ConnectionDoesNotExistError(
                 "The connection closed before COMMIT could be sent."
             )
-        for entry in group.entries:
+        if parent is not None:
+            parent.entries.extend(group.entries)
+        elif group.entries:
             await conn.execute(
                 """
-                INSERT INTO audit_log
-                    (actor, message_id, group_id, table_name, row_id, before, after)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                INSERT INTO undo_log (id, actor, message_id, summary, snapshot)
+                VALUES ($1, $2, $3, $4, $5)
                 """,
+                group.group_id,
                 group.actor,
                 group.message_id,
-                group.group_id,
-                entry["table_name"],
-                entry["row_id"],
-                entry["before"],
-                entry["after"],
+                group.summary or await _summarize(conn, group.entries),
+                group.entries,
             )
     except BaseException:
-        if not conn.is_closed():
+        if not _is_closed(conn):
             try:
                 await tx.rollback()
             except _COMMIT_LOSS_ERRORS:
                 pass
         raise
+    finally:
+        if parent is None:
+            _OPEN.pop(key, None)
 
     if nested:
         await tx.commit()
         return
-    if conn.is_closed():
+    if _is_closed(conn):
         raise asyncpg.ConnectionDoesNotExistError(
             "The connection closed before COMMIT could be sent."
         )
@@ -195,17 +206,16 @@ async def write_group(
 async def groups_for_rows(
     conn: Connection, table: str, row_ids: list[str]
 ) -> dict[str, str | None]:
+    """The latest group that still stands for each row: the one undo would revert."""
     if not row_ids:
         return {}
-    # Same `unnest(...)` generic-plan idiom as `movements._transfer_rows_for_movements`.
     rows = await conn.fetch(
         """
-        SELECT DISTINCT ON (row_id) row_id, group_id
-        FROM audit_log
-        WHERE table_name = $1
-          AND row_id = ANY(ARRAY(SELECT unnest($2::text[])))
-          AND undone_at IS NULL
-        ORDER BY row_id, created_at DESC, id DESC
+        SELECT DISTINCT ON (k.key) k.key AS row_id, g.id AS group_id
+        FROM unnest($2::text[]) AS k(key)
+        JOIN undo_log g ON g.undone_at IS NULL
+         AND g.snapshot @> jsonb_build_array(jsonb_build_object('table', $1::text, 'key', k.key))
+        ORDER BY k.key, g.created_at DESC, g.id DESC
         """,
         table,
         row_ids,
@@ -218,43 +228,6 @@ async def groups_for_rows(
 
 async def group_for_row(conn: Connection, table: str, row_id: str) -> str | None:
     return (await groups_for_rows(conn, table, [row_id]))[row_id]
-
-
-async def _load_group(conn: Connection, group_id: str) -> list[dict[str, Any]]:
-    return await conn.fetch(
-        """
-        SELECT id, table_name, row_id, before, after, undone_at, created_at
-        FROM audit_log WHERE group_id = $1
-        ORDER BY created_at, id
-        """,
-        group_id,
-    )
-
-
-async def _conflicts(
-    conn: Connection, group_id: str, *, ignore: frozenset[str] = frozenset()
-) -> list[dict[str, Any]]:
-    return await conn.fetch(
-        """
-        SELECT a.table_name, a.row_id, a.group_id
-        FROM audit_log a
-        JOIN (
-            SELECT DISTINCT table_name, row_id
-            FROM audit_log WHERE group_id = $1 AND row_id IS NOT NULL
-        ) touched USING (table_name, row_id)
-        WHERE a.group_id <> $2
-          AND a.undone_at IS NULL
-          AND NOT (a.group_id = ANY($4::text[]))
-          AND a.created_at >= (
-              SELECT min(created_at) FROM audit_log WHERE group_id = $3
-          )
-        ORDER BY a.created_at, a.id
-        """,
-        group_id,
-        group_id,
-        group_id,
-        list(ignore),
-    )
 
 
 # How a conflict reads to the user: what changed, and the one way out.
@@ -289,10 +262,7 @@ class UndoCheck:
 
     entries: list[dict[str, Any]]
     conflicts: list[dict[str, Any]]
-
-    @property
-    def undone(self) -> bool:
-        return bool(self.entries) and all(entry["undone_at"] is not None for entry in self.entries)
+    undone: bool = False
 
     @property
     def reason(self) -> str | None:
@@ -302,22 +272,259 @@ class UndoCheck:
         return _describe_conflicts(self.conflicts) if self.conflicts else None
 
 
+async def _check(conn: Connection, row: dict[str, Any] | None, ignore: frozenset[str]) -> UndoCheck:
+    if row is None:
+        return UndoCheck([], [])
+    if row["undone_at"] is not None:
+        return UndoCheck(row["snapshot"], [], undone=True)
+    # A later live group that touched a row this one touched (the same-transaction `>=` keeps
+    # groups written together from hiding behind each other)...
+    candidates = await conn.fetch(
+        """
+        SELECT DISTINCT h.id AS group_id, t.e ->> 'table' AS table_name, t.e ->> 'key' AS row_id
+        FROM undo_log g
+        CROSS JOIN LATERAL jsonb_array_elements(g.snapshot) AS t(e)
+        JOIN undo_log h ON h.id <> g.id AND h.undone_at IS NULL
+         AND NOT (h.id = ANY($2::text[])) AND h.created_at >= g.created_at
+         AND h.snapshot @> jsonb_build_array(
+                jsonb_build_object('table', t.e ->> 'table', 'key', t.e ->> 'key'))
+        WHERE g.id = $1
+        """,
+        row["id"],
+        list(ignore),
+    )
+    # ...is a conflict only if it left the row somewhere other than where this group left it. A
+    # later undo that put everything back is no obstacle.
+    end_state = {(e["table"], e["key"]): e["after"] for e in row["snapshot"]}
+    differs: dict[tuple[str, str], bool] = {}
+    for c in candidates:
+        key = (c["table_name"], c["row_id"])
+        if key not in differs:
+            current = await conn.fetchrow(
+                f"SELECT * FROM {quote_ident(key[0])} "  # noqa: S608
+                f"WHERE {quote_ident(_key_column(key[0]))}::text = $1",
+                key[1],
+            )
+            wanted = end_state[key]
+            differs[key] = (
+                current is not None
+                if wanted is None
+                else (current is None or jsonable(current) != wanted)
+            )
+    return UndoCheck(
+        row["snapshot"], [c for c in candidates if differs[(c["table_name"], c["row_id"])]]
+    )
+
+
 async def check_undo(
     conn: Connection, group_id: str, *, ignore: frozenset[str] = frozenset()
 ) -> UndoCheck:
     """Read-only. Undo and the history list share it, so the reason shown is the reason tapped."""
-    entries = await _load_group(conn, group_id)
-    if entries and all(entry["undone_at"] is not None for entry in entries):
-        return UndoCheck(entries, [])
-    return UndoCheck(entries, await _conflicts(conn, group_id, ignore=ignore))
+    row = await conn.fetchrow("SELECT * FROM undo_log WHERE id = $1", group_id)
+    return await _check(conn, row, ignore)
+
+
+# A group's one-line summary, written with it from its entries.
+
+_MOVEMENT_WORDS = {
+    "expense": "Logged expense",
+    "income": "Logged income",
+    "transfer": "Transferred",
+    "split": "Split",
+    "loan": "Lent",
+    "refund": "Refunded",
+    "settlement": "Settled",
+    "adjustment": "Recorded adjustment",
+}
+# table -> (noun, the column that names a row)
+_NAMED = {
+    "accounts": ("account", "name"),
+    "payees": ("payee", "display_name"),
+    "categories": ("category", "name"),
+    "category_rules": ("category rule", "pattern"),
+    "schedules": ("schedule", "name"),
+    "goals": ("goal", "name"),
+}
+
+
+def _rows(count: int) -> str:
+    return f"{count} row{'s' if count != 1 else ''}"
+
+
+def _money(amount_paise: Any) -> str:
+    return f" {format_paise(int(amount_paise))}" if amount_paise is not None else ""
+
+
+async def _movement_detail(
+    conn: Connection, movement_id: str, entries: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Kind, description, amount, and payee of a movement, from the group when it made or removed
+    the movement (its legs are all there) and from the database otherwise."""
+    own = next((e for e in entries if e["table"] == "movements" and e["key"] == movement_id), None)
+    if own is not None and (own["before"] is None or own["after"] is None):
+        movement = own["after"] or own["before"]
+        legs = [
+            e["after"] or e["before"]
+            for e in entries
+            if e["table"] == "movement_legs"
+            and (e["after"] or e["before"])["movement_id"] == movement_id
+        ]
+    else:
+        movement = await conn.fetchrow(
+            "SELECT kind, description FROM movements WHERE id = $1", movement_id
+        )
+        legs = await conn.fetch(
+            "SELECT * FROM movement_legs WHERE movement_id = $1 ORDER BY transfer_id", movement_id
+        )
+    if movement is None:
+        return {}
+    payee_id = next((leg["payee_id"] for leg in legs if leg["payee_id"]), None)
+    return {
+        "kind": movement["kind"],
+        "description": movement["description"],
+        "amount_paise": sum(int(leg["amount_paise"]) for leg in legs) if legs else None,
+        "payee_name": await conn.fetchval("SELECT display_name FROM payees WHERE id = $1", payee_id)
+        if payee_id
+        else None,
+    }
+
+
+def _movement_sentence(detail: dict[str, Any], verb: str | None = None) -> str:
+    kind = str(detail.get("kind"))
+    words = (verb or _MOVEMENT_WORDS.get(kind, f"Recorded {kind}")) + _money(
+        detail.get("amount_paise")
+    )
+    label = (detail.get("payee_name") or detail.get("description") or "").strip()
+    if label.casefold() in _MOVEMENT_WORDS:
+        label = ""
+    return f"{words} · {label}" if label else words
+
+
+def _memory_phrase(before: dict[str, Any] | None, after: dict[str, Any] | None) -> str:
+    # A delete-for-good blanks every copy of the body, so an empty body never names the text.
+    body = str((after or before or {}).get("body") or "").strip()
+    old = str((before or {}).get("body") or "").strip()
+    if before is None:
+        return f"Remembered: {body}" if body else "Remembered a memory"
+    if after is None:
+        return "Deleted a memory"
+    if before.get("active") and not after.get("active"):
+        return f"Forgot: {old}" if old else "Forgot a memory"
+    if old and body and old != body:
+        return f"Changed memory: {old} → {body}"
+    return "Changed a memory"
+
+
+def _settings_phrase(before: dict[str, Any] | None, after: dict[str, Any] | None) -> str:
+    old, new = (before or {}).get("floor_paise"), (after or {}).get("floor_paise")
+    if old == new:
+        return "Changed settings"
+    if new is None:
+        return "Removed the floor"
+    if old is None:
+        return f"Set floor {format_paise(int(new))}"
+    return f"Changed floor {format_paise(int(old))} → {format_paise(int(new))}"
+
+
+def _named_phrase(table: str, before: dict[str, Any] | None, after: dict[str, Any] | None) -> str:
+    noun, key = _NAMED[table]
+    row = after or before or {}
+    name = row.get(key) or f"a {noun}"
+    if before is None:
+        return f"Added {noun} {name}"
+    if after is None or (before.get("active") and not after.get("active")):
+        return f"Removed {noun} {name}"
+    if before.get(key) != after.get(key):
+        return f"Renamed {noun} {before.get(key) or name} to {after.get(key) or name}"
+    return f"Changed {noun} {name}"
+
+
+async def _entry_phrase(
+    conn: Connection, entry: dict[str, Any], entries: list[dict[str, Any]]
+) -> str | None:
+    table, before, after = entry["table"], entry["before"], entry["after"]
+    row = after or before or {}
+    if table == "movements":
+        detail = await _movement_detail(conn, entry["key"], entries)
+        if after is None:
+            return _movement_sentence(detail, f"Deleted {detail.get('kind')}")
+        sentence = _movement_sentence(detail)
+        return sentence if before is None else f"Changed {sentence[0].lower()}{sentence[1:]}"
+    if table == "movement_legs":
+        detail = await _movement_detail(conn, str(row["movement_id"]), entries)
+        return f"Relabeled: {_movement_sentence(detail)}" if detail else None
+    if table == "preferences":
+        return _memory_phrase(before, after)
+    if table == "settings":
+        return _settings_phrase(before, after)
+    if table == "schedule_payments":
+        name = await conn.fetchval(
+            "SELECT name FROM schedule_occurrences WHERE id = $1", str(row["occurrence_id"])
+        )
+        verb = "Unmarked" if after is None else "Marked"
+        return f"{verb} {name or 'a scheduled payment'} paid{_money(row.get('amount_paise'))}"
+    # Person and goal accounts carry no name of their own; their payee or goal entry speaks.
+    if table in _NAMED and not (table == "accounts" and not row.get("name")):
+        return _named_phrase(table, before, after)
+    return None
+
+
+async def _summarize(conn: Connection, entries: list[dict[str, Any]]) -> str:
+    created = [e for e in entries if e["table"] == "movements" and e["before"] is None]
+    if len(created) > 1:
+        legs = [e["after"] for e in entries if e["table"] == "movement_legs" and e["after"]]
+        ids = sorted({leg["payee_id"] for leg in legs if leg["payee_id"]})
+        names = {
+            row["id"]: row["display_name"]
+            for row in await conn.fetch(
+                "SELECT id, display_name FROM payees WHERE id = ANY($1::text[])", ids
+            )
+        }
+        labels: list[str] = []
+        for entry in created:
+            payee_id = next(
+                (
+                    leg["payee_id"]
+                    for leg in legs
+                    if leg["movement_id"] == entry["key"] and leg["payee_id"]
+                ),
+                None,
+            )
+            label = str(names.get(payee_id) or entry["after"]["description"]).strip()
+            if label.casefold() not in _MOVEMENT_WORDS and label not in labels:
+                labels.append(label)
+        shown = ", ".join(labels[:3]) + ("…" if len(labels) > 3 else "")
+        return f"Logged {len(created)} movements" + (f" · {shown}" if labels else "")
+    # A capture writes its payee before the expense; the money names the group, not the payee.
+    for entry in sorted(entries, key=lambda e: bool(e["table"] != "movements")):
+        if phrase := await _entry_phrase(conn, entry, entries):
+            return phrase
+    counts: dict[str, int] = {}
+    for entry in entries:
+        counts[entry["table"]] = counts.get(entry["table"], 0) + 1
+    return "Changed " + ", ".join(f"{_rows(n)} in {table}" for table, n in counts.items())
+
+
+async def _import_phrase(conn: Connection, group_id: str) -> str | None:
+    """A commit group is named by its import, which is linked to it after the group is written."""
+    row = await conn.fetchrow(
+        """
+        SELECT (SELECT a.filename FROM attachments a WHERE a.id = i.attachment_id) AS filename,
+               (SELECT count(*) FROM statement_lines s
+                 WHERE s.import_id = i.id AND s.match_state <> 'ignored') AS rows
+        FROM imports i
+        WHERE jsonb_exists(i.commit_groups, $1) AND i.commit_groups ->> 0 = $1
+        LIMIT 1
+        """,
+        group_id,
+    )
+    if row is None:
+        return None
+    return f"Committed import of {row['filename'] or 'a statement'} ({_rows(int(row['rows']))})"
 
 
 DEFAULT_LIMIT = 25
 MAX_LIMIT = 100
-
-
-def _encode_cursor(created_at: datetime, group_id: str) -> str:
-    return f"{created_at.isoformat()}|{group_id}"
 
 
 def _decode_cursor(cursor: str) -> tuple[datetime, str]:
@@ -331,371 +538,21 @@ def _decode_cursor(cursor: str) -> tuple[datetime, str]:
         raise InvalidLedgerError("Invalid history cursor") from exc
 
 
-# A write group's one-line history summary, read from its audit rows. Most tables have a specific
-# phrase; anything else falls back to that group's row counts per table.
-
-_MOVEMENT_WORDS = {
-    "expense": "Logged expense",
-    "income": "Logged income",
-    "transfer": "Transferred",
-    "split": "Split",
-    "loan": "Lent",
-    "refund": "Refunded",
-    "settlement": "Settled",
-    "adjustment": "Recorded adjustment",
-}
-_GENERIC_DESCRIPTIONS = {
-    "expense",
-    "income",
-    "transfer",
-    "split",
-    "loan",
-    "refund",
-    "settlement",
-    "adjustment",
-    "reversal",
-}
-
-
-def _rows(count: int) -> str:
-    return f"{count} row{'s' if count != 1 else ''}"
-
-
-async def _movement_detail(conn: Connection, movement_id: str) -> dict[str, Any]:
-    row = await conn.fetchrow(
-        """
-        SELECT m.kind, m.description,
-               (SELECT sum(t.amount)::bigint
-                  FROM movement_legs ml
-                  JOIN pgledger_transfers t ON t.id = ml.transfer_id
-                 WHERE ml.movement_id = m.id) AS amount_paise,
-               (SELECT p.display_name
-                  FROM movement_legs ml
-                  JOIN payees p ON p.id = ml.payee_id
-                 WHERE ml.movement_id = m.id
-                 ORDER BY ml.transfer_id
-                 LIMIT 1) AS payee_name
-        FROM movements m
-        WHERE m.id = $1
-        """,
-        movement_id,
-    )
-    return dict(row) if row is not None else {}
-
-
-def _movement_sentence(
-    *,
-    kind: str | None,
-    description: str | None,
-    amount_paise: Any,
-    payee_name: str | None,
-) -> str:
-    words = _MOVEMENT_WORDS.get(str(kind), f"Recorded {str(kind).replace('_', ' ')}")
-    if amount_paise is not None:
-        words = f"{words} {format_paise(int(amount_paise))}"
-    label = (payee_name or description or "").strip()
-    if label and label.casefold() in _GENERIC_DESCRIPTIONS:
-        label = ""
-    return f"{words} · {label}" if label else words
-
-
-async def _movement_phrase(
-    conn: Connection,
-    movement_id: str,
-    before: dict[str, Any] | None,
-    after: dict[str, Any] | None,
-) -> str:
-    row = after or before or {}
-    if row.get("kind") == "reversal" and row.get("reverses_id"):
-        original = await _movement_detail(conn, str(row["reverses_id"]))
-        reversed_line = _movement_sentence(
-            kind=original.get("kind"),
-            description=original.get("description"),
-            amount_paise=original.get("amount_paise"),
-            payee_name=original.get("payee_name"),
-        )
-        return f"Reversed: {reversed_line}"
-    detail = await _movement_detail(conn, movement_id)
-    sentence = _movement_sentence(
-        kind=row.get("kind") or detail.get("kind"),
-        description=row.get("description") or detail.get("description"),
-        amount_paise=detail.get("amount_paise"),
-        payee_name=detail.get("payee_name"),
-    )
-    return (
-        f"Changed {sentence[0].lower()}{sentence[1:]}"
-        if before is not None and after is not None
-        else sentence
-    )
-
-
-async def _leg_phrase(conn: Connection, row: dict[str, Any]) -> str | None:
-    movement_id = row.get("movement_id")
-    if not movement_id:
-        return None
-    detail = await _movement_detail(conn, str(movement_id))
-    if not detail:
-        return None
-    sentence = _movement_sentence(
-        kind=detail.get("kind"),
-        description=detail.get("description"),
-        amount_paise=detail.get("amount_paise"),
-        payee_name=detail.get("payee_name"),
-    )
-    return f"Relabeled: {sentence}"
-
-
-def _account_phrase(before: dict[str, Any] | None, after: dict[str, Any] | None) -> str | None:
-    row = after or before or {}
-    name = row.get("name")
-    if not name:
-        # Person and goal accounts carry no name of their own; their payee or goal entry speaks.
-        return None
-    if before is None:
-        return f"Added account {name}"
-    if after is None or (before.get("active") and not after.get("active")):
-        return f"Removed account {name}"
-    if before.get("name") != after.get("name"):
-        return f"Renamed account {before.get('name') or name} to {after.get('name') or name}"
-    return f"Changed account {name}"
-
-
-def _memory_phrase(before: dict[str, Any] | None, after: dict[str, Any] | None) -> str:
-    # A delete-for-good blanks every copy of the body, so an empty body never names the text.
-    body = str((after or before or {}).get("body") or "").strip()
-    old = str((before or {}).get("body") or "").strip()
-    if before is None:
-        return f"Remembered: {body}" if body else "Remembered a memory"
-    if after is None:
-        return "Deleted a memory"
-    if before.get("active") and not after.get("active"):
-        return f"Forgot: {old}" if old else "Forgot a memory"
-    if not before.get("active") and after.get("active"):
-        return f"Restored: {body}" if body else "Restored a memory"
-    if before.get("body") != after.get("body"):
-        if old and body:
-            return f"Changed memory: {old} → {body}"
-        return "Changed a memory"
-    if before.get("kind") != after.get("kind"):
-        return f"Reclassified memory: {body}" if body else "Reclassified a memory"
-    return "Changed a memory"
-
-
-def _settings_phrase(before: dict[str, Any] | None, after: dict[str, Any] | None) -> str:
-    before = before or {}
-    after = after or {}
-    old = before.get("floor_paise")
-    new = after.get("floor_paise")
-    if old != new:
-        if new is None:
-            return "Removed the floor"
-        if old is None:
-            return f"Set floor {format_paise(int(new))}"
-        return f"Changed floor {format_paise(int(old))} → {format_paise(int(new))}"
-    if before.get("display_name") != after.get("display_name"):
-        return f"Changed your name to {after.get('display_name')}"
-    return "Changed settings"
-
-
-def _schedule_phrase(before: dict[str, Any] | None, after: dict[str, Any] | None) -> str:
-    row = after or before or {}
-    name = row.get("name") or "a schedule"
-    if before is None:
-        return f"Added schedule {name}"
-    if after is None or (before.get("active") and not after.get("active")):
-        return f"Removed schedule {name}"
-    old = before.get("amount_paise")
-    new = after.get("amount_paise")
-    if old != new and old is not None and new is not None:
-        return f"Changed schedule {name} {format_paise(int(old))} → {format_paise(int(new))}"
-    return f"Changed schedule {name}"
-
-
-def _named_phrase(
-    before: dict[str, Any] | None,
-    after: dict[str, Any] | None,
-    *,
-    noun: str,
-    key: str,
-) -> str:
-    row = after or before or {}
-    name = row.get(key) or f"a {noun}"
-    if before is None:
-        return f"Added {noun} {name}"
-    if after is None or (before.get("active") and not after.get("active")):
-        return f"Removed {noun} {name}"
-    if before.get(key) != after.get(key):
-        return f"Renamed {noun} {before.get(key) or name} to {after.get(key) or name}"
-    return f"Changed {noun} {name}"
-
-
-def _goal_phrase(before: dict[str, Any] | None, after: dict[str, Any] | None) -> str:
-    row = after or before or {}
-    name = row.get("name") or "a goal"
-    if before is None:
-        return f"Added goal {name}"
-    if after is None:
-        return f"Removed goal {name}"
-    if before.get("status") != after.get("status"):
-        return f"Changed goal {name} to {after.get('status')}"
-    return f"Changed goal {name}"
-
-
-async def _payment_phrase(
-    conn: Connection,
-    before: dict[str, Any] | None,
-    after: dict[str, Any] | None,
-) -> str:
-    row = after or before or {}
-    name = None
-    if row.get("occurrence_id"):
-        name = await conn.fetchval(
-            "SELECT name FROM schedule_occurrences WHERE id = $1", str(row["occurrence_id"])
-        )
-    label = name or "a scheduled payment"
-    amount = row.get("amount_paise")
-    money = f" {format_paise(int(amount))}" if amount is not None else ""
-    return f"{'Unmarked' if after is None else 'Marked'} {label} paid{money}"
-
-
-async def _entry_phrase(conn: Connection, entry: dict[str, Any]) -> str | None:
-    table = str(entry["table_name"])
-    before = entry["before"]
-    after = entry["after"]
-    row_id = entry["row_id"]
-    if table == "accounts":
-        return _account_phrase(before, after)
-    if table == "movements" and row_id is not None:
-        return await _movement_phrase(conn, str(row_id), before, after)
-    if table == "movement_legs":
-        return await _leg_phrase(conn, after or before or {})
-    if table == "preferences":
-        return _memory_phrase(before, after)
-    if table == "settings":
-        return _settings_phrase(before, after)
-    if table == "schedules":
-        return _schedule_phrase(before, after)
-    if table == "schedule_occurrences" and after is not None:
-        name = after.get("name") or "a scheduled payment"
-        amount = after.get("amount_paise")
-        money = f" {format_paise(int(amount))}" if amount is not None else ""
-        return f"Marked {name} paid{money}"
-    if table == "schedule_payments":
-        return await _payment_phrase(conn, before, after)
-    if table == "payees":
-        return _named_phrase(before, after, noun="payee", key="display_name")
-    if table in {"categories", "category_rules"}:
-        key = "name" if table == "categories" else "pattern"
-        return _named_phrase(
-            before, after, noun="category rule" if key != "name" else "category", key=key
-        )
-    if table == "goals":
-        return _goal_phrase(before, after)
-    return None
-
-
-async def _import_phrase(conn: Connection, group_id: str) -> str | None:
-    row = await conn.fetchrow(
-        """
-        SELECT (SELECT a.filename FROM attachments a WHERE a.id = i.attachment_id) AS filename,
-               (SELECT count(*) FROM statement_lines s
-                 WHERE s.import_id = i.id AND s.match_state <> 'ignored') AS rows
-        FROM imports i
-        WHERE jsonb_exists(i.commit_groups, $1)
-          AND i.commit_groups ->> 0 = $1
-        LIMIT 1
-        """,
-        group_id,
-    )
-    if row is None:
-        return None
-    name = row["filename"] or "a statement"
-    return f"Committed import of {name} ({_rows(int(row['rows']))})"
-
-
-async def _group_phrase(conn: Connection, group_id: str, entries: list[dict[str, Any]]) -> str:
-    imported = await _import_phrase(conn, group_id)
-    if imported:
-        return imported
-    created_movements = [
-        entry
-        for entry in entries
-        if entry["table_name"] == "movements"
-        and entry["before"] is None
-        and (entry.get("after") or {}).get("kind") != "reversal"
-    ]
-    if len(created_movements) > 1:
-        labels: list[str] = []
-        for entry in created_movements:
-            movement_id = str(entry["row_id"])
-            detail = await _movement_detail(conn, movement_id)
-            after = entry.get("after") or {}
-            label = str(
-                detail.get("payee_name")
-                or after.get("description")
-                or detail.get("description")
-                or ""
-            ).strip()
-            if label and label.casefold() not in _GENERIC_DESCRIPTIONS and label not in labels:
-                labels.append(label)
-                if len(labels) == 4:
-                    break
-        suffix = ""
-        if labels:
-            shown = ", ".join(labels[:3]) + ("…" if len(labels) > 3 else "")
-            suffix = f" · {shown}"
-        return f"Logged {len(created_movements)} movements{suffix}"
-    # A capture writes its payee before the expense; the money names the group, not the payee.
-    ordered = [entry for entry in entries if entry["table_name"] == "movements"]
-    ordered += [entry for entry in entries if entry["table_name"] != "movements"]
-    for entry in ordered:
-        phrase = await _entry_phrase(conn, entry)
-        if phrase:
-            return phrase
-    counts: dict[str, int] = {}
-    for entry in entries:
-        table = str(entry["table_name"])
-        counts[table] = counts.get(table, 0) + 1
-    return "Changed " + ", ".join(f"{_rows(count)} in {table}" for table, count in counts.items())
-
-
-async def _group_summary(
-    conn: Connection, group_id: str, entries: list[dict[str, Any]], created_at: datetime
-) -> str:
-    # `undo_group` stamps the undone rows' `undone_at` with the same transaction `now()` its own
-    # audit rows carry, so an exact match names the group this one undid.
-    undone = await conn.fetch(
-        "SELECT DISTINCT group_id FROM audit_log WHERE undone_at = $1 AND group_id <> $2",
-        created_at,
-        group_id,
-    )
-    if undone:
-        target_id = str(undone[0]["group_id"])
-        return f"Undid: {await _group_phrase(conn, target_id, await _load_group(conn, target_id))}"
-    return await _group_phrase(conn, group_id, entries)
-
-
 async def list_history(
     conn: Connection, *, limit: int = DEFAULT_LIMIT, cursor: str | None = None
 ) -> dict[str, Any]:
     """One page of write groups, newest first, each with what undo would say about it."""
     limit = max(1, min(limit, MAX_LIMIT))
-    having = ""
-    params: list[Any] = []
-    if cursor:
-        created_at, group_id = _decode_cursor(cursor)
-        having = "HAVING (min(created_at), group_id) < ($1::timestamptz, $2::text)"
-        params.extend([created_at, group_id])
+    after = "WHERE (u.created_at, u.id) < ($1::timestamptz, $2::text)" if cursor else ""
+    params: list[Any] = list(_decode_cursor(cursor)) if cursor else []
     groups = await conn.fetch(
         f"""
-        SELECT group_id, min(created_at) AS created_at, max(actor) AS actor,
-               max(message_id) AS message_id
-        FROM audit_log
-        GROUP BY group_id
-        {having}
-        ORDER BY min(created_at) DESC, group_id DESC
+        SELECT u.*, m.conversation_id
+        FROM undo_log u LEFT JOIN messages m ON m.id = u.message_id
+        {after}
+        ORDER BY u.created_at DESC, u.id DESC
         LIMIT ${len(params) + 1}
-        """,  # noqa: S608 - `having` is a fixed fragment, never user text
+        """,  # noqa: S608 - `after` is a fixed fragment, never user text
         *params,
         limit + 1,
     )
@@ -703,179 +560,69 @@ async def list_history(
     groups = groups[:limit]
     items = []
     for group in groups:
-        group_id = str(group["group_id"])
-        check = await check_undo(conn, group_id)
-        conversation_id = None
-        if group["message_id"]:
-            conversation_id = await conn.fetchval(
-                "SELECT conversation_id FROM messages WHERE id = $1", group["message_id"]
-            )
-        summary = await _group_summary(conn, group_id, check.entries, group["created_at"])
+        check = await _check(conn, group, frozenset())
         items.append(
             {
-                "undo_id": group_id,
+                "undo_id": group["id"],
                 "created_at": group["created_at"].isoformat(),
                 "actor": group["actor"],
                 "message_id": group["message_id"],
-                "conversation_id": conversation_id,
-                "summary": summary,
-                "records": [
-                    {"table": entry["table_name"], "id": entry["row_id"]} for entry in check.entries
-                ],
+                "conversation_id": group["conversation_id"],
+                "summary": await _import_phrase(conn, group["id"]) or group["summary"],
+                "records": [{"table": e["table"], "id": e["key"]} for e in group["snapshot"]],
                 "undoable": check.reason is None,
                 "reason": check.reason,
             }
         )
-    next_cursor = (
-        _encode_cursor(groups[-1]["created_at"], str(groups[-1]["group_id"]))
-        if has_more and groups
-        else None
-    )
+    next_cursor = f"{groups[-1]['created_at'].isoformat()}|{groups[-1]['id']}" if has_more else None
     return {"items": items, "next_cursor": next_cursor}
 
 
-async def _update_row(
-    conn: Connection,
-    group: WriteGroup,
-    table: str,
-    row_id: str,
-    values: dict[str, Any],
-) -> dict[str, Any] | None:
-    key = _key_column(table)
-    before = await conn.fetchrow(
-        f"SELECT * FROM {quote_ident(table)} WHERE {quote_ident(key)}::text = $1",
-        row_id,
-    )
-    if before is None:
-        return None
-    columns = [column for column in values if column not in _IMMUTABLE_COLUMNS]
-    if not columns:
-        return before
-    assignments = [f"{quote_ident(column)} = ${index}" for index, column in enumerate(columns, 1)]
-    params = [values[column] for column in columns]
-    after = await conn.fetchrow(
-        f"UPDATE {quote_ident(table)} SET {', '.join(assignments)} "
-        f"WHERE {quote_ident(key)}::text = ${len(params) + 1} RETURNING *",
-        *params,
-        row_id,
-    )
-    if after is None:
-        # A concurrent change deleted the row between the read and the write. Nothing left to
-        # update, and the callers already treat a missing row as nothing to restore.
-        return None
-    group.record_updated(table, row_id, before, after)
-    return after
+async def _restore(conn: Connection, undo: WriteGroup, entry: dict[str, Any]) -> None:
+    """Put one snapshot entry back, recording the change in the undo's own group."""
+    table, key, before = entry["table"], entry["key"], entry["before"]
+    tbl, pk = quote_ident(table), quote_ident(_key_column(table))
+    current = await conn.fetchrow(f"SELECT * FROM {tbl} WHERE {pk}::text = $1", key)  # noqa: S608
 
-
-async def _insert_row(
-    conn: Connection,
-    group: WriteGroup,
-    table: str,
-    values: dict[str, Any],
-) -> dict[str, Any]:
-    columns = list(values)
-    names = ", ".join(quote_ident(column) for column in columns)
-    placeholders = ", ".join(f"${index}" for index in range(1, len(columns) + 1))
-    after = await conn.fetchrow_required(
-        f"INSERT INTO {quote_ident(table)} ({names}) VALUES ({placeholders}) RETURNING *",
-        *[values[column] for column in columns],
-    )
-    group.record_created(table, after)
-    return after
-
-
-async def _restore_before(
-    conn: Connection,
-    group: WriteGroup,
-    table: str,
-    row_id: str,
-    before: dict[str, Any] | None,
-) -> None:
-    key = _key_column(table)
-    current = await conn.fetchrow(
-        f"SELECT * FROM {quote_ident(table)} WHERE {quote_ident(key)}::text = $1",
-        row_id,
-    )
-
-    if before is not None:
-        # Audit rows are JSON, so dates and timestamps come back as strings. Rebuild a typed row
-        # before the column placeholders bind it.
-        before = await conn.fetchrow(
-            f"SELECT * FROM jsonb_populate_record(NULL::{quote_ident(table)}, $1)",
-            before,
-        )
-
-    if before is None:
-        if table == "schedule_occurrences" and await conn.fetchval(
-            "SELECT EXISTS(SELECT 1 FROM schedule_payments WHERE occurrence_id = $1)", row_id
-        ):
-            # A later match can share the frozen terms. Undo only this group's allocation.
+    if before is None:  # the group created this row
+        if current is None:
             return
-        if table == "accounts":
-            await _update_row(conn, group, table, row_id, {"active": False})
-        elif table in {"payees", "categories", "schedules", "preferences", "scheduled_questions"}:
-            await _update_row(conn, group, table, row_id, {"active": False})
-        elif table == "goals":
-            await _update_row(conn, group, table, row_id, {"status": "abandoned"})
-        elif table in {
-            "category_rules",
-            "captures",
-            "schedule_occurrences",
-            "schedule_payments",
-            "baselines",
-        }:
-            if current is not None:
-                await conn.execute(
-                    f"DELETE FROM {quote_ident(table)} WHERE {quote_ident(key)}::text = $1",
-                    row_id,
-                )
-                group.record_deleted(table, current)
+        if table == "schedule_occurrences" and await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM schedule_payments WHERE occurrence_id = $1)", key
+        ):
+            return  # a later match shares the frozen terms; undo only this group's allocation
+        if table in _ARCHIVED_ON_UNDO or table == "goals":
+            assignment = "status = 'abandoned'" if table == "goals" else "active = false"
+            after = await conn.fetchrow_required(
+                f"UPDATE {tbl} SET {assignment} WHERE {pk}::text = $1 RETURNING *",  # noqa: S608
+                key,
+            )
+            undo.record_updated(table, key, current, after)
         else:
-            raise InvalidLedgerError(f"Cannot undo a created row in {table}")
-        return
-
-    if current is None:
+            await conn.execute(f"DELETE FROM {tbl} WHERE {pk}::text = $1", key)  # noqa: S608
+            undo.record_deleted(table, current)
+    elif current is None:  # the group deleted this row
         if table == "schedule_payments":
             from arno.ledger.schedule_payments import validate_restored_payment
 
             await validate_restored_payment(conn, before)
-        await _insert_row(conn, group, table, before)
-        return
-    await _update_row(conn, group, table, row_id, before)
-
-
-async def _restore_movement(
-    conn: Connection,
-    group: WriteGroup,
-    movement_id: str,
-    before: dict[str, Any] | None,
-) -> None:
-    from arno.ledger.movements import reverse_movement
-
-    if before is None:
-        # The group created this movement. A later correction or delete already reversed it, and
-        # a second reversal would move the money a third time; reverse_movement locks FOR UPDATE
-        # and refuses if an active reversal already cancels it.
-        await reverse_movement(group, movement_id, note="Undo")
-        return
-    values: dict[str, Any] = await conn.fetchrow_required(
-        """
-        SELECT date, description, kind, reverses_id
-        FROM jsonb_populate_record(NULL::movements, $1)
-        """,
-        {
-            "date": before.get("date"),
-            "description": before.get("description"),
-            "kind": before.get("kind"),
-            "reverses_id": before.get("reverses_id"),
-        },
-    )
-    # A categorizer changes the first two, and a one-off mark is an edit like them. An audit row
-    # written before a column existed has no value to put back.
-    for column in ("category_rule_id", "category_hint", "one_off"):
-        if column in before:
-            values[column] = before[column]
-    await _update_row(conn, group, "movements", movement_id, values)
+        restored = await conn.fetchrow_required(
+            f"INSERT INTO {tbl} SELECT * FROM jsonb_populate_record(NULL::{tbl}, $1) "  # noqa: S608
+            "RETURNING *",
+            before,
+        )
+        undo.record_created(table, restored)
+    else:  # the group edited this row
+        columns = [c for c in before if c not in _IMMUTABLE_COLUMNS and c != _key_column(table)]
+        assignments = ", ".join(f"{quote_ident(c)} = r.{quote_ident(c)}" for c in columns)
+        after = await conn.fetchrow_required(
+            f"UPDATE {tbl} AS t SET {assignments} "  # noqa: S608
+            f"FROM jsonb_populate_record(NULL::{tbl}, $1) AS r "
+            f"WHERE t.{pk}::text = $2 RETURNING t.*",
+            before,
+            key,
+        )
+        undo.record_updated(table, key, current, after)
 
 
 async def undo_group(
@@ -886,16 +633,16 @@ async def undo_group(
     message_id: str | None = None,
     ignore_groups: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
-    """Revert one write group. Ledger movements get reversals; editable rows get old values.
+    """Revert one write group by replaying its snapshot backwards.
 
-    `ignore_groups` names undo groups this same operation just wrote. Their audit rows are not
-    later writes; they are the previous step of one undo, such as an import's categorization
-    groups before its commit groups.
+    `ignore_groups` names undo groups this same operation just wrote. They are not later writes;
+    they are the previous step of one undo, such as an import's categorization groups before its
+    commit groups.
     """
-    check = await check_undo(conn, undo_id, ignore=ignore_groups)
-    entries = check.entries
-    if not entries:
+    target = await conn.fetchrow("SELECT * FROM undo_log WHERE id = $1", undo_id)
+    if target is None:
         raise NotFoundLedgerError(f"No write group {undo_id}")
+    check = await _check(conn, target, ignore_groups)
     if check.undone:
         return {
             "status": "already_undone",
@@ -905,53 +652,35 @@ async def undo_group(
     if check.conflicts:
         names = sorted({f"{row['table_name']}:{row['row_id']}" for row in check.conflicts})
         raise ConflictLedgerError(
-            _describe_conflicts(check.conflicts),
-            details={"conflicts": names},
+            _describe_conflicts(check.conflicts), details={"conflicts": names}
         )
 
-    touched = {entry["table_name"] for entry in entries}
-    # A movement and the legs written with it share one group. Undo reverses the movement and
-    # keeps its legs, because the reversal copied their labels: the pair then nets to zero inside
-    # its category. Only a leg label update added later (for a movement from an earlier group)
-    # reverts to its previous values.
-    created_movements = {
-        str(entry["row_id"])
-        for entry in entries
-        if entry["table_name"] == "movements" and entry["before"] is None
-    }
-    # Movements first: a reversal copies the labels, so reverting the original labels before the
-    # reversal would lose the category that makes the net spending zero.
-    ordered = [entry for entry in entries if entry["table_name"] == "movements"]
-    ordered += [entry for entry in reversed(entries) if entry["table_name"] != "movements"]
+    entries = target["snapshot"]
+    tables = {entry["table"] for entry in entries}
     async with write_group(conn, actor=actor, message_id=message_id) as undo:
-        if touched & {"schedule_occurrences", "schedule_payments"}:
+        undo.summary = f"Undid: {await _import_phrase(conn, undo_id) or target['summary']}"
+        if tables & {"schedule_occurrences", "schedule_payments"}:
             from arno.ledger.schedule_payments import lock_payment_undo
 
             await lock_payment_undo(conn, entries)
-        for entry in ordered:
-            table = entry["table_name"]
-            row_id = entry["row_id"]
-            if row_id is None:
-                continue
-            if table == "movements":
-                await _restore_movement(conn, undo, row_id, entry["before"])
-            elif (
-                table == "movement_legs"
-                and (entry["after"] or {}).get("movement_id") in created_movements
-            ):
-                continue
-            else:
-                await _restore_before(conn, undo, table, row_id, entry["before"])
-        await conn.execute(
-            "UPDATE audit_log SET undone_at = now() WHERE group_id = $1 AND undone_at IS NULL",
-            undo_id,
-        )
+        try:
+            for entry in reversed(entries):
+                await _restore(conn, undo, entry)
+            # Foreign keys are deferred: check them now, so a row other records still point at
+            # is a clear conflict here rather than a bare error at commit.
+            await conn.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        except asyncpg.IntegrityConstraintViolationError as exc:
+            raise ConflictLedgerError(
+                "Other records still depend on what this undo would change, or the rows it "
+                "would restore already exist. Undo or remove those first, then try again."
+            ) from exc
+        await conn.execute("UPDATE undo_log SET undone_at = now() WHERE id = $1", undo_id)
 
     return {
         "status": "undone",
         "undo_id": undo_id,
         "undo_undo_id": undo.group_id,
-        "tables": sorted(touched),
+        "tables": sorted(tables),
         "summary": f"Reverted {len(entries)} changes.",
     }
 
@@ -959,15 +688,12 @@ async def undo_group(
 async def undo_latest(
     conn: Connection, *, actor: Actor = "user", message_id: str | None = None
 ) -> dict[str, Any]:
-    row = await conn.fetchrow(
+    group_id = await conn.fetchval(
         """
-        SELECT group_id FROM audit_log
-        WHERE undone_at IS NULL AND actor <> 'system'
-        GROUP BY group_id
-        ORDER BY max(created_at) DESC, max(id) DESC
-        LIMIT 1
+        SELECT id FROM undo_log WHERE undone_at IS NULL AND actor <> 'system'
+        ORDER BY created_at DESC, id DESC LIMIT 1
         """
     )
-    if row is None:
+    if group_id is None:
         raise NotFoundLedgerError("There is no write to undo.")
-    return await undo_group(conn, str(row["group_id"]), actor=actor, message_id=message_id)
+    return await undo_group(conn, str(group_id), actor=actor, message_id=message_id)

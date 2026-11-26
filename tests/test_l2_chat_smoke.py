@@ -166,9 +166,10 @@ async def test_preferences_can_be_turned_off_and_deleted_for_good(session_client
     )
     await demo_ledger.execute(
         """
-        INSERT INTO audit_log (actor, group_id, table_name, row_id, before, after)
-        VALUES ('agent', 'und_test', 'preferences', 'prf_test',
-                '{"body": "No rent warnings"}'::jsonb, '{"body": "No rent warnings"}'::jsonb)
+        INSERT INTO undo_log (id, actor, summary, snapshot)
+        VALUES ('und_test', 'agent', 'Remembered: No rent warnings',
+                '[{"table": "preferences", "key": "prf_test", "before": null,
+                   "after": {"id": "prf_test", "body": "No rent warnings"}}]'::jsonb)
         """
     )
     listed = session_client.get("/api/preferences").json()["preferences"]
@@ -181,9 +182,6 @@ async def test_preferences_can_be_turned_off_and_deleted_for_good(session_client
     deleted = session_client.delete("/api/preferences/prf_test")
     assert deleted.status_code == 200
     assert await demo_ledger.fetchval("SELECT count(*) FROM preferences WHERE id = 'prf_test'") == 0
-    audit = await demo_ledger.fetch(
-        "SELECT before, after FROM audit_log "
-        "WHERE table_name = 'preferences' AND row_id = 'prf_test'"
-    )
+    audit = await demo_ledger.fetch("SELECT summary, snapshot FROM undo_log")
     assert audit
     assert all("No rent warnings" not in str(item) for item in audit)

@@ -210,7 +210,7 @@ The following table defines the match outcomes:
 
 On a merge, the statement line attaches as a `statement_line` capture and **the statement wins on
 amount, date, and account**. A date difference updates the movement date in place; an amount or
-account difference reverses and replaces the transfers while preserving labels, notes, split
+account difference rewrites the legs in place while preserving labels, notes, split
 receivables, photos, and conversation links. Unmatched ledger movements inside the statement period
 appear on the review screen as logged but not on the statement.
 
@@ -272,7 +272,7 @@ and `POST /api/imports/{id}/categorize` retries a `failed` one.
   any merchant.
 - **Failure:** A chunk whose call fails leaves its payees uncategorized and makes the run
   `partial`. A spend stop fails the run, and the entry point records `failed`.
-- **Single undoable write group:** The model's labels, rules, and hints are one audit write group
+- **Single undoable write group:** The model's labels, rules, and hints are one write group
   linked to `imports.categorize_groups`, as is the rules-and-refunds phase before it.
 
 ## Undoing an import

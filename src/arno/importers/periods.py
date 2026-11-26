@@ -149,12 +149,9 @@ async def ledger_last_date(conn: Connection, account_id: str) -> dt.date | None:
     row = await conn.fetchrow(
         """
         SELECT max(m.date) AS last
-        FROM accounts a
-        JOIN pgledger_transfers t
-          ON t.from_account_id = a.ledger_account_id OR t.to_account_id = a.ledger_account_id
-        JOIN movement_legs ml ON ml.transfer_id = t.id
+        FROM movement_legs ml
         JOIN movements m ON m.id = ml.movement_id
-        WHERE a.id = $1
+        WHERE ml.from_account_id = $1 OR ml.to_account_id = $1
         """,
         account_id,
     )
@@ -166,16 +163,12 @@ async def ledger_opening(
 ) -> dict[str, Any] | None:
     """The account's ledger balance before the statement, or None on a first import.
 
-    A movement a reversal still cancels is not evidence of a balance: after an undone import, its
-    rows and their reversals are both in the ledger. Counting them as an opening made every later
-    statement fail its printed-opening check, because the net of a cancelled pair is meaningless.
-    So the balance is the ledger's own net (the pairs cancel), and the evidence test counts only
-    movements that stand.
+    An account with no movement before the statement has no ledger evidence, so no opening.
     """
     account = await conn.fetchrow("SELECT * FROM accounts WHERE id = $1", account_id)
     if account is None:
         return None
-    params: list[Any] = [account["ledger_account_id"]]
+    params: list[Any] = [account_id]
     cutoff = ""
     if period_start is not None:
         cutoff = """
@@ -184,14 +177,13 @@ async def ledger_opening(
         params.append(period_start)
     row = await conn.fetchrow(
         f"""
-        SELECT coalesce(sum(e.amount), 0)::bigint AS balance,
-               count(*) FILTER (WHERE ms.is_effective)::bigint AS entries,
-               max(m.date) FILTER (WHERE ms.is_effective) AS as_of
-        FROM pgledger_entries e
-        JOIN movement_legs ml ON ml.transfer_id = e.transfer_id
+        SELECT coalesce(sum(CASE WHEN ml.to_account_id = $1 THEN ml.amount_paise
+                                 ELSE -ml.amount_paise END), 0)::bigint AS balance,
+               count(*)::bigint AS entries,
+               max(m.date) AS as_of
+        FROM movement_legs ml
         JOIN movements m ON m.id = ml.movement_id
-        JOIN v_movement_state ms ON ms.movement_id = m.id
-        WHERE e.account_id = $1
+        WHERE (ml.to_account_id = $1 OR ml.from_account_id = $1)
         {cutoff}
         """,  # noqa: S608 - cutoff is a constant of this module
         *params,

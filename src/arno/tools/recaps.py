@@ -352,16 +352,16 @@ async def summarize_spending(
         "none": "'total'",
     }[group_by]
 
-    # The sum keeps every row, since a reversal nets its original to zero; the count leaves the
-    # pair out, so three grocery trips with one corrected entry count as three, not five.
     params: list[Any] = [start, end]
     clauses = [
-        "(t.from_account_id = sp.ledger_account_id OR t.to_account_id = sp.ledger_account_id)",
+        "(ml.from_account_id = sp.id OR ml.to_account_id = sp.id)",
         "m.date BETWEEN $1 AND $2",
     ]
     if account_id:
         params.extend([account_id, account_id])
-        clauses.append(f"(fa.id = ${len(params) - 1} OR ta.id = ${len(params)})")
+        clauses.append(
+            f"(ml.from_account_id = ${len(params) - 1} OR ml.to_account_id = ${len(params)})"
+        )
     if category_id:
         params.append(category_id)
         clauses.append(f"ml.category_id = ${len(params)}")
@@ -370,19 +370,13 @@ async def summarize_spending(
         f"""
         SELECT {key_sql} AS key,
                sum(
-                   CASE WHEN t.to_account_id = sp.ledger_account_id
-                        THEN t.amount ELSE -t.amount END
+                   CASE WHEN ml.to_account_id = sp.id
+                        THEN ml.amount_paise ELSE -ml.amount_paise END
                )::bigint AS amount_paise,
-               count(DISTINCT m.id) FILTER (
-                   WHERE ms.is_effective
-               )::bigint AS n
+               count(DISTINCT m.id)::bigint AS n
         FROM movement_legs ml
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         JOIN movements m ON m.id = ml.movement_id
-        JOIN v_movement_state ms ON ms.movement_id = m.id
         JOIN accounts sp ON sp.kind = 'spending'
-        LEFT JOIN v_accounts fa ON fa.ledger_account_id = t.from_account_id
-        LEFT JOIN v_accounts ta ON ta.ledger_account_id = t.to_account_id
         LEFT JOIN categories c ON c.id = ml.category_id
         LEFT JOIN payees p ON p.id = ml.payee_id
         WHERE {" AND ".join(clauses)}
@@ -395,10 +389,6 @@ async def summarize_spending(
     for row in rows:
         amount_paise = int(row["amount_paise"])
         count = int(row["n"])
-        if amount_paise == 0 and count == 0:
-            # A movement a live reversal cancelled leaves nothing to show. It still keeps the
-            # period's total defined, but it must not appear as a ₹0 category.
-            continue
         groups.append(
             {
                 "key": row["key"],
@@ -422,12 +412,9 @@ async def _spending_days(conn: Connection, start: date, end: date) -> set[date]:
         """
         SELECT DISTINCT m.date
         FROM movement_legs ml
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         JOIN movements m ON m.id = ml.movement_id
-        JOIN v_movement_state ms ON ms.movement_id = m.id
         JOIN accounts sp ON sp.kind = 'spending'
-        WHERE t.to_account_id = sp.ledger_account_id AND m.date BETWEEN $1 AND $2
-          AND ms.is_effective
+        WHERE ml.to_account_id = sp.id AND m.date BETWEEN $1 AND $2
         """,
         start,
         end,
@@ -446,15 +433,14 @@ async def period_totals(
     rows = await conn.fetch(
         """
         SELECT q.id, sum(
-                   CASE WHEN t.to_account_id = sp.ledger_account_id
-                        THEN t.amount ELSE -t.amount END
+                   CASE WHEN ml.to_account_id = sp.id
+                        THEN ml.amount_paise ELSE -ml.amount_paise END
                )::bigint AS amount_paise, count(m.id) AS n
         FROM unnest($1::text[], $2::date[], $3::date[]) AS q(id, d1, d2)
         JOIN movements m ON m.date BETWEEN q.d1 AND q.d2
         JOIN movement_legs ml ON ml.movement_id = m.id
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         JOIN accounts sp ON sp.kind = 'spending'
-        WHERE t.from_account_id = sp.ledger_account_id OR t.to_account_id = sp.ledger_account_id
+        WHERE ml.from_account_id = sp.id OR ml.to_account_id = sp.id
         GROUP BY q.id
         """,
         [period.id for period in periods],
@@ -572,17 +558,16 @@ async def _income(conn: Connection, start: date, end: date) -> list[dict[str, An
     rows = await conn.fetch(
         """
         SELECT m.id, m.date, m.description,
-               sum(CASE WHEN t.from_account_id = inc.ledger_account_id
-                        THEN t.amount ELSE -t.amount END)::bigint AS amount_paise
+               sum(CASE WHEN ml.from_account_id = inc.id
+                        THEN ml.amount_paise ELSE -ml.amount_paise END)::bigint AS amount_paise
         FROM movement_legs ml
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         JOIN movements m ON m.id = ml.movement_id
         JOIN accounts inc ON inc.kind = 'income'
-        WHERE (t.from_account_id = inc.ledger_account_id OR t.to_account_id = inc.ledger_account_id)
+        WHERE (ml.from_account_id = inc.id OR ml.to_account_id = inc.id)
           AND m.date BETWEEN $1 AND $2
         GROUP BY m.id, m.date, m.description
-        HAVING sum(CASE WHEN t.from_account_id = inc.ledger_account_id
-                        THEN t.amount ELSE -t.amount END) <> 0
+        HAVING sum(CASE WHEN ml.from_account_id = inc.id
+                        THEN ml.amount_paise ELSE -ml.amount_paise END) <> 0
         ORDER BY m.date DESC, m.id
         """,
         start,
@@ -613,12 +598,10 @@ async def spending_rows(
     """Each movement's net spend in the period, one row per movement and category.
 
     The same transfers `summarize_spending` adds up, so an unfiltered list sums to its total.
-    A correction and the entry it reverses both appear when both fall in the period; they net to
-    zero, so the sum still matches.
     """
     params: list[Any] = [start, end]
     clauses = [
-        "(t.from_account_id = sp.ledger_account_id OR t.to_account_id = sp.ledger_account_id)",
+        "(ml.from_account_id = sp.id OR ml.to_account_id = sp.id)",
         "m.date BETWEEN $1 AND $2",
     ]
     if category is not None:
@@ -636,7 +619,7 @@ async def spending_rows(
     if movement_id is not None:
         params.append(movement_id)
         clauses.append(f"m.id = ${len(params)}")
-    signed = "CASE WHEN t.to_account_id = sp.ledger_account_id THEN t.amount ELSE -t.amount END"
+    signed = "CASE WHEN ml.to_account_id = sp.id THEN ml.amount_paise ELSE -ml.amount_paise END"
     rows = await conn.fetch(
         f"""
         SELECT m.id, m.date, m.description, m.kind,
@@ -644,7 +627,6 @@ async def spending_rows(
                (coalesce(p.outside_text, false) OR coalesce(source.from_source, false)) AS outside,
                sum({signed})::bigint AS amount_paise
         FROM movement_legs ml
-        JOIN pgledger_transfers t ON t.id = ml.transfer_id
         JOIN movements m ON m.id = ml.movement_id
         JOIN accounts sp ON sp.kind = 'spending'
         LEFT JOIN categories c ON c.id = ml.category_id
@@ -826,17 +808,7 @@ async def recap(conn: Connection, period_id: str, *, today: date | None = None) 
             )
 
     rows = await spending_rows(conn, period.start, period.end)
-    reversed_ids = {
-        str(row["movement_id"])
-        for row in await conn.fetch(
-            "SELECT movement_id FROM movement_reversal_state() WHERE is_reversed"
-        )
-    }
-    purchases = [
-        row
-        for row in rows
-        if row["kind"] == "expense" and row["id"] not in reversed_ids and row["amount_paise"] > 0
-    ]
+    purchases = [row for row in rows if row["kind"] == "expense" and row["amount_paise"] > 0]
     if purchases:
         biggest = max(purchases, key=lambda row: (row["amount_paise"], row["date"]))
         who = biggest["payee"] or biggest["description"]

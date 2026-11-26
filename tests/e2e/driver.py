@@ -577,18 +577,15 @@ def ledger_summary() -> dict[str, Any]:
                 """
                 SELECT to_char(m.date, 'YYYY-MM') AS month,
                        coalesce(c.name, 'Uncategorized') AS category,
-                       sum(CASE WHEN t.to_account_id = sp.ledger_account_id
-                                THEN t.amount ELSE -t.amount END)::bigint AS amount_paise
+                       sum(CASE WHEN ml.to_account_id = sp.id
+                                THEN ml.amount_paise ELSE -ml.amount_paise END)::bigint
+                           AS amount_paise
                 FROM movement_legs ml
-                JOIN pgledger_transfers t ON t.id = ml.transfer_id
                 JOIN accounts sp ON sp.kind = 'spending'
                 JOIN movements m ON m.id = ml.movement_id
-                JOIN v_movement_state ms ON ms.movement_id = m.id
                 LEFT JOIN categories c ON c.id = ml.category_id
                 WHERE m.date >= $1 AND m.date < $2
-                  AND (t.from_account_id = sp.ledger_account_id
-                       OR t.to_account_id = sp.ledger_account_id)
-                  AND ms.is_effective
+                  AND (ml.from_account_id = sp.id OR ml.to_account_id = sp.id)
                 GROUP BY 1, 2
                 ORDER BY 1 DESC, 3 DESC
                 """,
