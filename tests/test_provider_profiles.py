@@ -132,14 +132,35 @@ def test_an_alternate_fallback_does_not_inherit_the_primary_provider(monkeypatch
     assert chat_config(fallback=True).provider == "cohere"
 
 
-def test_opencode_endpoints_include_session_header(monkeypatch):
+async def test_opencode_endpoints_include_per_thread_session_header(monkeypatch):
+    import httpx
+
+    from arno.agent.models import opencode_session
+
     monkeypatch.setenv("OPENCODE_SESSION_ID", "ses-fixed")
     opencode = build_model(RoleConfig("https://opencode.ai/zen/v1", "key", "big-pickle", 1000))
     assert isinstance(opencode, OpenAIChatModel)
     assert opencode.provider is not None
-    assert opencode.provider.client.default_headers.get("x-opencode-session") == "ses-fixed"
+    hooks = opencode.provider.client._client.event_hooks["request"]
+    assert len(hooks) == 1
+
+    req_default = httpx.Request("POST", "https://opencode.ai/zen/v1/chat/completions")
+    await hooks[0](req_default)
+    assert req_default.headers["x-opencode-session"] == "ses-fixed"
+
+    req_a = httpx.Request("POST", "https://opencode.ai/zen/v1/chat/completions")
+    with opencode_session("thread-a"):
+        await hooks[0](req_a)
+
+    req_b = httpx.Request("POST", "https://opencode.ai/zen/v1/chat/completions")
+    with opencode_session("thread-b"):
+        await hooks[0](req_b)
+
+    assert req_a.headers["x-opencode-session"].startswith("arno-")
+    assert req_b.headers["x-opencode-session"].startswith("arno-")
+    assert req_a.headers["x-opencode-session"] != req_b.headers["x-opencode-session"]
 
     plain = build_model(RoleConfig("https://api.openai.com/v1", "key", "gpt-5", 1000))
     assert isinstance(plain, OpenAIChatModel)
     assert plain.provider is not None
-    assert "x-opencode-session" not in plain.provider.client.default_headers
+    assert not plain.provider.client._client.event_hooks.get("request")

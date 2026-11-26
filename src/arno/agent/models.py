@@ -8,10 +8,27 @@ from __future__ import annotations
 
 import os
 import uuid
+from collections.abc import Generator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
+from hashlib import sha256
 from typing import Any, cast
 
 from pydantic_ai.models import Model
+
+_opencode_session: ContextVar[str | None] = ContextVar("opencode_session", default=None)
+
+
+@contextmanager
+def opencode_session(thread_id: str) -> Generator[None]:
+    """Bind a deterministic per-thread `x-opencode-session` value to this async context."""
+    token = _opencode_session.set(f"arno-{sha256(thread_id.encode('utf-8')).hexdigest()[:24]}")
+    try:
+        yield
+    finally:
+        _opencode_session.reset(token)
+
 
 DEFAULT_CONTEXT_WINDOW = 128_000
 CLOSED_URL = "http://127.0.0.1:9/v1"
@@ -84,39 +101,68 @@ def chat_config(*, fallback: bool = False) -> RoleConfig:
     return role_config("CHAT_FALLBACK" if fallback else "CHAT")
 
 
+def _opencode_http_client(base_url: str, client_cls: type[Any]) -> Any:
+    if "opencode.ai" not in base_url:
+        return None
+    fallback = os.environ.get("OPENCODE_SESSION_ID") or f"arno-{uuid.uuid4()}"
+
+    async def _set_session(request: Any) -> None:
+        request.headers["x-opencode-session"] = _opencode_session.get() or fallback
+
+    return client_cls(event_hooks={"request": [_set_session]})
+
+
 def build_model(config: RoleConfig) -> Model:
     """One code path for local and cloud. The SDK clients own retries."""
     from openai import AsyncOpenAI
+    from openai import DefaultAsyncHttpxClient as OpenAIHttpxClient
     from pydantic_ai.models.openai import OpenAIChatModel, OpenAIResponsesModel
     from pydantic_ai.providers.openai import OpenAIProvider
 
-    default_headers = (
-        {"x-opencode-session": os.environ.get("OPENCODE_SESSION_ID") or f"arno-{uuid.uuid4()}"}
-        if "opencode.ai" in config.base_url
-        else None
-    )
     name = config.provider.strip().lower()
     if name == "anthropic":
         from anthropic import AsyncAnthropic
+        from anthropic import DefaultAsyncHttpxClient as AnthropicHttpxClient
         from pydantic_ai.models.anthropic import AnthropicModel
         from pydantic_ai.providers.anthropic import AnthropicProvider
 
-        client = AsyncAnthropic(
-            api_key=config.api_key,
-            base_url=None if config.base_url == CLOSED_URL else config.base_url,
-            default_headers=default_headers,
-            max_retries=SDK_RETRIES,
+        http_client = _opencode_http_client(config.base_url, AnthropicHttpxClient)
+        client = (
+            AsyncAnthropic(
+                api_key=config.api_key,
+                base_url=None if config.base_url == CLOSED_URL else config.base_url,
+                http_client=http_client,
+                max_retries=SDK_RETRIES,
+            )
+            if http_client is not None
+            else AsyncAnthropic(
+                api_key=config.api_key,
+                base_url=None if config.base_url == CLOSED_URL else config.base_url,
+                max_retries=SDK_RETRIES,
+            )
         )
         return cast(
             Model, AnthropicModel(config.model, provider=AnthropicProvider(anthropic_client=client))
         )
-    openai_client = AsyncOpenAI(
-        base_url="https://openrouter.ai/api/v1"
+    openai_base_url = (
+        "https://openrouter.ai/api/v1"
         if name == "openrouter" and config.base_url == CLOSED_URL
-        else config.base_url,
-        api_key=config.api_key,
-        default_headers=default_headers,
-        max_retries=SDK_RETRIES,
+        else config.base_url
+    )
+    http_client = _opencode_http_client(config.base_url, OpenAIHttpxClient)
+    openai_client = (
+        AsyncOpenAI(
+            base_url=openai_base_url,
+            api_key=config.api_key,
+            http_client=http_client,
+            max_retries=SDK_RETRIES,
+        )
+        if http_client is not None
+        else AsyncOpenAI(
+            base_url=openai_base_url,
+            api_key=config.api_key,
+            max_retries=SDK_RETRIES,
+        )
     )
     provider: Any
     if name == "openrouter":
@@ -171,6 +217,7 @@ __all__ = [
     "build_model",
     "chat_config",
     "model_for",
+    "opencode_session",
     "parse_model",
     "primary_model",
     "role_config",

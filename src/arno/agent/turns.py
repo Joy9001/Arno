@@ -26,6 +26,7 @@ from arno.agent import capabilities as caps
 from arno.agent.cards import cards_from_messages
 from arno.agent.deps import AgentDeps
 from arno.agent.history import save_records, without_empty_responses
+from arno.agent.models import opencode_session
 from arno.agent.presentation import keep_last_answer
 from arno.db.conn import connect
 
@@ -401,7 +402,7 @@ class TurnManager:
                 for chunk in self._extras(turn, turn_messages):
                     yield chunk
 
-            with capture_run_messages() as run_messages:
+            with opencode_session(turn.thread_id), capture_run_messages() as run_messages:
                 captured = run_messages
                 stream = adapter.run_stream(
                     message_history=turn.history,
