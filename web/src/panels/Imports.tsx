@@ -1,10 +1,8 @@
+import { ActivityPager } from "./ActivityPager";
 import { useCallback, useEffect, useRef, useState } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
-import { Skeleton } from "@radix-ui/themes";
+import { Dialog } from "radix-ui";
 import {
   AlertCircle,
-  ChevronLeft,
-  ChevronRight,
   CircleCheck,
   FileUp,
   MessageCircle,
@@ -109,34 +107,10 @@ function Pager({
   onPage: (page: number) => void;
   compact?: boolean;
 }) {
-  return (
-    <nav className={compact ? "act-pager compact" : "act-pager"} aria-label={`${noun} pages`}>
-      <span className="act-pager-info">
-        {total === 0 ? `0 ${noun}` : `${first}–${last} of ${total} ${noun}`} · page {page + 1} of{" "}
-        {pageCount}
-      </span>
-      <div className="act-pager-buttons">
-        <button
-          type="button"
-          className="ghost small"
-          disabled={page === 0}
-          onClick={() => onPage(page - 1)}
-        >
-          <ChevronLeft size={14} strokeWidth={1.9} aria-hidden="true" />
-          Previous
-        </button>
-        <button
-          type="button"
-          className="ghost small"
-          disabled={page >= pageCount - 1}
-          onClick={() => onPage(page + 1)}
-        >
-          Next
-          <ChevronRight size={14} strokeWidth={1.9} aria-hidden="true" />
-        </button>
-      </div>
-    </nav>
-  );
+  return <ActivityPager label={`${noun} pages`} compact={compact}
+    info={<>{total === 0 ? `0 ${noun}` : `${first}–${last} of ${total} ${noun}`} · page {page + 1} of {pageCount}</>}
+    previousDisabled={page === 0} nextDisabled={page >= pageCount - 1}
+    onPrevious={() => onPage(page - 1)} onNext={() => onPage(page + 1)} />;
 }
 
 function LineTable({ detail }: { detail: ImportRecord }) {
@@ -260,6 +234,26 @@ function LineTable({ detail }: { detail: ImportRecord }) {
   );
 }
 
+function useLineResolution(detail: ImportRecord, onResolved: (next: ImportRecord) => void) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  async function resolve(lineId: string, body: object) {
+    setBusy(lineId);
+    setError(null);
+    try {
+      const next = await api<ImportRecord>(`/api/imports/${detail.import_id}/lines/${lineId}`, {
+        method: "PATCH", body: JSON.stringify(body),
+      });
+      onResolved(next);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setBusy(null);
+    }
+  }
+  return { busy, error, resolve };
+}
+
 function AmbiguousRows({
   detail,
   onResolved,
@@ -268,31 +262,12 @@ function AmbiguousRows({
   onResolved: (next: ImportRecord) => void;
 }) {
   const [choice, setChoice] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, resolve } = useLineResolution(detail, onResolved);
   const ambiguous = detail.lines.filter((line) => line.match_state === "ambiguous");
   if (ambiguous.length === 0) return null;
 
-  async function resolve(lineId: string, resolution: "new" | "ignore" | "merge") {
-    setBusy(lineId);
-    setError(null);
-    try {
-      const next = await api<ImportRecord>(
-        `/api/imports/${detail.import_id}/lines/${lineId}`,
-        {
-          method: "PATCH",
-          body: JSON.stringify({
-            resolution,
-            movement_id: resolution === "merge" ? choice[lineId] : null,
-          }),
-        },
-      );
-      onResolved(next);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusy(null);
-    }
+  function answer(lineId: string, resolution: "new" | "ignore" | "merge") {
+    return resolve(lineId, { resolution, movement_id: resolution === "merge" ? choice[lineId] : null });
   }
 
   return (
@@ -337,7 +312,7 @@ function AmbiguousRows({
             <button
               type="button"
               disabled={busy !== null || !choice[line.id]}
-              onClick={() => void resolve(line.id, "merge")}
+              onClick={() => void answer(line.id, "merge")}
             >
               {busy === line.id ? (
                 <>
@@ -352,7 +327,7 @@ function AmbiguousRows({
               type="button"
               className="ghost"
               disabled={busy !== null}
-              onClick={() => void resolve(line.id, "new")}
+              onClick={() => void answer(line.id, "new")}
             >
               Keep as new
             </button>
@@ -360,7 +335,7 @@ function AmbiguousRows({
               type="button"
               className="ghost"
               disabled={busy !== null}
-              onClick={() => void resolve(line.id, "ignore")}
+              onClick={() => void answer(line.id, "ignore")}
             >
               Ignore
             </button>
@@ -382,8 +357,7 @@ function CreditClassifyRows({
 }) {
   const [kind, setKind] = useState<Record<string, string>>({});
   const [source, setSource] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, resolve } = useLineResolution(detail, onResolved);
   const pending = detail.lines.filter((line) => line.credit_decision_required);
   if (pending.length === 0) return null;
   const funding = accounts.filter(
@@ -391,24 +365,8 @@ function CreditClassifyRows({
       ["bank", "cash", "wallet"].includes(account.kind) && account.id !== detail.account?.id,
   );
 
-  async function classify(lineId: string) {
-    setBusy(lineId);
-    setError(null);
-    try {
-      const next = await api<ImportRecord>(`/api/imports/${detail.import_id}/lines/${lineId}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          resolution: "classify_credit",
-          credit_kind: kind[lineId],
-          source_account_id: kind[lineId] === "transfer" ? source[lineId] : null,
-        }),
-      });
-      onResolved(next);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusy(null);
-    }
+  function classify(lineId: string) {
+    return resolve(lineId, { resolution: "classify_credit", credit_kind: kind[lineId], source_account_id: kind[lineId] === "transfer" ? source[lineId] : null });
   }
 
   return (
@@ -502,28 +460,12 @@ function TransferRows({
   accountNames: Map<string, string>;
   onResolved: (next: ImportRecord) => void;
 }) {
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const { busy, error, resolve } = useLineResolution(detail, onResolved);
   const pending = detail.lines.filter(
     (line) => line.suggested_transfer_account_id && !line.transfer_confirmed,
   );
   if (pending.length === 0) return null;
 
-  async function resolve(lineId: string, resolution: "confirm_transfer" | "reject_transfer") {
-    setBusy(lineId);
-    setError(null);
-    try {
-      const next = await api<ImportRecord>(`/api/imports/${detail.import_id}/lines/${lineId}`, {
-        method: "PATCH",
-        body: JSON.stringify({ resolution }),
-      });
-      onResolved(next);
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusy(null);
-    }
-  }
 
   return (
     <section className="subcard">
@@ -555,7 +497,7 @@ function TransferRows({
             <button
               type="button"
               disabled={busy !== null}
-              onClick={() => void resolve(line.id, "confirm_transfer")}
+              onClick={() => void resolve(line.id, { resolution: "confirm_transfer" })}
             >
               {busy === line.id ? (
                 <>
@@ -570,7 +512,7 @@ function TransferRows({
               type="button"
               className="ghost"
               disabled={busy !== null}
-              onClick={() => void resolve(line.id, "reject_transfer")}
+              onClick={() => void resolve(line.id, { resolution: "reject_transfer" })}
             >
               Not a transfer
             </button>
@@ -721,7 +663,7 @@ function HistorySkeleton() {
   return (
     <div className="act-history" aria-busy="true" aria-label="Loading imports">
       {[0, 1, 2].map((row) => (
-        <Skeleton key={row} className="sk act-history-skel" />
+        <div key={row} className="sk act-history-skel" />
       ))}
       <span className="sr-only">Loading imports…</span>
     </div>
@@ -896,9 +838,11 @@ export function CategorizeStatus({
 export function ImportsPanel({
   importId,
   onImportId,
+  reviewOnly = false,
 }: {
   importId?: string | null;
   onImportId?: (importId: string) => void;
+  reviewOnly?: boolean;
 }) {
   const [historyCursors, setHistoryCursors] = useState<(string | null)[]>([null]);
   const [history, setHistory] = useState<ImportHistoryState | null>(null);
@@ -915,6 +859,7 @@ export function ImportsPanel({
   const reloadList = useCallback(() => setHistoryVersion((value) => value + 1), []);
 
   useEffect(() => {
+    if (reviewOnly) return;
     let active = true;
     const seq = historyRequest.current + 1;
     historyRequest.current = seq;
@@ -935,7 +880,7 @@ export function ImportsPanel({
     return () => {
       active = false;
     };
-  }, [historyCursor, historyKey]);
+  }, [historyCursor, historyKey, reviewOnly]);
 
   const accounts = useApi<AccountSummary>("/api/accounts");
   const accountNames = new Map(
@@ -1022,7 +967,7 @@ export function ImportsPanel({
       setSelected(next);
       loadedImport.current = importId;
       setDeepLinkError(null);
-      scrollToDetail(detailRef.current);
+      if (!reviewOnly) scrollToDetail(detailRef.current);
       onImportId?.(importId);
     } catch (caught) {
       if (seq === writeSeq.current) setError(errorMessage(caught));
@@ -1053,14 +998,14 @@ export function ImportsPanel({
         if (!active || seq !== writeSeq.current) return;
         loadedImport.current = importId;
         setSelected(next);
-        scrollToDetail(detailRef.current);
+        if (!reviewOnly) scrollToDetail(detailRef.current);
       })
       .catch((caught: unknown) => {
         if (!active || seq !== writeSeq.current) return;
         loadedImport.current = null;
         setSelected(null);
         setDeepLinkError(errorMessage(caught));
-        scrollToDetail(detailRef.current);
+        if (!reviewOnly) scrollToDetail(detailRef.current);
       })
       .finally(() => {
         if (active && seq === writeSeq.current) setOpening(null);
@@ -1068,7 +1013,7 @@ export function ImportsPanel({
     return () => {
       active = false;
     };
-  }, [importId, deepLinkRetry]);
+  }, [importId, deepLinkRetry, reviewOnly]);
 
   async function act(path: string, body?: unknown) {
     if (!selected) return;
@@ -1163,7 +1108,7 @@ export function ImportsPanel({
 
   return (
     <section className="panel act-imports">
-      <header className="panel-head">
+      {!reviewOnly && <header className="panel-head">
         <div>
           <h2>Imports</h2>
           <p className="muted">
@@ -1190,7 +1135,7 @@ export function ImportsPanel({
             </>
           )}
         </button>
-      </header>
+      </header>}
 
       {error && (
         <div className="act-error" role="alert">
@@ -1205,7 +1150,7 @@ export function ImportsPanel({
         </div>
       )}
 
-      <section className="subcard act-upload">
+      {!reviewOnly && <section className="subcard act-upload">
         <FileUp size={36} strokeWidth={1.6} aria-hidden="true" />
         <div className="section-head">
           <h3>Bring in a statement</h3>
@@ -1229,10 +1174,10 @@ export function ImportsPanel({
         <p className="fine">
           Choosing files attaches them to a chat message, so you can add a note and send.
         </p>
-      </section>
+      </section>}
 
-      <div className="imports-layout">
-        <section className="subcard imports-history" aria-labelledby="import-history-heading">
+      <div className="imports-layout" style={reviewOnly ? { display: "block" } : undefined}>
+        {!reviewOnly && <section className="subcard imports-history" aria-labelledby="import-history-heading">
           <div className="section-head">
             <h3 id="import-history-heading">Recent imports</h3>
             {currentHistory && (
@@ -1320,34 +1265,16 @@ export function ImportsPanel({
             </ul>
           )}
           {(historyPage > 0 || currentHistory?.next_cursor) && (
-            <nav className="act-pager" aria-label="Import history pages">
-              <span className="act-pager-info">Page {historyPage + 1}</span>
-              <div className="act-pager-buttons">
-                <button
-                  type="button"
-                  className="ghost small"
-                  disabled={historyPage === 0 || historyLoading}
-                  onClick={() => setHistoryCursors((cursors) => cursors.slice(0, -1))}
-                >
-                  <ChevronLeft size={14} strokeWidth={1.9} aria-hidden="true" />
-                  Previous
-                </button>
-                <button
-                  type="button"
-                  className="ghost small"
-                  disabled={historyLoading || !currentHistory?.next_cursor}
-                  onClick={() => {
-                    const next = currentHistory?.next_cursor;
-                    if (next) setHistoryCursors((cursors) => [...cursors, next]);
-                  }}
-                >
-                  Next
-                  <ChevronRight size={14} strokeWidth={1.9} aria-hidden="true" />
-                </button>
-              </div>
-            </nav>
+            <ActivityPager label="Import history pages" info={`Page ${historyPage + 1}`}
+              previousDisabled={historyPage === 0 || historyLoading}
+              nextDisabled={historyLoading || !currentHistory?.next_cursor}
+              onPrevious={() => setHistoryCursors((cursors) => cursors.slice(0, -1))}
+              onNext={() => {
+                const next = currentHistory?.next_cursor;
+                if (next) setHistoryCursors((cursors) => [...cursors, next]);
+              }} />
           )}
-        </section>
+        </section>}
 
         <section className="subcard imports-detail" ref={detailRef} aria-busy={busy !== null}>
           {deepLinkError && !selected && (
@@ -1373,9 +1300,9 @@ export function ImportsPanel({
           )}
           {!selected && opening && (
             <div className="act-detail-placeholder" aria-busy="true" aria-label="Loading import">
-              <Skeleton className="sk sk-heading" />
-              <Skeleton className="sk sk-line wide" />
-              <Skeleton className="sk sk-line short" />
+              <div className="sk sk-heading" />
+              <div className="sk sk-line wide" />
+              <div className="sk sk-line short" />
               <span className="sr-only">Loading the import…</span>
             </div>
           )}

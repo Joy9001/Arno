@@ -67,9 +67,8 @@ jobs:
           cache: pnpm
           cache-dependency-path: web/pnpm-lock.yaml
 
-      - name: Install web dependencies for the contract tests
-        # `test:answers` loads the app through Vite; the SSE schema test uses the AI SDK's
-        # own parser. Both need web/node_modules, which the Python-only job did not have.
+      - name: Install web dependencies for the interaction and SSE tests
+        # The SSE schema test uses the AI SDK's own parser.
         run: pnpm --dir web install --frozen-lockfile
 
       - name: Install PostgreSQL 18 client and restic
@@ -106,9 +105,6 @@ jobs:
         run: |
           uv export --frozen --no-emit-project --format requirements-txt -q > "$RUNNER_TEMP/requirements.txt"
           uv run pip-audit --strict --disable-pip -r "$RUNNER_TEMP/requirements.txt"
-
-      - name: Answer and result card contract
-        run: pnpm --dir web test:answers
 
       - name: Frontend interaction tests
         run: pnpm --dir web test:web

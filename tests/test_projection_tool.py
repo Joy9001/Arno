@@ -12,8 +12,6 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.toolsets import FunctionToolset
 
 from arno.agent import toolset as agent_tools
-from arno.agent.builder import build_agent
-from arno.agent.cards import cards_for_transcript
 from arno.agent.deps import AgentDeps
 from arno.db.conn import quote_ident
 from arno.engine.inputs import CategoryRow, LedgerSnapshot, build_inputs
@@ -464,23 +462,6 @@ async def test_the_project_tool_direct_call_returns_a_projection_card(demo_ledge
     assert isinstance(content, dict)
     assert content["source_ids"]["accounts"]
     assert "curve" not in content
-
-
-async def test_a_project_call_emits_its_card(demo_ledger):
-    model = FunctionModel(
-        lambda messages, info: (
-            ModelResponse(parts=[ToolCallPart("project", {"horizon_days": 90})])
-            if len(messages) == 1
-            else ModelResponse(parts=[TextPart("Here is the projection.")])
-        )
-    )
-    agent = build_agent()
-    with agent.override(model=model):
-        result = await agent.run("project", deps=AgentDeps(conversation_id="cnv_test"))
-    cards = cards_for_transcript(result.all_messages())
-    projection = next(card for card in cards if card.data["card"] == "projection")
-    assert projection.data["source_ids"]["accounts"]
-    assert projection.data["curve"]
 
 
 @pytest.mark.usefixtures("small_projection_runs")
@@ -1145,3 +1126,54 @@ async def test_the_project_tool_echoes_the_request_it_was_asked(demo_ledger):
         if isinstance(part, ToolReturnPart) and part.tool_name == "project"
     )
     assert card["request"] == arguments
+
+
+@pytest.mark.usefixtures("small_projection_runs")
+async def test_cut_scenario_is_shared_by_projection_and_workbook(session_client, demo_ledger):
+    invalid = session_client.get("/api/projection", params={"cut_percent": 51})
+    assert invalid.status_code == 422
+    cut = session_client.get("/api/projection", params={"cut_percent": 25})
+    assert cut.status_code == 200
+    workbook = session_client.get("/api/projection/workbook", params={"cut_percent": 25})
+    assert workbook.status_code == 200
+    from io import BytesIO
+    from zipfile import ZipFile
+
+    with ZipFile(BytesIO(workbook.content)) as archive:
+        strings = archive.read("xl/sharedStrings.xml").decode()
+    assert "request.cut_percent" in strings
+
+
+def test_precut_affordability_never_proposes_a_second_cut():
+    from arno.engine.affordability import Hypothetical, afford
+    from arno.engine.projection import (
+        LiquidAccount,
+        ProjectionInput,
+        SpendCategory,
+        reduce_categories,
+    )
+
+    today = date(2026, 1, 1)
+    category = SpendCategory(
+        id="cat",
+        name="Food",
+        baseline_per_day_paise=30_000,
+        reducible=True,
+        history=tuple((today - timedelta(days=i + 1), 30_000) for i in range(90)),
+    )
+    inputs = ProjectionInput(
+        as_of=today,
+        floor_paise=3_000_000,
+        liquid=(LiquidAccount(id="acc", name="Bank", balance_paise=5_000_000),),
+        categories=(category,),
+        ask_horizon_days=90,
+    )
+    reduced, _ = reduce_categories(inputs, 0.25)
+    result = afford(
+        reduced,
+        Hypothetical(amount_paise=1_550_000, date=today),
+        runs=50,
+        allow_cut_tradeoffs=False,
+    )
+    assert all("cut" not in trade["kind"] for trade in result["tradeoffs"])
+    assert reduced.categories[0].reduce_ratio == 0.25

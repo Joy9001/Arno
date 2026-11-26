@@ -104,7 +104,12 @@ def web_search(api_key: str | None) -> WebSearch[AgentDeps]:
             return ToolReturn(
                 return_value=results,
                 metadata=[
-                    SourceUrlChunk(source_id=item["id"], url=item["url"], title=item["title"])
+                    SourceUrlChunk(
+                        source_id=item["id"],
+                        url=item["url"],
+                        title=item["title"],
+                        provider_metadata={"arno": {"snippet": item["snippet"]}},
+                    )
                     for item in results
                 ],
             )

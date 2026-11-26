@@ -1,6 +1,6 @@
 import { createContext } from "react";
 import { APICallError } from "ai";
-import type { ProjectionPayload } from "../projection";
+import type { ApprovalEdit } from "./runtime";
 
 export type ChatSurfaceState = {
   capture:
@@ -8,7 +8,7 @@ export type ChatSurfaceState = {
     | { kind: "error"; message: string }
     | null;
   onRetryCapture?: (kind: string, attachmentId: string, messageId: string) => void;
-  onEvidence?: (payload: ProjectionPayload) => void;
+  onApprovalEdit?: (callId: string, edit: ApprovalEdit) => void;
   onStop?: (threadId: string) => void;
 };
 

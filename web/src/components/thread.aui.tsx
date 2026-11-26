@@ -1,1076 +1,279 @@
-"use client";
-
-import {
+﻿import {
   ComposerAttachments,
   UserMessageAttachments,
 } from "@/components/attachment.aui";
-import {
-  ComposerQuotePreview,
-  QuoteBlock,
-  SelectionToolbar,
-} from "@/components/assistant-ui/elements/quote.aui";
-import { File, getFileHref } from "@/components/file";
 import { ThreadFollowupSuggestions } from "@/components/follow-up-suggestions.aui";
 import { Image } from "@/components/image";
 import { MarkdownText } from "@/components/markdown-text";
-import {
-  RunActivity,
-  type RunActivityEntry,
-  type RunActivityStatus,
-} from "@/components/assistant-ui/elements/run-activity";
 import { Reasoning } from "@/components/reasoning.aui";
 import { ToolFallback } from "@/components/tool-fallback.aui";
-import { TooltipIconButton } from "@/components/tooltip-icon-button";
-import { formatElapsed, useTaskElapsed } from "@/components/assistant-ui/utils/task";
-import { toolLabel } from "@/chat/tool-copy";
-import { Button } from "@/components/ui/button";
-import { ScrollBar } from "@/components/ui/scroll-area";
-import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
+import { Sources } from "@/components/ai-elements/sources";
 import {
   ActionBarPrimitive,
   AuiIf,
-  type AssistantState,
-  BranchPickerPrimitive,
   ComposerPrimitive,
   ErrorPrimitive,
   MessagePrimitive,
   ThreadPrimitive,
-  type FileMessagePartComponent,
-  type ImageMessagePartComponent,
-  type MessageStatus,
-  type PartState,
-  type TextMessagePartComponent,
-  type ToolCallMessagePartComponent,
   useAuiState,
-  useScrollLock,
+  type AssistantState,
+  type FileMessagePartComponent,
+  type ToolCallMessagePartComponent,
 } from "@assistant-ui/react";
-import {
-  ArrowDownIcon,
-  ArrowUpIcon,
-  AudioLinesIcon,
-  CheckIcon,
-  ChevronLeftIcon,
-  ChevronRightIcon,
-  CopyIcon,
-  MicIcon,
-  PhoneIcon,
-  SquareIcon,
-  PlayIcon,
-  ThumbsDownIcon,
-  ThumbsUpIcon,
-} from "lucide-react";
-import { ScrollArea as ScrollAreaPrimitive } from "radix-ui";
-import {
-  createContext,
-  useContext,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ComponentType,
-  type FC,
-  type ReactNode,
-} from "react";
+import { ArrowUp, Copy, Mic, Play, Square } from "lucide-react";
+import { createContext, useContext, type ComponentType } from "react";
 
-
-const shouldShowComposerResume = (s: AssistantState) =>
-  !!s.thread.canResume && s.composer.type === "thread" && s.composer.isEmpty;
-
-const isPendingApproval = (part: PartState): boolean =>
-  part.type === "tool-call" &&
-  part.approval !== undefined &&
-  part.approval.approved === undefined &&
-  part.approval.resolution === undefined &&
-  part.approval.isAutomatic !== true;
-
-/** A decision, an interruption, or a broken step stays visible instead of folding into the run row. */
-const isAttentionTool = (part: PartState): boolean =>
-  part.type === "tool-call" &&
-  (part.status.type === "requires-action" ||
-    part.status.type === "incomplete" ||
-    part.isError === true ||
-    isPendingApproval(part) ||
-    part.interrupt !== undefined);
-
-/**
- * The answer is the text after the run's last tool call: a run ends only on a model reply with no
- * tool calls, so that text is the final reply. Reasoning in the same reply (some models emit it
- * after the text) is commentary and folds into the run row; it never moves the boundary.
- */
-const runActivityStartsAt = (parts: readonly PartState[]): number =>
-  parts.reduce(
-    (last, part, index) => (part.type === "tool-call" ? index : last),
-    -1,
-  );
-
-type ToolUIs = Record<string, readonly { standalone?: boolean }[] | undefined>;
-
-/**
- * Where each part of a run goes, following the Run activity recipe: commentary and routine tools
- * fold into the one disclosure, a decision or a broken step stays in `attention`, and the answer,
- * cards and standalone tool UIs (the parser's task card) stay visible below.
- */
-const classifyParts = (
-  parts: readonly PartState[],
-  answerFrom: number,
-  toolUIs: ToolUIs,
-) => {
-  const activity: number[] = [];
-  const attention: number[] = [];
-  const visible: number[] = [];
-  parts.forEach((part, index) => {
-    if (part.type === "tool-call") {
-      if (isAttentionTool(part)) attention.push(index);
-      else if (toolUIs[part.toolName]?.[0]?.standalone || part.messages !== undefined)
-        visible.push(index);
-      else activity.push(index);
-    } else if (part.type === "reasoning") {
-      activity.push(index);
-    } else if (part.type === "text" && index < answerFrom) {
-      activity.push(index);
-    } else {
-      visible.push(index);
-    }
-  });
-  return { activity, attention, visible };
-};
-
-type RunTiming = { startedAt: number; completedAt?: number };
-
-const activityStatus = (status: MessageStatus): RunActivityStatus => {
-  if (status.type !== "incomplete") return status.type;
-  if (status.reason === "cancelled" || status.reason === "error") {
-    return status.reason;
-  }
-  return "incomplete";
-};
-
-const STATUS_LABELS: Record<RunActivityStatus, string> = {
-  running: "Working",
-  "requires-action": "Needs your input",
-  complete: "Completed",
-  cancelled: "Stopped",
-  incomplete: "Incomplete",
-  error: "Failed",
-};
-
-const TIMED_LABELS: Partial<Record<RunActivityStatus, string>> = {
-  complete: "Worked for",
-  cancelled: "Stopped after",
-  error: "Failed after",
-};
-
-const firstLine = (text: string): string => {
-  const line = text.trim().split("\n")[0]?.trim() ?? "";
-  return line.length > 80 ? `${line.slice(0, 77)}…` : line;
-};
-
-const RunDuration: FC<{ timing: RunTiming | undefined; running: boolean }> = ({
-  timing,
-  running,
-}) => {
-  const elapsed = useTaskElapsed(timing, running);
-  return elapsed === undefined ? null : <>{formatElapsed(elapsed)}</>;
-};
-
-const RunActivityGroup: FC<{
-  indices: readonly number[];
-  parts: readonly PartState[];
-  components: MessagePrimitive.Parts.Props["components"];
-  status: RunActivityStatus;
-  timing: RunTiming | undefined;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  attention?: ReactNode;
-  children?: ReactNode;
-}> = ({
-  indices,
-  parts,
-  components,
-  status,
-  timing,
-  open,
-  onOpenChange,
-  attention,
-  children,
-}) => {
-  const timed = status === "running" || timing?.completedAt !== undefined;
-  const entries = indices.flatMap((index): RunActivityEntry[] => {
-    const part = parts[index];
-    if (part === undefined) return [];
-    const content = (
-      <MessagePrimitive.PartByIndex index={index} components={components} />
-    );
-    if (part.type === "tool-call") {
-      return [
-        {
-          id: `tool-${part.toolCallId}`,
-          kind: "tool",
-          label: toolLabel(part.toolName),
-          content,
-        },
-      ];
-    }
-    if (part.type === "reasoning" || part.type === "text") {
-      return [
-        {
-          id: `part-${index}`,
-          kind: "commentary",
-          label: firstLine(part.text),
-          content,
-        },
-      ];
-    }
-    return [];
-  });
-
-  return (
-    <RunActivity
-      status={status}
-      statusLabel={
-        timed
-          ? (TIMED_LABELS[status] ?? STATUS_LABELS[status])
-          : STATUS_LABELS[status]
-      }
-      durationLabel={
-        timed ? (
-          <RunDuration timing={timing} running={status === "running"} />
-        ) : undefined
-      }
-      entries={entries}
-      open={open}
-      onOpenChange={onOpenChange}
-      attention={attention}
-    >
-      {children}
-    </RunActivity>
-  );
-};
-
-/**
- * Optional component overrides for the thread. `AssistantMessage` and
- * `Welcome` replace whole sections; the remaining slots override how the
- * assistant message renders tool calls and task groups. Tool UIs registered
- * by name (toolkit `render`, `useAssistantDataUI`) take precedence over
- * `ToolFallback`. `ComposerExtra` renders on the start side
- * of the composer's action row.
- */
 export type ThreadComponents = {
-  AssistantMessage?: ComponentType | undefined;
-  Welcome?: ComponentType | undefined;
-  /** Rendered under the composer while the conversation is new. */
-  WelcomeAfter?: ComponentType | undefined;
-  ToolFallback?: ToolCallMessagePartComponent | undefined;
-  ComposerExtra?: ComponentType | undefined;
-  ComposerCancel?: ComponentType | undefined;
-  ComposerStatus?: ComponentType | undefined;
-  AssistantActions?: ComponentType | undefined;
+  AssistantMessage?: ComponentType;
+  Welcome?: ComponentType;
+  WelcomeAfter?: ComponentType;
+  ToolFallback?: ToolCallMessagePartComponent;
+  ComposerExtra?: ComponentType;
+  ComposerCancel?: ComponentType;
+  ComposerStatus?: ComponentType;
+  AssistantActions?: ComponentType;
 };
-
 export type ThreadProps = {
-  components?: ThreadComponents | undefined;
-  autoFocus?: boolean | undefined;
+  components?: ThreadComponents;
+  autoFocus?: boolean;
 };
-
-const EMPTY_COMPONENTS: ThreadComponents = {};
-
-const ThreadComponentsContext =
-  createContext<ThreadComponents>(EMPTY_COMPONENTS);
-
-// Startup exposes a loading placeholder thread; treat it as a new chat so
-// the composer mounts centered. Loads after startup keep the docked layout.
-const isNewChatView = (s: AssistantState) =>
+const Components = createContext<ThreadComponents>({});
+const isEmpty = (s: AssistantState) =>
   s.thread.messages.length === 0 &&
   (!s.thread.isLoading || s.threads.isLoading);
+const canResume = (s: AssistantState) =>
+  !!s.thread.canResume && s.composer.type === "thread" && s.composer.isEmpty;
 
-// A switched thread that is still fetching its history: skeleton, not welcome.
-const isHistoryLoadingView = (s: AssistantState) =>
-  s.thread.messages.length === 0 &&
-  s.thread.isLoading &&
-  !s.thread.isDisabled &&
-  !s.threads.isLoading;
-
-const ThreadHistorySkeleton: FC = () => (
-  <div
-    data-slot="aui_thread-history-skeleton"
-    role="status"
-    className="animate-in fade-in fill-mode-both flex flex-col gap-y-6 [animation-delay:150ms] [animation-duration:200ms]"
-  >
-    <span className="sr-only">Loading conversation</span>
-    <Skeleton className="ml-auto h-9 w-2/5 rounded-xl motion-reduce:animate-none" />
-    <div className="flex flex-col gap-y-2">
-      <Skeleton className="h-4 w-11/12 motion-reduce:animate-none" />
-      <Skeleton className="h-4 w-4/5 motion-reduce:animate-none" />
-      <Skeleton className="h-4 w-3/5 motion-reduce:animate-none" />
-    </div>
-    <Skeleton className="ml-auto h-9 w-1/3 rounded-xl motion-reduce:animate-none" />
-    <div className="flex flex-col gap-y-2">
-      <Skeleton className="h-4 w-10/12 motion-reduce:animate-none" />
-      <Skeleton className="h-4 w-2/3 motion-reduce:animate-none" />
-    </div>
-  </div>
-);
-
-export const Thread: FC<ThreadProps> = ({
-  components = EMPTY_COMPONENTS,
-  autoFocus = true,
-}) => {
-  const isEmpty = useAuiState(isNewChatView);
-
+export function Thread({ components = {}, autoFocus = true }: ThreadProps) {
+  const empty = useAuiState(isEmpty);
+  const Welcome = components.Welcome;
+  const WelcomeAfter = components.WelcomeAfter;
   return (
-    <ThreadComponentsContext.Provider value={components}>
-      <ThreadRoot isEmpty={isEmpty} autoFocus={autoFocus} />
-    </ThreadComponentsContext.Provider>
-  );
-};
-
-const ThreadRoot: FC<{ isEmpty: boolean; autoFocus: boolean }> = ({
-  isEmpty,
-  autoFocus,
-}) => {
-  const { Welcome = ThreadWelcome, WelcomeAfter } = useContext(ThreadComponentsContext);
-
-  return (
-    <ScrollAreaPrimitive.Root asChild>
+    <Components.Provider value={components}>
       <ThreadPrimitive.Root
-        className="aui-root aui-thread-root bg-background @container flex h-full flex-col"
+        className="aui-root aui-thread-root bg-background flex h-full flex-col"
         style={{
           ["--thread-max-width" as string]: "44rem",
-          ["--composer-bg" as string]: "#171814",
+          ["--composer-bg" as string]: "var(--surface-2)",
           ["--composer-radius" as string]: "22px",
           ["--composer-padding" as string]: "8px",
         }}
       >
-        <ScrollAreaPrimitive.Viewport
-          className="aui-thread-viewport"
-          asChild
-          disableImplicitContentElement
+        <ThreadPrimitive.Viewport
+          turnAnchor="top"
+          data-slot="aui_thread-viewport"
+          className="aui-thread-viewport relative min-h-0 flex-1 overflow-y-auto"
         >
-          <ThreadPrimitive.Viewport
-            turnAnchor="top"
-            data-slot="aui_thread-viewport"
-            className="relative min-h-0 flex-1 scroll-smooth"
+          <div
+            className={`mx-auto flex min-h-full w-full max-w-(--thread-max-width) flex-col px-4 pt-4 ${empty ? "justify-center" : ""}`}
           >
-            <ScrollAreaPrimitive.Content
-              className="aui-thread-scroll-content"
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                minHeight: "100%",
-              }}
+            {Welcome && (
+              <AuiIf condition={isEmpty}>
+                <Welcome />
+              </AuiIf>
+            )}
+            <AuiIf
+              condition={(s) =>
+                s.thread.messages.length === 0 &&
+                s.thread.isLoading &&
+                !s.threads.isLoading
+              }
             >
-              <div
-                className={cn(
-                  "mx-auto flex w-full max-w-(--thread-max-width) shrink-0 grow flex-col px-4 pt-4",
-                  isEmpty && "justify-center",
-                )}
-              >
-                <AuiIf condition={isNewChatView}>
-                  <Welcome />
+              <p role="status">Loading conversation…</p>
+            </AuiIf>
+            <AuiIf
+              condition={(s) =>
+                s.thread.hasEarlier || s.thread.isLoadingEarlier
+              }
+            >
+              <ThreadPrimitive.LoadEarlier asChild>
+                <button type="button">Load earlier messages</button>
+              </ThreadPrimitive.LoadEarlier>
+            </AuiIf>
+            <div
+              data-slot="aui_message-group"
+              className="mb-14 flex flex-col gap-y-6 empty:hidden"
+            >
+              <ThreadPrimitive.Messages>
+                {() => <ThreadMessage />}
+              </ThreadPrimitive.Messages>
+            </div>
+            <ThreadPrimitive.ViewportFooter className={`aui-thread-viewport-footer flex flex-col gap-4 bg-background pb-4 ${empty ? "" : "sticky bottom-0 mt-auto"}`}>
+              <ThreadFollowupSuggestions />
+              <Composer autoFocus={autoFocus} />
+              {WelcomeAfter && (
+                <AuiIf condition={isEmpty}>
+                  <WelcomeAfter />
                 </AuiIf>
-                <AuiIf condition={isHistoryLoadingView}>
-                  <ThreadHistorySkeleton />
-                </AuiIf>
-
-                <ThreadLoadEarlier />
-
-                <div
-                  data-slot="aui_message-group"
-                  className="mb-14 flex flex-col gap-y-6 empty:hidden"
-                >
-                  <ThreadPrimitive.Messages>
-                    {() => <ThreadMessage />}
-                  </ThreadPrimitive.Messages>
-                </div>
-
-                <ThreadPrimitive.ViewportFooter
-                  className={cn(
-                    "aui-thread-viewport-footer bg-background flex flex-col gap-4 overflow-visible pb-4 md:pb-6",
-                    !isEmpty &&
-                      "sticky bottom-0 mt-auto rounded-t-(--composer-radius)",
-                  )}
-                >
-                  <ThreadScrollToBottom />
-                  <ThreadFollowupSuggestions />
-                  <Composer autoFocus={autoFocus} />
-                  {WelcomeAfter && (
-                    <AuiIf condition={isNewChatView}>
-                      <WelcomeAfter />
-                    </AuiIf>
-                  )}
-                </ThreadPrimitive.ViewportFooter>
-              </div>
-            </ScrollAreaPrimitive.Content>
-          </ThreadPrimitive.Viewport>
-        </ScrollAreaPrimitive.Viewport>
-        <ScrollBar className="aui-thread-scrollbar" />
-        <SelectionToolbar />
+              )}
+            </ThreadPrimitive.ViewportFooter>
+          </div>
+        </ThreadPrimitive.Viewport>
       </ThreadPrimitive.Root>
-    </ScrollAreaPrimitive.Root>
+    </Components.Provider>
   );
-};
+}
 
-const ThreadMessage: FC = () => {
-  const { AssistantMessage: AssistantMessageComponent = AssistantMessage } =
-    useContext(ThreadComponentsContext);
+function ThreadMessage() {
   const role = useAuiState((s) => s.message.role);
-  const isEditing = useAuiState((s) => s.message.composer.isEditing);
-  const isSpoken = useAuiState((s) => s.message.metadata.modality === "voice");
-
-  if (isEditing) return <EditComposer />;
-  if (isSpoken) return <SpokenMessage />;
-  if (role === "user") return <UserMessage />;
-  return <AssistantMessageComponent />;
-};
-
-type VoiceRunPosition = "single" | "start" | "middle" | "end";
-
-const useVoiceRunPosition = (): VoiceRunPosition =>
-  useAuiState((s) => {
-    const before =
-      s.thread.messages[s.message.index - 1]?.metadata.modality === "voice";
-    const after =
-      s.thread.messages[s.message.index + 1]?.metadata.modality === "voice";
-    if (before) return after ? "middle" : "end";
-    return after ? "start" : "single";
-  });
-
-const SpokenText: TextMessagePartComponent = ({ text }) => (
-  <p className="aui-spoken-message-text m-0">{text}</p>
-);
-
-const SpokenMessage: FC = () => {
-  const role = useAuiState((s) => s.message.role);
-  const position = useVoiceRunPosition();
-  const isSpeaking = useAuiState(
-    (s) =>
-      s.message.role === "assistant" && s.message.status?.type === "running",
+  const { AssistantMessage: Override } = useContext(Components);
+  return role === "user" ? (
+    <UserMessage />
+  ) : Override ? (
+    <Override />
+  ) : (
+    <AssistantMessage />
   );
-  const opensExchange = position === "start" || position === "single";
+}
 
+const UserFile: FileMessagePartComponent = ({
+  filename,
+  mimeType,
+  data,
+  sourceType,
+  status,
+}) => {
+  if (mimeType.toLowerCase().startsWith("image/") && sourceType !== "id") {
+    const unsafe =
+      /^[a-z][a-z\d+.-]*:/i.test(data) &&
+      !/^(data:|https?:\/\/|blob:)/i.test(data);
+    const image = /^(data:|https?:\/\/|blob:)/i.test(data)
+      ? data
+      : sourceType === "url"
+        ? ""
+        : `data:${mimeType};base64,${data}`;
+    if (!unsafe && image)
+      return (
+        <Image type="image" image={image} filename={filename} status={status} />
+      );
+  }
+  return <span>{filename || "Attachment"}</span>;
+};
+function UserMessage() {
+  const id = useAuiState(
+    (s) => s.message.metadata.custom?.server_id as string | undefined,
+  );
   return (
     <MessagePrimitive.Root
-      data-slot="aui_spoken-message-root"
-      data-role={role}
-      data-voice-run={position}
-      className={cn(
-        "aui-spoken-message bg-muted/40 mx-2 px-3 py-1.5 [contain-intrinsic-size:auto_48px] [content-visibility:auto]",
-        position === "single" && "rounded-xl py-2",
-        position === "start" && "rounded-t-xl pt-2",
-        position === "middle" && "-mt-6",
-        position === "end" && "-mt-6 rounded-b-xl pb-2",
-      )}
+      id={id ? `message-${id}` : undefined}
+      tabIndex={id ? -1 : undefined}
+      data-role="user"
+      className="scroll-mt-24 px-2"
     >
-      {opensExchange && (
-        <div
-          data-slot="aui_spoken-exchange-header"
-          className="text-muted-foreground mb-1.5 flex items-center gap-1.5 text-xs"
-        >
-          <PhoneIcon className="size-3" aria-hidden />
-          <span>Voice conversation</span>
-        </div>
-      )}
-      <div
-        data-slot="aui_spoken-message-content"
-        className="text-foreground flex items-start gap-2 text-sm leading-relaxed"
-      >
-        <span className="text-muted-foreground mt-1 shrink-0" aria-hidden>
-          {role === "user" ? (
-            <MicIcon className="size-3.5" />
-          ) : (
-            <AudioLinesIcon className="size-3.5" />
-          )}
-        </span>
-        <span className="sr-only">
-          {role === "user" ? "You said" : "Assistant said"}
-        </span>
-        <div className="min-w-0 flex-1 wrap-break-word">
-          <MessagePrimitive.Parts components={{ Text: SpokenText }} />
-          {isSpeaking && (
-            <span
-              data-slot="aui_spoken-message-indicator"
-              role="status"
-              className="text-muted-foreground ms-1 animate-pulse font-sans"
-              aria-label="Assistant is speaking"
-            >
-              ●
-            </span>
-          )}
-        </div>
-        <SpokenActionBar />
+      <UserMessageAttachments />
+      <div className="aui-user-message-content ml-auto w-fit rounded-2xl bg-muted px-4 py-2">
+        <MessagePrimitive.Parts components={{ Image, File: UserFile }} />
       </div>
     </MessagePrimitive.Root>
   );
-};
+}
 
-const SpokenActionBar: FC = () => {
+function AssistantMessage() {
+  const { ToolFallback: Tool = ToolFallback, AssistantActions } =
+    useContext(Components);
+  const id = useAuiState(
+    (s) => s.message.metadata.custom?.server_id as string | undefined,
+  );
   return (
-    <ActionBarPrimitive.Root
-      hideWhenRunning
-      autohide="always"
-      className="aui-spoken-action-bar text-muted-foreground flex shrink-0 gap-1"
+    <MessagePrimitive.Root
+      id={id ? `message-${id}` : undefined}
+      tabIndex={id ? -1 : undefined}
+      data-role="assistant"
+      className="scroll-mt-24 px-2"
     >
-      <ActionBarPrimitive.Copy asChild>
-        <TooltipIconButton tooltip="Copy" className="size-6">
-          <AuiIf condition={(s) => s.message.isCopied}>
-            <CheckIcon className="animate-in zoom-in-50 fade-in duration-200 ease-out" />
-          </AuiIf>
-          <AuiIf condition={(s) => !s.message.isCopied}>
-            <CopyIcon className="animate-in zoom-in-75 fade-in duration-150" />
-          </AuiIf>
-        </TooltipIconButton>
-      </ActionBarPrimitive.Copy>
-    </ActionBarPrimitive.Root>
+      <div className="aui-assistant-message-content">
+        <MessagePrimitive.Parts
+          components={{
+            Text: MarkdownText,
+            Reasoning,
+            tools: { Fallback: Tool },
+          }}
+        />
+        <Sources />
+        <MessagePrimitive.Error>
+          <ErrorPrimitive.Root role="alert">
+            <ErrorPrimitive.Message />
+          </ErrorPrimitive.Root>
+        </MessagePrimitive.Error>
+      </div>
+      <div className="flex items-center gap-2">
+        <ActionBarPrimitive.Root hideWhenRunning>
+          <ActionBarPrimitive.Copy aria-label="Copy answer">
+            <Copy size={14} />
+          </ActionBarPrimitive.Copy>
+        </ActionBarPrimitive.Root>
+        {AssistantActions && <AssistantActions />}
+      </div>
+    </MessagePrimitive.Root>
   );
-};
+}
 
-const FOCUSABLE_SELECTOR =
-  "a[href], button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1']):not([disabled])";
-
-const nextFocusable = (start: Element) => {
-  for (
-    let element = start.nextElementSibling;
-    element;
-    element = element.nextElementSibling
-  ) {
-    const target = element.matches(FOCUSABLE_SELECTOR)
-      ? element
-      : element.querySelector(FOCUSABLE_SELECTOR);
-    if (target instanceof HTMLElement) return target;
-  }
-  return null;
-};
-
-const ThreadLoadEarlier: FC = () => {
-  const visible = useAuiState(
-    (s) => s.thread.hasEarlier || s.thread.isLoadingEarlier,
-  );
-  const loading = useAuiState((s) => s.thread.isLoadingEarlier);
-  const slotRef = useRef<HTMLDivElement>(null);
-  const focusedRef = useRef<Element | null>(null);
-
-  // The last page removes the button; a keyboard user on it continues from the
-  // next control in tab order rather than from the document body.
-  useLayoutEffect(() => {
-    const focused = focusedRef.current;
-    const slot = slotRef.current;
-    if (visible || !focused || focused.isConnected || !slot) return;
-    focusedRef.current = null;
-    const active = document.activeElement;
-    if (active && active !== document.body) return;
-    nextFocusable(slot)?.focus();
-  }, [visible]);
-
-  return (
-    <div
-      ref={slotRef}
-      className="contents"
-      onFocus={(event) => {
-        focusedRef.current = event.target;
-      }}
-    >
-      <span role="status" className="sr-only">
-        {loading ? "Loading earlier messages" : ""}
-      </span>
-      {visible && (
-        <ThreadPrimitive.LoadEarlier asChild>
-          <Button
-            variant="ghost"
-            size="sm"
-            data-slot="aui_thread-load-earlier"
-            className="aui-thread-load-earlier text-muted-foreground mb-6 self-center rounded-full"
-          >
-            <span
-              className={cn(loading && "shimmer motion-reduce:animate-none")}
-            >
-              {loading ? "Loading earlier messages" : "Load earlier messages"}
-            </span>
-          </Button>
-        </ThreadPrimitive.LoadEarlier>
-      )}
-    </div>
-  );
-};
-
-const ThreadScrollToBottom: FC = () => {
-  return (
-    <ThreadPrimitive.ScrollToBottom asChild>
-      <TooltipIconButton
-        tooltip="Scroll to bottom"
-        variant="outline"
-        className="aui-thread-scroll-to-bottom dark:border-border dark:bg-background dark:hover:bg-accent absolute -top-12 z-10 self-center rounded-full p-4 disabled:invisible"
-      >
-        <ArrowDownIcon />
-      </TooltipIconButton>
-    </ThreadPrimitive.ScrollToBottom>
-  );
-};
-
-const ThreadWelcome: FC = () => {
-  return (
-    <div className="aui-thread-welcome-root mb-6 flex flex-col px-2">
-      <p className="aui-thread-welcome-message-inner fade-in slide-in-from-bottom-1 animate-in fill-mode-both text-2xl font-medium tracking-tight duration-200">
-        How can I help you today?
-      </p>
-    </div>
-  );
-};
-
-const Composer: FC<{ autoFocus: boolean }> = ({ autoFocus }) => {
-  const { ComposerStatus } = useContext(ThreadComponentsContext);
-
+function Composer({ autoFocus }: { autoFocus: boolean }) {
+  const { ComposerExtra, ComposerCancel, ComposerStatus } =
+    useContext(Components);
   return (
     <ComposerPrimitive.Root className="aui-composer-root relative flex w-full flex-col">
       <ComposerPrimitive.AttachmentDropzone asChild>
         <div
           data-slot="aui_composer-shell"
-          className="aui_composer-shell border-foreground/10 focus-within:border-foreground/25 data-[dragging=true]:border-ring flex w-full cursor-text flex-col gap-2 rounded-(--composer-radius) border bg-(--composer-bg) p-(--composer-padding) transition-[border-color] data-[dragging=true]:border-dashed data-[dragging=true]:bg-[color-mix(in_oklab,var(--color-accent)_50%,var(--color-background))]"
+          className="aui_composer-shell flex flex-col gap-2 rounded-(--composer-radius) border border-white/10 bg-(--composer-bg) p-2 focus-within:border-white/25"
         >
-          <ComposerQuotePreview />
           <ComposerAttachments />
           <ComposerPrimitive.Input
             placeholder="Message Arno…"
-            className="aui-composer-input caret-primary placeholder:text-muted-foreground/60 max-h-48 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base leading-6 outline-none"
+            aria-label="Message Arno"
             rows={1}
             autoFocus={autoFocus}
             enterKeyHint="send"
-            aria-label="Message Arno"
+            className="aui-composer-input max-h-48 min-h-10 w-full resize-none bg-transparent px-2.5 py-1 text-base outline-none"
           />
-          <ComposerAction />
+          <div className="flex items-center justify-between">
+            <div>{ComposerExtra && <ComposerExtra />}</div>
+            <div className="flex items-center gap-2">
+              <AuiIf
+                condition={(s) =>
+                  s.thread.capabilities.dictation &&
+                  s.composer.dictation == null
+                }
+              >
+                <ComposerPrimitive.Dictate aria-label="Start voice input" className="aui-composer-dictate size-7 rounded-full text-muted-foreground hover:text-foreground">
+                  <Mic size={16} />
+                </ComposerPrimitive.Dictate>
+              </AuiIf>
+              <AuiIf
+                condition={(s) =>
+                  s.thread.capabilities.dictation &&
+                  s.composer.dictation != null
+                }
+              >
+                <ComposerPrimitive.StopDictation aria-label="Stop voice input" className="aui-composer-stop-dictation size-7 rounded-full text-destructive">
+                  <Square size={14} />
+                </ComposerPrimitive.StopDictation>
+              </AuiIf>
+              <AuiIf condition={(s) => !s.composer.canCancel && !canResume(s)}>
+                <ComposerPrimitive.Send aria-label="Send message" className="aui-composer-send inline-flex size-7 items-center justify-center rounded-full bg-[var(--lime)] text-[var(--lime-ink)] disabled:opacity-50">
+                  <ArrowUp size={16} />
+                </ComposerPrimitive.Send>
+              </AuiIf>
+              <AuiIf condition={canResume}>
+                <ComposerPrimitive.Resume aria-label="Resume generating">
+                  <Play size={16} />
+                </ComposerPrimitive.Resume>
+              </AuiIf>
+              <AuiIf condition={(s) => s.composer.canCancel}>
+                {ComposerCancel ? (
+                  <ComposerCancel />
+                ) : (
+                  <ComposerPrimitive.Cancel aria-label="Stop generating">
+                    <Square size={14} />
+                  </ComposerPrimitive.Cancel>
+                )}
+              </AuiIf>
+            </div>
+          </div>
           {ComposerStatus && <ComposerStatus />}
         </div>
       </ComposerPrimitive.AttachmentDropzone>
     </ComposerPrimitive.Root>
   );
-};
-
-const ComposerAction: FC = () => {
-  const { ComposerExtra, ComposerCancel } = useContext(ThreadComponentsContext);
-  // The stop control only cancels the send while no run it could stop is going.
-  const isSending = useAuiState(
-    (s) =>
-      s.composer.submission !== undefined &&
-      !(s.thread.isRunning && s.thread.capabilities.cancel),
-  );
-
-  return (
-    <div className="aui-composer-action-wrapper relative flex items-center justify-between">
-      <div className="aui-composer-action-start flex items-center gap-1.5">
-        {ComposerExtra && <ComposerExtra />}
-      </div>
-      <div className="flex items-center gap-1.5">
-        <AuiIf condition={(s) => s.thread.capabilities.dictation}>
-          <AuiIf condition={(s) => s.composer.dictation == null}>
-            <ComposerPrimitive.Dictate asChild>
-              <TooltipIconButton
-                tooltip="Voice input"
-                side="bottom"
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="aui-composer-dictate text-muted-foreground hover:text-foreground size-7 rounded-full"
-                aria-label="Start voice input"
-              >
-                <MicIcon className="aui-composer-dictate-icon size-4" />
-              </TooltipIconButton>
-            </ComposerPrimitive.Dictate>
-          </AuiIf>
-          <AuiIf condition={(s) => s.composer.dictation != null}>
-            <ComposerPrimitive.StopDictation asChild>
-              <TooltipIconButton
-                tooltip="Stop dictation"
-                side="bottom"
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="aui-composer-stop-dictation text-destructive size-7 rounded-full"
-                aria-label="Stop voice input"
-              >
-                <SquareIcon className="aui-composer-stop-dictation-icon size-3.5 animate-pulse fill-current" />
-              </TooltipIconButton>
-            </ComposerPrimitive.StopDictation>
-          </AuiIf>
-        </AuiIf>
-        <AuiIf
-          condition={(s) =>
-            (!s.composer.canCancel ||
-              (s.thread.voice !== undefined &&
-                s.composer.submission === undefined)) &&
-            !shouldShowComposerResume(s)
-          }
-        >
-          <ComposerPrimitive.Send asChild>
-            <TooltipIconButton
-              tooltip="Send message"
-              side="bottom"
-              type="button"
-              variant="default"
-              size="icon"
-              className="aui-composer-send size-7 rounded-full"
-              aria-label="Send message"
-            >
-              <ArrowUpIcon className="aui-composer-send-icon size-4" />
-            </TooltipIconButton>
-          </ComposerPrimitive.Send>
-        </AuiIf>
-        <AuiIf condition={shouldShowComposerResume}>
-          <ComposerPrimitive.Resume asChild>
-            <TooltipIconButton
-              tooltip="Resume generating"
-              side="bottom"
-              type="button"
-              variant="default"
-              size="icon"
-              className="aui-composer-resume size-7 rounded-full"
-              aria-label="Resume generating"
-            >
-              <PlayIcon className="aui-composer-resume-icon size-4" />
-            </TooltipIconButton>
-          </ComposerPrimitive.Resume>
-        </AuiIf>
-        <AuiIf
-          condition={(s) =>
-            s.composer.canCancel &&
-            (s.thread.voice === undefined ||
-              s.composer.submission !== undefined)
-          }
-        >
-          {ComposerCancel ? (
-            <ComposerCancel />
-          ) : (
-            <ComposerPrimitive.Cancel asChild>
-              <Button
-                type="button"
-                variant="default"
-                size="icon"
-                className="aui-composer-cancel size-7 rounded-full"
-                aria-label={isSending ? "Cancel sending" : "Stop generating"}
-              >
-                <SquareIcon className="aui-composer-cancel-icon size-3.5 fill-current" />
-              </Button>
-            </ComposerPrimitive.Cancel>
-          )}
-        </AuiIf>
-      </div>
-    </div>
-  );
-};
-
-const MessageError: FC = () => {
-  return (
-    <MessagePrimitive.Error>
-      <ErrorPrimitive.Root className="aui-message-error-root border-destructive bg-destructive/10 text-destructive dark:bg-destructive/5 mt-2 rounded-md border p-3 text-sm dark:text-red-200">
-        <ErrorPrimitive.Message className="aui-message-error-message line-clamp-2" />
-      </ErrorPrimitive.Root>
-    </MessagePrimitive.Error>
-  );
-};
-
-const AssistantTextPart: FC = () => (
-  <div data-slot="aui_assistant-message-text" data-aui-quote-selectable="true">
-    <MarkdownText />
-  </div>
-);
-
-const AssistantMessage: FC = () => {
-  const {
-    ToolFallback: ToolFallbackComponent = ToolFallback,
-    AssistantActions,
-  } = useContext(ThreadComponentsContext);
-  const serverId = useAuiState(
-    (s) => s.message.metadata.custom?.server_id as string | undefined,
-  );
-  const messageParts = useAuiState((s) => s.message.parts);
-  const messageStatus = useAuiState((s) => s.message.status);
-  const messageTiming = useAuiState((s) => s.message.metadata.timing);
-  const recordedStatus = useAuiState(
-    (s) => s.message.metadata.custom?.runStatus as RunActivityStatus | undefined,
-  );
-  const createdAt = useAuiState((s) => s.message.createdAt);
-  const [runOpen, setRunOpen] = useState(false);
-  const runRef = useRef<HTMLDivElement>(null);
-  const lockScroll = useScrollLock(runRef, 200);
-
-  const answerFrom = useMemo(
-    () => runActivityStartsAt(messageParts),
-    [messageParts],
-  );
-  const toolUIs = useAuiState((s) => s.tools.toolUIs) as unknown as ToolUIs;
-  const { activity, attention, visible } = useMemo(
-    () => classifyParts(messageParts, answerFrom, toolUIs),
-    [messageParts, answerFrom, toolUIs],
-  );
-  const savedTiming = useMemo<RunTiming | undefined>(() => {
-    if (
-      messageTiming === undefined ||
-      !Number.isFinite(messageTiming.streamStartTime)
-    ) {
-      return undefined;
-    }
-    return {
-      startedAt: messageTiming.streamStartTime,
-      ...(messageTiming.totalStreamTime !== undefined && {
-        completedAt:
-          messageTiming.streamStartTime + messageTiming.totalStreamTime,
-      }),
-    };
-  }, [messageTiming]);
-  const createdTiming = useMemo<RunTiming | undefined>(() => {
-    const startedAt = createdAt instanceof Date ? createdAt.getTime() : Number.NaN;
-    return Number.isFinite(startedAt) ? { startedAt } : undefined;
-  }, [createdAt]);
-  const liveStatus = messageStatus ? activityStatus(messageStatus) : undefined;
-  // A live decision or a running clock outranks the saved ending; a saved
-  // cancellation or failure outranks the runtime's generic "complete".
-  const status =
-    liveStatus === "running" || liveStatus === "requires-action"
-      ? liveStatus
-      : (recordedStatus ?? liveStatus ?? "complete");
-  const components = useMemo<MessagePrimitive.Parts.Props["components"]>(
-    () => ({
-      Text: AssistantTextPart,
-      Reasoning,
-      tools: { Fallback: ToolFallbackComponent },
-    }),
-    [ToolFallbackComponent],
-  );
-
-  const ACTION_BAR_PT = "pt-1.5";
-  // Keep the action bar inside the contained root's paint box, then cancel its reserved space in flow.
-  const ACTION_BAR_HEIGHT = `min-h-7.5 ${ACTION_BAR_PT}`;
-
-  return (
-    <MessagePrimitive.Root
-      id={serverId ? `message-${serverId}` : undefined}
-      tabIndex={serverId ? -1 : undefined}
-      data-slot="aui_assistant-message-root"
-      data-role="assistant"
-      data-aui-quote-selectable="false"
-      className="fade-in slide-in-from-bottom-1 animate-in relative -mb-7.5 scroll-mt-24 pb-7.5 duration-150 outline-none [contain-intrinsic-size:auto_200px] [content-visibility:auto]"
-    >
-      <div
-        ref={runRef}
-        data-slot="aui_assistant-message-content"
-        className="text-foreground px-2 leading-relaxed wrap-break-word"
-      >
-        {(() => {
-          const byIndex = (indices: readonly number[]) =>
-            indices.map((index) => (
-              <MessagePrimitive.PartByIndex
-                key={index}
-                index={index}
-                components={components}
-              />
-            ));
-          const shown = byIndex(visible);
-          const waiting = attention.length > 0 ? byIndex(attention) : undefined;
-          if (activity.length === 0) {
-            return (
-              <>
-                {waiting}
-                {shown}
-                {status === "running" && visible.length === 0 && (
-                  <span
-                    data-slot="aui_assistant-message-indicator"
-                    className="animate-pulse font-sans"
-                    aria-label="Assistant is working"
-                  >
-                    {"●"}
-                  </span>
-                )}
-              </>
-            );
-          }
-          return (
-            <RunActivityGroup
-              indices={activity}
-              parts={messageParts}
-              components={components}
-              status={status}
-              timing={savedTiming ?? createdTiming}
-              open={runOpen}
-              onOpenChange={(nextOpen) => {
-                lockScroll();
-                setRunOpen(nextOpen);
-              }}
-              attention={waiting}
-            >
-              {shown.length > 0 ? <div className="flex flex-col gap-3">{shown}</div> : null}
-            </RunActivityGroup>
-          );
-        })()}
-        <MessageError />
-      </div>
-
-      <div
-        data-slot="aui_assistant-message-footer"
-        className={cn("ms-2 flex items-center", ACTION_BAR_HEIGHT)}
-      >
-        <BranchPicker />
-        <AssistantActionBar />
-        {AssistantActions && <AssistantActions />}
-      </div>
-    </MessagePrimitive.Root>
-  );
-};
-
-const AssistantActionBar: FC = () => {
-  return (
-    <ActionBarPrimitive.Root
-      hideWhenRunning
-      autohide="not-last"
-      className="aui-assistant-action-bar-root text-muted-foreground animate-in fade-in col-start-3 row-start-2 -ms-1 flex gap-1 duration-200"
-    >
-      <ActionBarPrimitive.Copy asChild>
-        <TooltipIconButton tooltip="Copy">
-          <AuiIf condition={(s) => s.message.isCopied}>
-            <CheckIcon className="animate-in zoom-in-50 fade-in duration-200 ease-out" />
-          </AuiIf>
-          <AuiIf condition={(s) => !s.message.isCopied}>
-            <CopyIcon className="animate-in zoom-in-75 fade-in duration-150" />
-          </AuiIf>
-        </TooltipIconButton>
-      </ActionBarPrimitive.Copy>
-      <AuiIf condition={(s) => s.thread.capabilities.feedback}>
-        <ActionBarPrimitive.FeedbackPositive asChild>
-          <TooltipIconButton
-            tooltip="Helpful"
-            className="data-[submitted=true]:bg-accent data-[submitted=true]:text-accent-foreground"
-          >
-            <ThumbsUpIcon />
-          </TooltipIconButton>
-        </ActionBarPrimitive.FeedbackPositive>
-        <ActionBarPrimitive.FeedbackNegative asChild>
-          <TooltipIconButton
-            tooltip="Not helpful"
-            className="data-[submitted=true]:bg-accent data-[submitted=true]:text-accent-foreground"
-          >
-            <ThumbsDownIcon />
-          </TooltipIconButton>
-        </ActionBarPrimitive.FeedbackNegative>
-      </AuiIf>
-    </ActionBarPrimitive.Root>
-  );
-};
-
-const MessageFile: FileMessagePartComponent = (part) => {
-  const image = part.mimeType.toLowerCase().startsWith("image/")
-    ? getFileHref(part.data, part.mimeType, part.sourceType)
-    : null;
-  if (!image) return <File {...part} />;
-  return (
-    <Image
-      type="image"
-      image={image}
-      status={part.status}
-      {...(part.filename !== undefined && { filename: part.filename })}
-    />
-  );
-};
-
-const UserFilePart: FileMessagePartComponent = (part) => (
-  <div data-slot="aui_user-message-file" className="py-1">
-    <MessageFile {...part} />
-  </div>
-);
-
-const UserImagePart: ImageMessagePartComponent = (part) => (
-  <div data-slot="aui_user-message-image" className="py-1">
-    <Image {...part} />
-  </div>
-);
-
-const UserMessage: FC = () => {
-  const serverId = useAuiState(
-    (s) => s.message.metadata.custom?.server_id as string | undefined,
-  );
-
-  return (
-    <MessagePrimitive.Root
-      id={serverId ? `message-${serverId}` : undefined}
-      tabIndex={serverId ? -1 : undefined}
-      data-slot="aui_user-message-root"
-      data-aui-quote-selectable="false"
-      className="fade-in slide-in-from-bottom-1 animate-in grid auto-rows-auto scroll-mt-24 grid-cols-[minmax(72px,1fr)_auto] content-start gap-y-2 px-2 duration-150 outline-none [contain-intrinsic-size:auto_200px] [content-visibility:auto] [&:where(>*)]:col-start-2"
-      data-role="user"
-    >
-      <UserMessageAttachments />
-
-      <div className="aui-user-message-content-wrapper relative col-start-2 min-w-0">
-        <div className="aui-user-message-content peer bg-muted text-foreground rounded-(--composer-radius) px-4 py-2 wrap-break-word empty:hidden">
-          <MessagePrimitive.Quote>
-            {(quote) => <QuoteBlock {...quote} />}
-          </MessagePrimitive.Quote>
-          <MessagePrimitive.Parts
-            components={{ File: UserFilePart, Image: UserImagePart }}
-          />
-        </div>
-      </div>
-
-      <BranchPicker
-        data-slot="aui_user-branch-picker"
-        className="col-span-full col-start-1 -me-1 justify-end"
-      />
-    </MessagePrimitive.Root>
-  );
-};
-
-const EditComposer: FC = () => {
-  return (
-    <MessagePrimitive.Root
-      data-slot="aui_edit-composer-wrapper"
-      className="flex flex-col px-2 [contain-intrinsic-size:auto_200px] [content-visibility:auto]"
-    >
-      <ComposerPrimitive.Root className="aui-edit-composer-root border-foreground/10 focus-within:border-foreground/25 ms-auto flex w-full max-w-[85%] cursor-text flex-col rounded-(--composer-radius) border bg-(--composer-bg) transition-[border-color]">
-        <ComposerPrimitive.Input
-          className="aui-edit-composer-input text-foreground min-h-14 w-full resize-none bg-transparent px-4 pt-3 pb-1 text-base outline-none"
-          autoFocus
-        />
-        <div className="aui-edit-composer-footer mx-2.5 mb-2.5 flex items-center gap-1.5 self-end">
-          <ComposerPrimitive.Cancel asChild>
-            <Button variant="ghost" size="sm" className="h-8 px-3">
-              Cancel
-            </Button>
-          </ComposerPrimitive.Cancel>
-          <ComposerPrimitive.Send asChild>
-            <Button size="sm" className="h-8 px-3">
-              Update
-            </Button>
-          </ComposerPrimitive.Send>
-        </div>
-      </ComposerPrimitive.Root>
-    </MessagePrimitive.Root>
-  );
-};
-
-const BranchPicker: FC<BranchPickerPrimitive.Root.Props> = ({
-  className,
-  ...rest
-}) => {
-  return (
-    <BranchPickerPrimitive.Root
-      hideWhenSingleBranch
-      className={cn(
-        "aui-branch-picker-root text-muted-foreground -ms-2 me-2 inline-flex items-center text-xs",
-        className,
-      )}
-      {...rest}
-    >
-      <BranchPickerPrimitive.Previous asChild>
-        <TooltipIconButton tooltip="Previous">
-          <ChevronLeftIcon />
-        </TooltipIconButton>
-      </BranchPickerPrimitive.Previous>
-      <span className="aui-branch-picker-state font-medium">
-        <BranchPickerPrimitive.Number /> / <BranchPickerPrimitive.Count />
-      </span>
-      <BranchPickerPrimitive.Next asChild>
-        <TooltipIconButton tooltip="Next">
-          <ChevronRightIcon />
-        </TooltipIconButton>
-      </BranchPickerPrimitive.Next>
-    </BranchPickerPrimitive.Root>
-  );
-};
+}

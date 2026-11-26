@@ -213,7 +213,7 @@ The following table records the stack for each layer:
 | Type checking | Pyrefly (`strict` preset, zero warnings) | Native Pydantic understanding and per-path strictness ([`operations/typing.md`](operations/typing.md)) |
 | Engine arithmetic | NumPy (integer arrays) | Vectorized 16,384-scenario integer kernel; BSD-3-Clause |
 | Background work | Minute loop and `spawn` in the API process; state on the rows the work touches | Zero broker overhead; state persists in every `pg_dump` |
-| Web interface | Vite, React, `@assistant-ui/*`, `@radix-ui/themes`, Radix Primitives, `motion`, `Recharts`, `zustand` | Static build served by FastAPI under a strict content security policy ([`specs/web-interface.md`](specs/web-interface.md), [`DESIGN.md`](../../DESIGN.md)) |
+| Web interface | Vite, React, `@assistant-ui/*`, `radix-ui`, Tailwind CSS 4, Motion, Recharts, React Flow | Static build served by FastAPI under a strict content security policy ([`specs/web-interface.md`](specs/web-interface.md), [`DESIGN.md`](../../DESIGN.md)) |
 | Deployment | Docker Compose (`db`, `api`; optional `local-llm` and `obs`) | Single host deployment; loopback-only ports behind Tailscale |
 | License | MIT (application code) | Stock Phoenix (`obs` profile) carries Elastic License 2.0 outside the Arno image; direct dependencies are checked by hand against the permissive-only rule |
 

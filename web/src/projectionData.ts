@@ -41,6 +41,7 @@ export function workbookUrl(request?: ProjectionRequest): string {
   if (request?.horizon_days != null) {
     params.set("horizon_days", String(request.horizon_days));
   }
+  if (request?.cut_percent) params.set("cut_percent", String(request.cut_percent));
   const purchase = request?.hypothetical;
   if (purchase?.amount_paise != null) {
     params.set("amount_paise", String(purchase.amount_paise));

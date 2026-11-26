@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
+import { Dialog } from "radix-ui";
 import { AlertTriangle, CreditCard, FileSearch, Landmark, X } from "lucide-react";
 import { Orb } from "../Orb";
 import { api, errorMessage } from "../api";

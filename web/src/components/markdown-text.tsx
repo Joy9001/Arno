@@ -2,18 +2,92 @@
 
 import { StreamdownTextPrimitive } from "@assistant-ui/react-streamdown";
 import { code } from "@streamdown/code";
-import { memo, type ComponentProps, type FC } from "react";
+import { memo, useMemo, type ComponentProps, type FC } from "react";
+import {
+  InlineCitation,
+  type Citation,
+} from "@/components/ai-elements/inline-citation";
+import {
+  LedgerCitationPreview,
+  useLedgerCitations,
+  type LedgerCitation,
+} from "@/components/ai-elements/ledger-citation";
+import { useSources } from "@/components/ai-elements/sources";
 
 import { cn } from "@/lib/utils";
 import { markdownRemarkPlugins } from "@/chat/markdown-plugins";
 
+type CitationNode = {
+  type: string;
+  value?: string;
+  url?: string;
+  children?: CitationNode[];
+};
+
+function citationPlugin(sources: Citation[], ledger: LedgerCitation[]) {
+  return () => (tree: CitationNode) => {
+    const visit = (node: CitationNode) => {
+      if (!node.children || node.type === "link") return;
+      node.children = node.children.flatMap((child) => {
+        if (child.type !== "text" || !child.value) {
+          visit(child);
+          return [child];
+        }
+        const pieces = child.value.split(/(\[\d+\]|\[movement:mov_[\w-]+\])/g);
+        return pieces.filter(Boolean).map((piece) => {
+          const source =
+            sources.find((item) => piece === `[${item.id}]`) ??
+            ledger.find((item) => piece === `[movement:${item.id}]`);
+          return source
+            ? {
+                type: "link",
+                url:
+                  "amount" in source
+                    ? source.url
+                    : `https://arno.invalid/source/${encodeURIComponent(source.id)}`,
+                children: [{ type: "text", value: piece }],
+              }
+            : { type: "text", value: piece };
+        });
+      });
+    };
+    visit(tree);
+  };
+}
+
 const MarkdownTextImpl: FC = () => {
+  const sources = useSources();
+  const ledger = useLedgerCitations();
+  const plugins = useMemo(
+    () => [...markdownRemarkPlugins, citationPlugin(sources, ledger)],
+    [sources, ledger],
+  );
+  const components = useMemo(
+    () => ({
+      ...defaultComponents,
+      a: ({ href, children, className }: ComponentProps<"a">) => {
+        const movement = ledger.find((item) => item.url === href);
+        if (movement) return <LedgerCitationPreview source={movement} />;
+        const source = sources.find(
+          (item) =>
+            `https://arno.invalid/source/${encodeURIComponent(item.id)}` ===
+            href,
+        );
+        return source ? (
+          <InlineCitation source={source}>{children}</InlineCitation>
+        ) : (
+          <span className={className}>{children}</span>
+        );
+      },
+    }),
+    [sources, ledger],
+  );
   return (
     <StreamdownTextPrimitive
       containerClassName="aui-md"
-      components={defaultComponents}
+      components={components}
       plugins={{ code }}
-      remarkPlugins={markdownRemarkPlugins}
+      remarkPlugins={plugins}
       controls={{ code: true, table: false }}
       codeBlockMaxHeight={320}
       // Finance replies may quote untrusted text. The custom link and image
@@ -98,7 +172,9 @@ const defaultComponents = {
   // Finance replies may quote untrusted text. Never turn it into a live link,
   // and never let a remote image load by itself.
   a: ({ className, children }: ComponentProps<"a">) => (
-    <span className={cn("aui-md-a text-foreground/90", className)}>{children}</span>
+    <span className={cn("aui-md-a text-foreground/90", className)}>
+      {children}
+    </span>
   ),
   img: () => null,
   blockquote: ({ className, ...props }: ComponentProps<"blockquote">) => (
@@ -146,7 +222,10 @@ const defaultComponents = {
     </div>
   ),
   thead: ({ className, ...props }: ComponentProps<"thead">) => (
-    <thead className={cn("aui-md-thead bg-transparent", className)} {...props} />
+    <thead
+      className={cn("aui-md-thead bg-transparent", className)}
+      {...props}
+    />
   ),
   th: ({ className, ...props }: ComponentProps<"th">) => (
     <th
@@ -168,7 +247,10 @@ const defaultComponents = {
   ),
   tr: ({ className, ...props }: ComponentProps<"tr">) => (
     <tr
-      className={cn("aui-md-tr m-0 p-0 [&:last-child>td]:border-b-0", className)}
+      className={cn(
+        "aui-md-tr m-0 p-0 [&:last-child>td]:border-b-0",
+        className,
+      )}
       {...props}
     />
   ),

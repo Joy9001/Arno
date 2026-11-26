@@ -53,13 +53,6 @@ repos:
         files: ^web/
         pass_filenames: false
         stages: [pre-push]
-      - id: web-answer-contract
-        name: web answer contract
-        entry: pnpm --dir web run --silent test:answers
-        language: system
-        files: ^(web/src/|web/scripts/|tests/fixtures/presentation_contract\.py)
-        pass_filenames: false
-        stages: [pre-push]
       - id: web-interaction-tests
         name: web interaction tests
         entry: pnpm --dir web run --silent test:web

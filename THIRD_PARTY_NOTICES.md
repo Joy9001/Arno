@@ -136,8 +136,8 @@ and Phoenix services run as separate Compose images with their own licenses, lis
 
 ## Web dependencies
 
-The web bundle is built from Vite, React, AI SDK 7, Streamdown, Recharts, Radix UI, Lucide, and
-`vite-plugin-pwa`. Their direct licenses are:
+The web bundle uses Vite, React, AI SDK 7, Streamdown, React Flow, Recharts, Radix UI, Lucide, and
+`vite-plugin-pwa`. Direct dependency licenses appear in the following table.
 
 | Package | License |
 |---|---|
@@ -146,12 +146,9 @@ The web bundle is built from Vite, React, AI SDK 7, Streamdown, Recharts, Radix 
 | `@streamdown/code`, `class-variance-authority` | Apache-2.0 |
 | `@tailwindcss/vite`, `tailwindcss`, `tailwind-merge`, `tw-animate-css`, `tw-shimmer` | MIT |
 | `clsx`, `zod`, `zustand` | MIT |
-| `@radix-ui/react-dialog`, `@radix-ui/react-popover`, `@radix-ui/react-tabs` | MIT |
-| `@radix-ui/themes` | MIT |
-| `@simplewebauthn/browser` | MIT |
+| `@xyflow/react`, `radix-ui` | MIT |
 | `lucide-react` | ISC |
 | `motion` | MIT |
-| `qrcode.react` | ISC |
 | `react`, `react-dom` | MIT |
 | `react-spinners` | MIT |
 | `recharts` | MIT |

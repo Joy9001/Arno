@@ -32,31 +32,14 @@ def _card_data(card: dict[str, Any]) -> list[DataChunk]:
     return [DataChunk(type="data-card", data=card)]
 
 
-async def _finish_read(
-    ctx: RunContext[AgentDeps],
-    payload: dict[str, Any],
-    *,
-    kind: str,
-    context: dict[str, Any] | None = None,
-) -> ToolReturn:
-    card = payload.pop("_card", None)
-    cards: list[dict[str, Any]] = []
-    registration = ctx.deps.presentation.register_read(kind, payload, context=context)
-    payload["ui_results"] = registration.descriptors
-    if card:
-        cards.append({**card, "result_id": registration.primary_id})
-    if registration.fallback:
-        cards.append(registration.fallback)
-    return ToolReturn(
-        return_value=payload, metadata=[DataChunk(type="data-card", data=c) for c in cards] or None
-    )
-
-
 async def run_query(ctx: RunContext[AgentDeps], sql: str) -> ToolReturn:
     """Read-only PostgreSQL (2-second timeout, at most 1,000 rows): the way to read the ledger.
     Balances, spending, movements, schedules, goals, who owes what, memories, imports, and
     conversation search are all here. Use the exact view columns below. For a table, read its
-    columns from information_schema.columns before the first query instead of guessing.
+    columns from information_schema.columns before the first query instead of guessing. For a
+    visual summary, select label and metric_paise (optionally baseline_paise); for a chart select
+    label and amount_paise. For a citable movement select movement_id, payee_name or description,
+    amount_paise, and date; cite its exact ID as [movement:mov_...].
 
     Views (prefer these):
     - v_legs: movement_id, transfer_id, date, movement_kind, description, from_account_id,
@@ -123,7 +106,8 @@ async def run_query(ctx: RunContext[AgentDeps], sql: str) -> ToolReturn:
         "row_count": payload["row_count"],
         "truncated": payload["truncated"],
     }
-    return await _finish_read(ctx, payload, kind="query")
+    card = payload.pop("_card")
+    return ToolReturn(return_value=payload, metadata=_card_data(card))
 
 
 async def project(
@@ -187,13 +171,8 @@ async def project(
         }
     if raw_changes is not None:
         request["changes"] = raw_changes
-    payload["_card"] = projection_tools.card(result, request)
-    return await _finish_read(
-        ctx,
-        payload,
-        kind="project",
-        context={"card": payload["_card"]},
-    )
+    card = projection_tools.card(result, request)
+    return ToolReturn(return_value=payload, metadata=_card_data(card))
 
 
 async def run_python(
@@ -203,7 +182,9 @@ async def run_python(
     growth, tax or what-if arithmetic, and reading an uploaded file. It has no database, no
     network, and no clock; read the data first with run_query and paste what you need into the
     script. Print what you want to see; write a JSON-serializable result to result.json to get it
-    back as result_json. attachment_ids lists uploaded files (att_...) to place in the script's
+    back as result_json. For a scenario comparison, result_json.scenarios can contain computed
+    rows with label, tenure_months, prepayment_paise, monthly_paise, interest_paise, and
+    total_paise. attachment_ids lists uploaded files (att_...) to place in the script's
     working directory under their own filenames. Any figure you state must come from the output."""
     try:
         async with connect() as conn:
@@ -260,7 +241,7 @@ async def _call_write(
 
 
 def _write_return(payload: dict[str, Any]) -> ToolReturn:
-    card = payload.pop("card", None)
+    card = payload.get("card")
     return ToolReturn(return_value=payload, metadata=_card_data(card) if card else None)
 
 

@@ -27,7 +27,7 @@ search. Two writes ask for a confirm tap in specific cases
 | Validation errors | Unknown or ambiguous names and invalid inputs raise `ModelRetry` listing valid candidates |
 | Unexpected errors | `ToolErrorsToModel` turns an unexpected tool exception into a structured result (`{"status": "error", "tool", "message"}`) the model can explain; daily-cap stops still halt the run. Read tools carry a 60-second timeout |
 | Uncertain commit | When a commit's outcome is unknown (`CommitOutcomeUnknownError`), the write returns `{"status": "outcome_unknown", "committed": "unknown", "message": "..."}` telling the model to ask the user to verify the ledger and never repeat the write |
-| Two payloads | Compact JSON for the model; cards and source IDs for the UI in `ToolReturn` metadata (`data-card` chunks) |
+| Streamed results | Native tool parts carry computed results. `ToolReturn` metadata carries UI-only payloads such as the daily projection curve and web source previews. |
 | Coverage | `coverage()` inspects committed, non-undone statements; gaps are reported rather than summed as zero |
 | Write groups | `write_group()` wraps each write in one audited transaction returning `undo_id`; `message_id` and `ctx.tool_call_id` come from `RunContext`, never tool inputs |
 | Confirm gate | `_ask_first()` raises PydanticAI's `ApprovalRequired` when the call needs a tap and `ctx.tool_call_approved` is false. Approval resumes the call from the top and applies once per `tool_call_id` |
@@ -49,6 +49,9 @@ columns from `information_schema.columns` instead of guessing.
 **Input:** `run_query(sql: str)`
 
 **Output:** `{"columns": [...], "rows": [[...]], "row_count": int, "truncated": bool, "sql": str}`.
+The widget can use `label` and `metric_paise` for a headline figure or `label` and `amount_paise`
+for a chart. A ledger citation uses `[movement:<id>]` and requires a returned `movement_id`,
+`payee_name` or `description`, `amount_paise`, and `date` in the same message.
 
 **Logic:** Connects as `agent_ro` ([data-and-engine.md](data-and-engine.md#database-roles)) inside
 a read-only transaction, sets `LOCAL statement_timeout = '2s'`, prepares the single statement
@@ -110,7 +113,6 @@ Each item in `changes` is discriminated by `kind` (`stop_income`, `pause_schedul
   # Present when changes is passed:
   "scenario": {"changes": [...], "assumptions": [...], "runway_days": int | None,
                "holds": bool, "reason": str, "baseline": {...}},
-  "ui_results": [...]
 }
 ```
 
@@ -150,8 +152,9 @@ optional: the model's own native search runs when the model supports it. Otherwi
 account numbers, payees, or other personal details in a query.
 
 **Output:** `[{"id": "1", "title", "url", "snippet", "published_at"}]`, up to five results, with
-`id` counting up across the turn. The tool also emits a Vercel AI SDK `source-url` part per result,
-so the reply cites each claim as `[n]`. A Brave outage returns `{"error": "..."}`.
+`id` counting up across the turn. The tool also emits a Vercel AI SDK `source-url` part with the
+title, URL, and snippet, so the reply cites each claim as `[n]`. A Brave outage returns
+`{"error": "..."}`.
 
 ---
 
@@ -313,20 +316,8 @@ over REST.
 
 ---
 
-## Result cards
+## Results in chat
 
-`run_query` and `project` register compact `ui_results` descriptors on `AgentDeps.presentation`
-(`src/arno/agent/presentation.py`):
-
-```python
-{"id": "res_1", "title": "Spending by category, 2026-09-01 to 2026-09-30",
- "views": ["Summary", "Table", "Chart"]}
-```
-
-Each turn's registry carries a random scope prefix so stale IDs from earlier turns cannot resolve,
-and caps storage at 64 results. Snapshots preserve period, filters, coverage gaps, source IDs, and
-`as_of`; unknown money serializes as `{"type": "unknown"}`, never zero. Read results also emit a
-fallback `card: "result"`, collected into one closed **Supporting data** disclosure on the
-assistant message; capture, import, undo, movement, approval, and projection cards stay outside
-it. Run `pnpm --dir web test:answers` to verify the Python snapshot to TypeScript renderer
-contract.
+The chat reads the SDK's native message parts. Widgets use the values in tool results and the
+UI-only projection payload. Web sources use `source-url` parts, and ledger citations resolve to
+specific movement rows. See [Web interface](web-interface.md#agent-and-conversation-views).

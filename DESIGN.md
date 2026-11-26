@@ -146,10 +146,10 @@ An 84px icon rail frames desktop content. Six destinations share the frame: Ask,
 Activity, Recaps, and Settings. Data pages use 32px gutters and their own scroll container.
 Area headings and pill tabs stay visible while their content scrolls.
 
-Chats adds a conversation list and an optional canvas. Above 1180px the canvas sits beside the
-conversation, with a 420px minimum width; at 1180px and below it becomes a full-height sheet.
-At 900px and below, the rail gives way to a five-item bottom bar, and page gutters become 16px.
-Phone content reserves the bar's height and safe area. Wide tables scroll inside their region.
+Chats pairs a conversation list with the open thread. Results and source previews sit beside
+the claims they support. Flow uses the thread's space for an interactive graph. At 900px and
+below, the rail gives way to a five-item bottom bar, and page gutters become 16px. Phone content
+reserves the bar's height and safe area. Wide tables scroll inside their region.
 
 Spacing follows 4 / 8 / 12 / 16 / 24 / 32px steps. Tile gaps are 16px; sections have more space
 above their heading than below it. Account grids retain object-sized columns with sparse data.
@@ -196,14 +196,13 @@ credit cards use cobalt or orange faces. People tiles show who owes whom, with m
 and orange payables. Goals use SVG progress rings and projection-backed dates. A calendar strip
 marks incoming and outgoing scheduled events without claiming payment.
 
-### Receipt and canvas
+### Receipts and source previews
 
-The computed receipt is the signature answer: a lime verdict, probability against the threshold,
-lowest median with its date, and source count. Its disclosures lead to the curve, tradeoffs, and
-readable rows. The canvas enlarges the conclusion with mesh type, measured facts, a median curve
-and P10–P90 range, source chips, assumptions, and quality notes. Source chips sit next to the
-conclusion facts, before the curve and assumptions. Raw rows remain a second layer.
-Unknown starting balances suppress forecasts; an unset floor suppresses its probability.
+A computed receipt gives you the verdict, floor probability and threshold, and lowest median with
+its date. The affordability lab pairs those figures with the median curve and P10–P90 range.
+Citations open previews beside the claims they support. Keep tradeoffs, assumptions, and source
+rows accessible from those results. Unknown starting balances suppress forecasts. An unset floor
+suppresses its probability.
 
 ### Activity and memory
 

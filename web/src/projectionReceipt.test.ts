@@ -42,7 +42,7 @@ describe("parseProjectionReceipt", () => {
   });
 
   it("normalizes the chat card money-object shape and leaves request untouched", () => {
-    const request = { horizon_days: 180, changes: [{ kind: "stop_income", start: "2026-12-01" }] };
+    const request = { horizon_days: 180, cut_percent: 10, changes: [{ kind: "stop_income", start: "2026-12-01" }] };
     const receipt = parseProjectionReceipt({
       card: "projection",
       title: "Projection",

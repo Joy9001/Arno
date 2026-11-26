@@ -309,7 +309,7 @@ encrypted off-site backups, and optional webhook pings leave the host
 
 - **Web interface:** Agent-first SPA with six primary destinations (**Ask**, **Chats**, **Money**,
   **Activity**, **Recaps**, **Settings**), built with React, Vite, `@assistant-ui/*`, and
-  `@radix-ui/themes` ([`specs/web-interface.md`](specs/web-interface.md),
+  Radix UI ([`specs/web-interface.md`](specs/web-interface.md),
   [`DESIGN.md`](../../DESIGN.md)).
 - **Compose stack:** Three default services (`db`, `api`, and `sandbox`) plus optional `local-llm`
   (Ollama) and `obs` (stock Phoenix) profiles. The `sandbox` runs model-written Python on an

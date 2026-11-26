@@ -395,6 +395,7 @@ def _plans(
     needed: int,
     obligation_needed: int,
     spend_paise: int,
+    allow_cut: bool = True,
 ) -> list[_Plan]:
     """Every minimal plan that clears the floor on the scenarios, fewest levers then cheapest.
 
@@ -424,6 +425,8 @@ def _plans(
                 )
                 cut = _least_cut(matrix, shifted, payables, floor, needed, obligation_needed)
                 provisional = False
+                if not allow_cut and cut != 0:
+                    continue
                 if cut is None:
                     if not matrix.capped:
                         continue
@@ -520,6 +523,7 @@ def _verify(
     seed: int,
     threshold: float,
     spend_paise: int,
+    allow_cut: bool = True,
 ) -> _Verified | None:
     """Apply the plan, rerun the kernel, and keep it only if it passes there.
 
@@ -532,7 +536,11 @@ def _verify(
     prepared = prepare_plan(inputs, until=until, runs=runs, seed=seed, threshold=threshold)
 
     def attempt(cut: int) -> _Verified | None:
-        result = prepared.evaluate_cut(cut)
+        result = (
+            prepared.evaluate_cut(cut)
+            if allow_cut
+            else project(inputs, runs=runs, seed=seed, threshold=threshold)
+        )
         if not _passes(result, threshold=threshold):
             return None
         cost = matrix.cost_paise + cut * spend_paise // 10_000
@@ -713,13 +721,14 @@ def _tradeoffs(
     runs: int,
     seed: int,
     threshold: float,
+    allow_cut: bool = True,
 ) -> list[Tradeoff]:
     when = max(hypothetical.date, inputs.as_of)
     payday = _next_payday(inputs, when) or (when + timedelta(days=30))
     reducible = any(
         category.reducible and category.baseline_per_day_paise > 0 for category in inputs.categories
     )
-    cut_until = (payday - inputs.as_of).days if reducible else -1
+    cut_until = (payday - inputs.as_of).days if reducible and allow_cut else -1
     needed = min_hold_count(runs, threshold)
     obligation_needed = min_hold_count(runs, OBLIGATION_THRESHOLD)
 
@@ -768,6 +777,7 @@ def _tradeoffs(
         needed=needed,
         obligation_needed=obligation_needed,
         spend_paise=spend,
+        allow_cut=allow_cut,
     )
     by_method = {matrix.method: matrix for matrix in matrices}
     trades: list[Tradeoff] = []
@@ -783,6 +793,7 @@ def _tradeoffs(
             seed=seed,
             threshold=threshold,
             spend_paise=spend,
+            allow_cut=allow_cut,
         )
         if verified is not None:
             trades.append(_describe(verified, inputs, baseline_goals, payday))
@@ -833,6 +844,7 @@ def afford(
     runs: int = DEFAULT_RUNS,
     seed: int = DEFAULT_SEED,
     threshold: float = FLOOR_THRESHOLD,
+    allow_cut_tradeoffs: bool = True,
 ) -> Projection:
     """Return the projection with the purchase applied, a tested verdict, and minimal plans."""
     validate_hypothetical(inputs.as_of, hypothetical)
@@ -876,6 +888,7 @@ def afford(
                     runs=runs,
                     seed=seed,
                     threshold=threshold,
+                    allow_cut=allow_cut_tradeoffs,
                 )
             )
     if passed:
@@ -920,6 +933,7 @@ def project_scenario(
     runs: int = DEFAULT_RUNS,
     seed: int = DEFAULT_SEED,
     threshold: float = FLOOR_THRESHOLD,
+    allow_cut_tradeoffs: bool = True,
 ) -> Projection:
     """Run a multi-event what-if (and optional purchase) against an unchanged baseline."""
     needed = scenario_horizon_days(inputs.as_of, changes, ask_horizon_days=horizon_days(inputs))
@@ -936,7 +950,14 @@ def project_scenario(
     applied = apply_changes(base_inputs, changes, income_source_ids=income_source_ids)
     unchanged = project(base_inputs, runs=runs, seed=seed, threshold=threshold)
     if hypothetical is not None:
-        result = afford(applied.inputs, hypothetical, runs=runs, seed=seed, threshold=threshold)
+        result = afford(
+            applied.inputs,
+            hypothetical,
+            runs=runs,
+            seed=seed,
+            threshold=threshold,
+            allow_cut_tradeoffs=allow_cut_tradeoffs,
+        )
     else:
         result = project(applied.inputs, runs=runs, seed=seed, threshold=threshold)
 

@@ -9,11 +9,11 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
+from pydantic_ai.messages import ModelRequest, ModelResponse, TextPart, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo
-from pydantic_ai.ui.vercel_ai.response_types import DataChunk
+from pydantic_ai.ui.vercel_ai.response_types import DataChunk, SourceUrlChunk
 
-from arno.agent.cards import data_part, with_data
+from arno.agent.history import data_part, ui_messages, with_data
 from arno.agent.turns import encode_saved_turn
 from tests.agent_helpers import streaming_model
 
@@ -151,3 +151,62 @@ def test_data_part_omits_unset_optionals_and_keeps_boolean_false():
         {"type": "data-card", "data": IMPORT},
         {"type": "data-card", "id": "card_import", "data": IMPORT},
     ]
+
+
+def test_tool_results_and_web_source_snippets_survive_history():
+    messages = [
+        ModelResponse(
+            parts=[ToolCallPart("web_search", {"query": "rates"}, tool_call_id="call_1")]
+        ),
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    "web_search",
+                    [{"id": "1", "snippet": "Published rate"}],
+                    tool_call_id="call_1",
+                    metadata=[
+                        SourceUrlChunk(
+                            source_id="1",
+                            url="https://example.com",
+                            title="Rates",
+                            provider_metadata={"arno": {"snippet": "Published rate"}},
+                        )
+                    ],
+                )
+            ]
+        ),
+    ]
+    parts = ui_messages(messages)[0]["parts"]
+    assert parts[0]["output"][0]["snippet"] == "Published rate"
+    assert parts[1]["providerMetadata"]["arno"]["snippet"] == "Published rate"
+    replay = "".join(encode_saved_turn({"id": "msg", "parts": parts}))
+    assert any(
+        chunk.get("providerMetadata", {}).get("arno", {}).get("snippet") == "Published rate"
+        for chunk in _chunks(replay)
+    )
+    _assert_client_schema(replay)
+
+
+def test_replay_preserves_approval_and_result():
+    parts = [
+        {
+            "type": "tool-update_setup",
+            "toolCallId": "call_1",
+            "state": "output-available",
+            "input": {"action": "archive"},
+            "approval": {"id": "call_1", "approved": True},
+            "output": {"status": "saved"},
+        }
+    ]
+    replay = "".join(encode_saved_turn({"id": "msg", "parts": parts}))
+    chunks = _chunks(replay)
+    assert [c["type"] for c in chunks] == [
+        "start",
+        "tool-input-available",
+        "tool-approval-request",
+        "tool-approval-response",
+        "tool-output-available",
+        "finish",
+    ]
+    assert chunks[-2]["output"] == {"status": "saved"}
+    _assert_client_schema(replay)

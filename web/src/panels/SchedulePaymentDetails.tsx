@@ -1,4 +1,4 @@
-import * as Dialog from "@radix-ui/react-dialog";
+import { Dialog } from "radix-ui";
 import { X } from "lucide-react";
 import { formatDate, formatPaise } from "../format";
 import type { UpcomingEvent } from "../types";

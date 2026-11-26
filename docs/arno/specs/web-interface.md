@@ -13,10 +13,8 @@ top of the rail. On
 phones, the rail collapses into a five-slot bottom tab bar (**Ask**, **Money**, **Activity**,
 **Recaps**, and **More**), while conversation history stays inside the chat view.
 
-The conversation component stays mounted in the shell while you browse other destinations so an
-in-flight reply continues streaming without interruption. On wide screens (`> 1180px`), an active
-**canvas** (`EvidencePanel`, `PlannerPanel`, or `RunPanel`) docks beside the conversation; at
-`1180px` and narrower, the canvas opens inside a Radix Dialog sheet.
+The conversation stays mounted while you browse other destinations, so an in-flight reply can
+continue streaming. Open a citation or interact with a result directly in the conversation.
 
 The following table lists every live route and alias handled by `web/src/Shell.tsx`,
 `web/src/pages/Recaps.tsx`, `web/src/panels/Settings.tsx`, and `web/src/App.tsx`:
@@ -46,14 +44,14 @@ chat rather than embedding a side assistant. Visual tokens, elevation, and orb b
 
 ### Agent and conversation views
 
-The following table specifies the interactive agent views and canvas panels:
+The following table describes the interactive agent views.
 
 | View | Layout and content | Primary actions |
 |---|---|---|
 | **Ask** | Orb hero, greeting, composer (text, photo upload, voice recording, statement attachment), starting questions, and cards for cash on hand, forecast readiness, and unread notifications; replaced by a guided first-run checklist and statement drop zone until the ledger has data | Ask a question, attach a receipt or statement, record voice, or open a noticed item |
-| **Chats** | Thread list beside the open conversation; **Chat** view or **Flow** view (graph of tool calls for an answer); rich tool cards (logged movement with undo, **Remembered** card, projection receipt, spending breakdown, import card, charts, tables); source citations and reply flagging; plain-text links only | Send messages, answer confirm cards, stop streaming, flag replies, and open evidence or the planner on the canvas |
-| **Evidence canvas (`EvidencePanel`)** | Sources and computed breakdown backing a projection or answer card, with sources first and raw figures second | Inspect contributing rows, jump to **Money → Timeline**, or ask a follow-up |
-| **Purchase planner (`PlannerPanel`)** | Interactive canvas what-if panel backed by `/api/projection`: price slider (`₹1,000`–`₹5,00,000`), purchase-date slider (today through +60 days), payment method selector (**From an account**, **Card in full**, **Card EMI** with 3–24 month tenures), debounced floor-probability gauge, verdict, lowest median, tightest day, and chart | Explore purchase timing and financing scenarios directly against the projection engine without invoking the LLM |
+| **Chats** | Thread list and conversation, with widgets backed by tool results, inline citations, and reply flagging | Send messages, stop streaming, inspect source previews, review proposed writes, and undo completed writes |
+| **Flow** | Zoomable, pannable graph of the prompt, tool activity, and visual results from the same conversation | Inspect the work behind a reply and open the reply in **Chat** |
+| **Affordability lab** | Projection verdict, floor-probability gauge, and P10–P90 range, shared by **Chats** and **Money → Timeline** | Adjust purchase price, date, financing, or the cut to reducible spending. Compare results from `/api/projection` |
 
 ### Money, Activity, and Recaps
 
@@ -73,18 +71,18 @@ The following table specifies the financial workspace panels:
 
 ### Settings
 
-**Settings** organizes **11 sections** into two groups (**Everyday** and **Advanced**), each
+**Settings** organizes its sections into two groups (**Everyday** and **Advanced**), each
 loading and handling errors independently so a failing status check never hides unrelated sections.
 
-The following table lists all 11 Settings sections:
+The following table lists the settings sections.
 
 | Group | Section (`#settings/<id>`) | Content and primary actions |
 |---|---|---|
 | Everyday | **Profile & floor** (`profile`) | Display name, financial floor (INR with client validation), currency, time zone, default horizon, and last model error summary |
-| Everyday | **Categories** (`categories`) | Active and archived categories (create, rename, archive/restore, toggle `reducible` for affordability tradeoffs) and paginated merchant rules (add, promote `llm` rules to user rules, delete) |
+| Everyday | **Categories** (`categories`) | Review active and archived categories. Use **Ask** to change a category in chat, or manage merchant rules directly here. |
 | Everyday | **Notifications** (`notifications`) | Briefing day, notification time, and reminder lead days |
 | Everyday | **Scheduled questions** (`questions`) | Paginated user-defined recurring questions with RRULE schedules and an active toggle |
-| Everyday | **Agent memory** (`memory`) | Saved memories across all three live kinds (`preference`, `fact`, `rule`) with kind chips, editable body text, source, scope, enable/disable toggle, and permanent delete with deletion preview |
+| Everyday | **Agent memory** (`memory`) | Review saved preferences, facts, and rules. Use **Ask** to change a memory or delete it permanently in Settings. |
 | Everyday | **History** (`history`) | Cursor-paginated audit log (`HistoryPanel`) of write groups with actor, timestamp, summary, and undo action |
 | Advanced | **Diagnostics** (`diagnostics`) | **Models and diagnostics** (`RuntimeInfo`) displaying each role's configured model and host and an **Open Phoenix** link when `ARNO_PHOENIX_UI_URL` is configured |
 | Advanced | **Backups** (`backups`) | Last successful backup status, age, and recovery instructions; distinguishes unavailable status from no backup yet |
@@ -98,17 +96,17 @@ categorize state (`imports.categorize`) and looks again every few seconds while 
 `queued` or `running`; a `failed` state offers **Retry**, which calls
 `POST /api/imports/{id}/categorize`.
 
-## Threads and import cards
+## Thread results and statement review
 
 Each stored reply renders as its own message (`joinStrategy: "none"`). A thread that is still
 running when it opens (Arno answering an inbox item, or a turn that outlived its connection) follows
 its stream. A new conversation gets its server id from `POST /api/threads` before its first message,
 photo, or voice note.
 
-An attached statement shows as an import card in the thread, backed by the import its upload
-opened. The card carries the statement's progress line and links to the password field for an
-encrypted file. No step-by-step run view exists: extraction runs by itself
-([`import.md`](import.md#extraction)).
+Widgets read native assistant message parts. Source previews show web titles, snippets, and links
+or the exact movement date, payee, and amount from a ledger result. An attached statement opens
+the same review controls used in **Activity → Imports**, including the password field for an
+encrypted file. See [Statement extraction](import.md#extraction).
 
 ## Responsive and state rules
 
@@ -116,7 +114,7 @@ encrypted file. No step-by-step run view exists: extraction runs by itself
   tiles and rows while keeping amounts and primary actions visible; wide tables scroll inside
   focusable labelled regions (`TableRegion`) without clipping text. Dialog sheets provide a
   labelled close control and restore focus on close.
-- **Loading and errors:** Initial loads display layout-matched Radix `Skeleton` placeholders
+- **Loading and errors:** Initial loads display layout-matched skeleton placeholders
   reserving final height. Refreshes keep existing data visible beside a compact status indicator.
   Empty views explain what is missing and suggest the next step. Errors render inline near the
   affected section with a retry control; expired sessions prompt sign-in without silently replaying
@@ -141,7 +139,7 @@ server in production). The following table lists the key dependencies installed 
 |---|---|
 | Core runtime and build | `react` 19, `react-dom` 19, `typescript` 5.9, `vite` 8, `vite-plugin-pwa`, `workbox-precaching` |
 | Chat and streaming UI | `ai` 7 (pinned to match `VercelAIAdapter` `sdk_version=7`), `@ai-sdk/react`, `@assistant-ui/react`, `@assistant-ui/ai-sdk`, `@assistant-ui/generative-ui`, `@assistant-ui/react-streamdown`, `assistant-stream`, `streamdown`, `@streamdown/code` |
-| Components and styling | `@radix-ui/themes`, Radix Primitives (`@radix-ui/react-dialog`, `@radix-ui/react-popover`, `@radix-ui/react-tabs`, `radix-ui`), `tailwindcss` v4 (`@tailwindcss/vite`), `tw-animate-css`, `tw-shimmer`, `class-variance-authority`, `clsx`, `tailwind-merge` |
-| Visualization, icons, and motion | `recharts`, `lucide-react`, `motion`, `react-spinners` |
+| Components and styling | `radix-ui`, `tailwindcss` v4 (`@tailwindcss/vite`), `tw-animate-css`, `tw-shimmer`, `class-variance-authority`, `clsx`, `tailwind-merge` |
+| Visualization, icons, and motion | `@xyflow/react`, `recharts`, `lucide-react`, `motion`, `react-spinners` |
 | State and validation | `zustand`, `zod` |
 | Testing and linting | `vitest`, `@testing-library/react`, `@testing-library/dom`, `jsdom`, `eslint`, `typescript-eslint` |

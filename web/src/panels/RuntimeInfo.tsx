@@ -1,5 +1,4 @@
 import { Fragment } from "react";
-import { Button, Skeleton } from "@radix-ui/themes";
 import { ExternalLink, RefreshCw } from "lucide-react";
 import { useApi } from "../useApi";
 
@@ -23,15 +22,15 @@ type RuntimeInfoPayload = {
 export function RuntimeInfo() {
   const { data, error, loading, reload } = useApi<RuntimeInfoPayload>("/api/runtime-info");
 
-  if (loading && !data) return <div role="status" aria-label="Loading model configuration"><Skeleton height="120px" /></div>;
+  if (loading && !data) return <div role="status" aria-label="Loading model configuration"><div className="sk" style={{ height: 120 }} /></div>;
   if (!data) {
     return (
       <p className="error" role="alert">
         {error ?? "Runtime details did not load."}{" "}
-        <Button type="button" variant="soft" onClick={reload}>
+        <button type="button" className="ghost small" onClick={reload}>
           <RefreshCw size={14} aria-hidden="true" />
           Try again
-        </Button>
+        </button>
       </p>
     );
   }
@@ -51,9 +50,9 @@ export function RuntimeInfo() {
       <dt>Phoenix UI</dt>
       <dd>
         {data.phoenix_ui_url ? (
-          <Button asChild variant="soft"><a href={data.phoenix_ui_url} target="_blank" rel="noreferrer">
+          <a className="ghost small" href={data.phoenix_ui_url} target="_blank" rel="noreferrer">
             <ExternalLink size={14} aria-hidden="true" />Open Phoenix
-          </a></Button>
+          </a>
         ) : (
           "Not configured"
         )}

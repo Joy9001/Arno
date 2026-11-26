@@ -1,14 +1,15 @@
 import { AskBelow, AskGreeting } from "./AskHome";
-import {
-  createElement,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from "react";
+import { createElement, useContext, useEffect, useRef, useState } from "react";
 import { APICallError } from "ai";
-import { Calculator, FileText, Flag, LogIn, ReceiptText, RotateCcw, Wallet } from "lucide-react";
+import {
+  Calculator,
+  FileText,
+  Flag,
+  LogIn,
+  ReceiptText,
+  RotateCcw,
+  Wallet,
+} from "lucide-react";
 import {
   SuggestionPrimitive,
   ThreadPrimitive,
@@ -19,19 +20,13 @@ import {
   type ToolCallMessagePartComponent,
 } from "@assistant-ui/react";
 import { useAISDKError } from "@assistant-ui/ai-sdk";
-import { ApprovalCard } from "@/components/approval-card";
 import { ImagePreview, ImageRoot, ImageZoom } from "@/components/image";
 import { Button } from "@/components/ui/button";
 import { ToolFallback } from "@/components/tool-fallback.aui";
-import { Card, NumberFlags } from "./cards";
-import { SupportingData } from "./answer-ui";
-import {
-  buildSupportingPlan,
-  coveredByNativeCard,
-  isRoutineRead,
-  messageCoverage,
-} from "./supporting-data";
+import { CaptureCard, NumberFlags } from "./capture-card";
 import { ChatSurfaceContext, chatErrorMessage } from "./surface";
+import { ActionConfirmCard, ActionReceipt, AffordabilityLab, ImportReviewWidget } from "./widgets";
+import { parseProjectionReceipt } from "../projectionReceipt";
 
 function useMessageId(): string {
   return useAuiState((state) => state.message.id);
@@ -50,67 +45,52 @@ function usePartIndex(): number | null {
 function CardData({ data }: { data: Record<string, unknown> }) {
   const messageId = useMessageId();
   const surface = useContext(ChatSurfaceContext);
-  const parts = useAuiState((state) => state.message.parts);
-  const coverage = useMemo(() => messageCoverage(parts), [parts]);
-  const plan = useMemo(
-    () => buildSupportingPlan(parts, coverage),
-    [parts, coverage],
-  );
-  const index = usePartIndex();
-  const resultId = typeof data.result_id === "string" ? data.result_id : null;
-  const card = String(data.card ?? "card");
-
-  if (isRoutineRead(data)) {
-    // A valid composed answer owns the disclosure and shows it below itself.
-    if (plan && plan.answerOwnerIndex !== null) return null;
-    const ownerPart = plan ? parts[plan.ownerIndex] : undefined;
-    const owner =
-      index === null
-        ? ownerPart?.type === "data" && ownerPart.data === data
-        : index === plan?.ownerIndex;
-    if (!plan || !owner) return null;
-    return <SupportingData items={plan.items} onEvidence={surface.onEvidence} />;
-  }
-  if (resultId && card !== "answer" && coveredByNativeCard(card, resultId, coverage)) {
-    return null;
-  }
-
-  const cardNode = (
-    <Card
-      data={data}
-      onRetryCapture={(kind, attachmentId) =>
-        surface.onRetryCapture?.(kind, attachmentId, messageId)
-      }
-      onEvidence={surface.onEvidence}
-    />
-  );
-  if (card === "answer" && plan) {
-    const answerOwnerPart = parts[plan.answerOwnerIndex ?? -1];
-    const owner =
-      index === null
-        ? answerOwnerPart?.type === "data" && answerOwnerPart.data === data
-        : index === plan.answerOwnerIndex;
-    if (owner) {
-      return (
-        <>
-          {cardNode}
-          <SupportingData items={plan.items} onEvidence={surface.onEvidence} />
-        </>
-      );
-    }
-  }
-  return cardNode;
+  const card = String(data.card ?? "");
+  const projection =
+    card === "projection" ? parseProjectionReceipt(data) : null;
+  if (projection) return <AffordabilityLab seed={projection} />;
+  if (card === "import" && typeof data.import_id === "string")
+    return <ImportReviewWidget importId={data.import_id} />;
+  if (
+    [
+      "movements_batch",
+      "movement",
+      "correction",
+      "undo",
+      "preference",
+      "setup",
+    ].includes(card)
+  )
+    return <ActionReceipt data={data} />;
+  if (card === "capture" || card === "capture-retry")
+    return (
+      <CaptureCard
+        data={data}
+        onRetry={(kind, attachmentId) =>
+          surface.onRetryCapture?.(kind, attachmentId, messageId)
+        }
+      />
+    );
+  return null;
 }
 
-function ReplyModelData({ data }: { data: { model: string; fallback: boolean } }) {
+function ReplyModelData({
+  data,
+}: {
+  data: { model: string; fallback: boolean };
+}) {
   // Each run saved into one message (a delegate report, a retry) adds its own part; the
   // last one is the model that answered, so only it shows.
   const parts = useAuiState((state) => state.message.parts);
   const index = usePartIndex();
-  const last = parts.findLastIndex((part) => part.type === "data" && part.name === "reply-model");
+  const last = parts.findLastIndex(
+    (part) => part.type === "data" && part.name === "reply-model",
+  );
   const lastPart = parts[last];
   const isLast =
-    index === null ? lastPart?.type === "data" && lastPart.data === data : index === last;
+    index === null
+      ? lastPart?.type === "data" && lastPart.data === data
+      : index === last;
   if (!isLast) return null;
   return (
     <p className="aui-part-note">
@@ -129,7 +109,11 @@ function LegacyModelBadge({ data }: { data: { model: string } }) {
     ),
   );
   if (hasReplyModel) return null;
-  return <p className="aui-part-note">Answered by the backup model ({data.model}).</p>;
+  return (
+    <p className="aui-part-note">
+      Answered by the backup model ({data.model}).
+    </p>
+  );
 }
 
 function EndingData({ data }: { data: { note: string } }) {
@@ -147,7 +131,7 @@ function StatementData({
 }) {
   // The upload opened an import; its card polls the status and asks for any password.
   if (data.import_id) {
-    return <Card data={{ card: "import", import_id: data.import_id, filename: data.filename }} />;
+    return <ImportReviewWidget importId={data.import_id} />;
   }
   return (
     <span className="aui-statement-chip">
@@ -218,6 +202,29 @@ function approvalDetails(args: unknown): { label: string; value: string }[] {
  */
 export const ChatToolFallback: ToolCallMessagePartComponent = (props) => {
   const { approval, respondToApproval, args, toolName, status } = props;
+  const surface = useContext(ChatSurfaceContext);
+  const input =
+    args && typeof args === "object" ? (args as Record<string, unknown>) : {};
+  const changes =
+    input.changes && typeof input.changes === "object"
+      ? (input.changes as Record<string, unknown>)
+      : {};
+  const data =
+    input.data && typeof input.data === "object"
+      ? (input.data as Record<string, unknown>)
+      : {};
+  const categoryEditable =
+    toolName === "correct_movement" && typeof changes.category === "string";
+  const floorEditable =
+    toolName === "update_setup" &&
+    input.entity === "settings" &&
+    typeof data.floor_rupees === "number";
+  const [category, setCategory] = useState(
+    categoryEditable ? String(changes.category) : "",
+  );
+  const [floor, setFloor] = useState(
+    floorEditable ? String(data.floor_rupees) : "",
+  );
   const [error, setError] = useState<string | null>(null);
   const [answering, setAnswering] = useState(false);
   const answeringRef = useRef(false);
@@ -235,23 +242,82 @@ export const ChatToolFallback: ToolCallMessagePartComponent = (props) => {
       setAnswering(true);
       setError(null);
       try {
+        if (approved && categoryEditable) {
+          if (!category.trim()) {
+            setError("Enter a category.");
+            answeringRef.current = false;
+            setAnswering(false);
+            return;
+          }
+          surface.onApprovalEdit?.(props.toolCallId, {
+            category: category.trim(),
+          });
+        }
+        if (approved && floorEditable) {
+          const value = Number(floor);
+          if (
+            !floor.trim() ||
+            !Number.isFinite(value) ||
+            value < 0 ||
+            !/^\d+(?:\.\d{1,2})?$/.test(floor)
+          ) {
+            setError(
+              "Enter a valid floor in rupees, with up to two decimal places.",
+            );
+            answeringRef.current = false;
+            setAnswering(false);
+            return;
+          }
+          surface.onApprovalEdit?.(props.toolCallId, { floor_rupees: value });
+        }
         await respondToApproval({ approved });
       } catch (caught) {
         answeringRef.current = false;
         setAnswering(false);
-        setError(caught instanceof Error ? caught.message : "That answer was not accepted.");
+        setError(
+          caught instanceof Error
+            ? caught.message
+            : "That answer was not accepted.",
+        );
       }
     };
 
     return (
       <div className="flex flex-col gap-1.5">
-        <ApprovalCard
+        {categoryEditable && (
+          <label className="text-sm">
+            Category
+            <input
+              className="ml-2 rounded border border-white/20 bg-transparent p-2"
+              value={category}
+              onChange={(event) => setCategory(event.target.value)}
+            />
+          </label>
+        )}
+        {floorEditable && (
+          <label className="text-sm">
+            Floor (?)
+            <input
+              className="ml-2 rounded border border-white/20 bg-transparent p-2"
+              inputMode="decimal"
+              value={floor}
+              onChange={(event) => setFloor(event.target.value)}
+            />
+          </label>
+        )}
+        <ActionConfirmCard
           state="request"
           icon={<Flag className="size-4" />}
           title={`Confirm ${prettyToolName(toolName)}`}
           subtitle={approval.prompt ?? "This tool changes your records"}
           description="Review this request before allowing the tool to run."
-          details={approvalDetails(args)}
+          details={approvalDetails({
+            ...input,
+            ...(categoryEditable ? { changes: { ...changes, category } } : {}),
+            ...(floorEditable
+              ? { data: { ...data, floor_rupees: floor } }
+              : {}),
+          })}
           busy={answering}
           allowOnceLabel={answering ? "Confirming…" : "Confirm"}
           denyLabel="Cancel"
@@ -272,6 +338,7 @@ export const ChatToolFallback: ToolCallMessagePartComponent = (props) => {
 
   return <ToolFallback {...props} />;
 };
+
 
 const STARTERS = [
   { Icon: ReceiptText, text: "How much did I spend on food last month?" },
@@ -296,9 +363,11 @@ type StarterSuggestionState = {
   prompt: string;
 };
 
-const renderStarter = ({ suggestion }: { suggestion: StarterSuggestionState }) => (
-  <StarterSuggestion suggestion={suggestion} />
-);
+const renderStarter = ({
+  suggestion,
+}: {
+  suggestion: StarterSuggestionState;
+}) => <StarterSuggestion suggestion={suggestion} />;
 
 function StarterSuggestion({
   suggestion,
@@ -340,7 +409,9 @@ export function ChatWelcomeAfter() {
     <AskBelow
       starters={
         <div className="aui-starters">
-          <ThreadPrimitive.Suggestions>{renderStarter}</ThreadPrimitive.Suggestions>
+          <ThreadPrimitive.Suggestions>
+            {renderStarter}
+          </ThreadPrimitive.Suggestions>
         </div>
       }
     />
@@ -354,7 +425,8 @@ export function ChatComposerStatus() {
   const aui = useAui();
   const surface = useContext(ChatSurfaceContext);
   const [addError, setAddError] = useState<string | null>(null);
-  const needsSignIn = APICallError.isInstance(error) && error.statusCode === 401;
+  const needsSignIn =
+    APICallError.isInstance(error) && error.statusCode === 401;
 
   useAuiEvent("composer.attachmentAddError", ({ reason, message }) => {
     setAddError(
@@ -417,7 +489,11 @@ export function ChatComposerStatus() {
                 else retry();
               }}
             >
-              {needsSignIn ? <LogIn aria-hidden="true" /> : <RotateCcw aria-hidden="true" />}
+              {needsSignIn ? (
+                <LogIn aria-hidden="true" />
+              ) : (
+                <RotateCcw aria-hidden="true" />
+              )}
               {needsSignIn ? "Sign in again" : "Retry"}
             </Button>
           )}

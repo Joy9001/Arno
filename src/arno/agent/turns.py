@@ -23,11 +23,9 @@ from pydantic_ai.ui.vercel_ai import VercelAIAdapter
 from pydantic_ai.ui.vercel_ai.response_types import BaseChunk, DataChunk
 
 from arno.agent import capabilities as caps
-from arno.agent.cards import cards_from_messages
 from arno.agent.deps import AgentDeps
 from arno.agent.history import save_records, without_empty_responses
 from arno.agent.models import opencode_session
-from arno.agent.presentation import keep_last_answer
 from arno.db.conn import connect
 
 logger = logging.getLogger("arno.chat")
@@ -164,6 +162,69 @@ def encode_saved_turn(ui_message: dict[str, Any]) -> list[str]:
                 _event_chunk({"type": "text-delta", "id": text_id, "delta": part.get("text", "")})
             )
             chunks.append(_event_chunk({"type": "text-end", "id": text_id}))
+        elif kind == "source-url":
+            chunks.append(
+                _event_chunk({key: value for key, value in part.items() if value is not None})
+            )
+        elif isinstance(kind, str) and kind.startswith("tool-") and part.get("toolCallId"):
+            call_id = part["toolCallId"]
+            chunks.append(
+                _event_chunk(
+                    {
+                        "type": "tool-input-available",
+                        "toolCallId": call_id,
+                        "toolName": kind.removeprefix("tool-"),
+                        "input": part.get("input"),
+                    }
+                )
+            )
+            approval = part.get("approval")
+            if isinstance(approval, dict) and approval.get("id"):
+                chunks.append(
+                    _event_chunk(
+                        {
+                            "type": "tool-approval-request",
+                            "toolCallId": call_id,
+                            "approvalId": approval["id"],
+                        }
+                    )
+                )
+                if isinstance(approval.get("approved"), bool):
+                    chunks.append(
+                        _event_chunk(
+                            {
+                                "type": "tool-approval-response",
+                                "approvalId": approval["id"],
+                                "approved": approval["approved"],
+                                **(
+                                    {"reason": approval["reason"]} if approval.get("reason") else {}
+                                ),
+                            }
+                        )
+                    )
+            state = part.get("state")
+            if state == "output-available":
+                chunks.append(
+                    _event_chunk(
+                        {
+                            "type": "tool-output-available",
+                            "toolCallId": call_id,
+                            "output": part.get("output"),
+                        }
+                    )
+                )
+            elif state == "output-error":
+                chunks.append(
+                    _event_chunk(
+                        {
+                            "type": "tool-output-error",
+                            "toolCallId": call_id,
+                            "errorText": part.get("errorText", "Tool failed."),
+                        }
+                    )
+                )
+            elif state == "output-denied":
+                chunks.append(_event_chunk({"type": "tool-output-denied", "toolCallId": call_id}))
         elif isinstance(kind, str) and kind.startswith("data-"):
             # Older stored parts may carry null optionals; the chunk schema forbids null.
             payload = {
@@ -350,7 +411,7 @@ class TurnManager:
 
     def _extras(self, turn: ChatTurn, messages: list[Any]) -> list[BaseChunk]:
         """The cards, badges, and notes that ride before the stream's finish chunk."""
-        extras: list[BaseChunk] = list(keep_last_answer(cards_from_messages(messages)))
+        extras: list[BaseChunk] = []
         primary = getattr(getattr(self.agent, "model", None), "model_name", None)
         if turn.model_name:
             if turn.model_name != primary:

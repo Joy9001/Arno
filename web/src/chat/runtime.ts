@@ -32,8 +32,33 @@ type TranscribeResult =
   | { status: "transcribed"; attachment_id: string; transcript: string }
   | { status: "failed"; attachment_id: string; note: string; card: Record<string, unknown> };
 
+export type ApprovalEdit = { category?: string; floor_rupees?: number };
+
+export class ApprovalEdits {
+  private readonly edits = new Map<string, Map<string, ApprovalEdit>>();
+
+  set(threadId: string, callId: string, edit: ApprovalEdit) {
+    const thread = this.edits.get(threadId) ?? new Map<string, ApprovalEdit>();
+    thread.set(callId, edit);
+    this.edits.set(threadId, thread);
+  }
+
+  approved(threadId: string, messages: ChatMessage[]): Record<string, ApprovalEdit> {
+    const thread = this.edits.get(threadId);
+    const result: Record<string, ApprovalEdit> = {};
+    if (!thread) return result;
+    for (const message of messages) for (const part of message.parts) {
+      if (!part.type.startsWith("tool-") || !("state" in part) || part.state !== "approval-responded" || !("approval" in part) || !part.approval?.approved || !("toolCallId" in part)) continue;
+      const edit = thread.get(part.toolCallId);
+      if (edit) result[part.toolCallId] = edit;
+    }
+    return result;
+  }
+}
+
 export type ChatTransportConfig = {
   voice: VoiceAttachments;
+  approvalEdits?: ApprovalEdits;
   storage: ResumableClientStorage;
 };
 
@@ -85,6 +110,7 @@ export class ChatTransport extends AssistantChatTransport<ChatMessage> {
             trigger,
             messageId,
             voice_attachment_id: voiceAttachment ?? undefined,
+            approval_edits: config.approvalEdits?.approved(id, messages),
             // The server holds the thread's history; it only needs this turn's message.
             messages: attachmentPrompt(messages.slice(-1)),
           },

@@ -123,7 +123,7 @@ on November 10, 2026.
 | Step | Rules | Diagnostics in `src/` | Unlocks when |
 |---|---|---|---|
 | 1 | `implicit-bool` across `src/arno/engine/` and `src/arno/tools/` | About 240 | Ready; addresses the same ₹0-versus-missing bug class as the money core |
-| 2 | `explicit-any` and `unknown-*` for `agent/write_models.py`, `agent/presentation.py`, and `tools/projection.py` | About 80 | Tool returns move from `dict[str, Any]` to `TypedDict` models |
+| 2 | `explicit-any` and `unknown-*` for `agent/write_models.py` and `tools/projection.py` | Recount before tightening | Tool returns move from `dict[str, Any]` to `TypedDict` models |
 | 3 | `unnecessary-type-conversion` | About 70 | Database rows are typed, making conversions either required or provably redundant |
 | 4 | `explicit-any` across `src/` | About 1,200 | Database rows become typed records instead of `dict[str, Any]` |
 

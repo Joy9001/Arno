@@ -1,7 +1,6 @@
 import { useState } from "react";
-import { motion, useReducedMotion } from "motion/react";
-import { Download, FileSearch, SlidersHorizontal } from "lucide-react";
-import { openPlanner } from "./evidence";
+import { useReducedMotion } from "motion/react";
+import { Download } from "lucide-react";
 import {
   Area,
   CartesianGrid,
@@ -16,7 +15,6 @@ import {
 import { TOOLTIP_PROPS } from "./chartTheme";
 import { displayText } from "./chat/display-text";
 import { formatPaise } from "./format";
-import { Orb } from "./Orb";
 import type { ProjectionReceipt } from "./projectionReceipt";
 import {
   baselineLowAmount,
@@ -24,9 +22,7 @@ import {
   dataQualityNotes,
   lowAmount,
   OBLIGATION_WARNING,
-  paymentMethodLabel,
   projectionReadiness,
-  safeToSpendAmount,
   workbookUrl,
 } from "./projectionData";
 import { SourceDetail } from "./SourceDetail";
@@ -132,6 +128,7 @@ export type ProjectionDataQuality = {
 /** The arguments one projection was asked with, echoed by the tool for the workbook link. */
 export type ProjectionRequest = {
   horizon_days?: number | null;
+  cut_percent?: number;
   hypothetical?: {
     amount_paise?: number;
     date?: string;
@@ -507,184 +504,5 @@ export function ProjectionBody({ payload }: { payload: ProjectionPayload }) {
       <DataQuality payload={payload} />
       <Citations payload={payload} />
     </>
-  );
-}
-
-export function ProjectionCard({
-  payload,
-  onEvidence,
-}: {
-  payload: ProjectionReceipt;
-  onEvidence?: (payload: ProjectionPayload) => void;
-}) {
-  const readiness = projectionReadiness(payload);
-  const gated = !readiness.ready;
-  const title = payload.title ? String(payload.title) : "Projection";
-  const median = lowAmount(payload);
-  const safeAmount = safeToSpendAmount(payload);
-  const scenario = payload.scenario;
-  const baselineMedian = baselineLowAmount(payload);
-  const baselineSafe = baselineSafeToSpendAmount(payload);
-  const floorSet = payload.floor_set ?? (payload.floor?.paise ?? 0) > 0;
-  const floorText = payload.floor?.text ?? null;
-  const verdict = payload.verdict ? VERDICT_LABEL[payload.verdict] : null;
-  const floorBadge = floorSet
-    ? `${percent(payload.floor_probability)} above floor`
-    : "No floor set";
-  const badgeTone =
-    gated || !floorSet ? "muted" : payload.floor_probability >= payload.floor_threshold ? "good" : "danger";
-  const purchase = payload.hypothetical as
-    | { amount_paise?: number; date?: string; method?: string; emi_months?: number }
-    | undefined;
-  const [open, setOpen] = useState(false);
-  const reducedMotion = useReducedMotion();
-
-  return (
-    <motion.figure
-      className="chat-card receipt"
-      data-testid="projection-receipt"
-      initial={reducedMotion ? false : { opacity: 0, y: 8, scale: 0.995 }}
-      animate={{ opacity: 1, y: 0, scale: 1 }}
-      transition={{ duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
-    >
-      <div className="receipt-top">
-        <div className="receipt-title">
-          <Orb size={20} />
-          <strong>{gated ? title : (verdict?.text ?? title)}</strong>
-        </div>
-        <span className={`badge ${badgeTone}`}>
-          {gated ? "Balance unknown" : floorBadge}
-        </span>
-      </div>
-
-      {gated ? (
-        <p className="receipt-note">{readiness.message}</p>
-      ) : (
-        payload.verdict_reason && <p className="receipt-note">{payload.verdict_reason}</p>
-      )}
-      {!gated && scenario && (scenario.holds !== undefined || scenario.reason) && (
-        <p className="receipt-note">
-          {scenario.holds !== undefined ? (scenario.holds ? "Plan holds" : "Plan falls short") : ""}
-          {scenario.holds !== undefined && scenario.reason ? " · " : ""}
-          {scenario.reason ?? ""}
-        </p>
-      )}
-      {!gated && scenario && (
-        <p className="receipt-note">{scenarioRunwayText(payload, scenario)}</p>
-      )}
-      {!gated && <SafeToSpend payload={payload} className="receipt-note" />}
-      {purchase?.amount_paise !== undefined && (
-        <p className="receipt-note">
-          Purchase of {formatPaise(purchase.amount_paise)}
-          {purchase.date ? ` on ${dateLabel(purchase.date)}` : ""}
-          {purchase.method ? ` · ${paymentMethodLabel(purchase.method)}` : ""}
-          {purchase.emi_months ? ` over ${purchase.emi_months} months` : ""}.
-        </p>
-      )}
-      {scenario?.changes.length ? (
-        <div className="receipt-note">
-          <h4>Assumed changes</h4>
-          <ul className="projection-list">
-            {scenario.changes.map((change, index) => (
-              <li key={`${change.kind}-${index}`}>{displayText(change.label)}</li>
-            ))}
-          </ul>
-        </div>
-      ) : null}
-
-      {!gated && (
-        <dl className="receipt-metrics">
-          <div>
-            <dt>Chance above floor</dt>
-            <dd>{floorSet ? percent(payload.floor_probability) : "—"}</dd>
-            <span>
-              {percent(payload.floor_threshold)} threshold
-              {scenario && floorSet
-                ? ` · before ${percent(scenario.baseline.floor_probability)}`
-                : ""}
-            </span>
-          </div>
-          <div>
-            <dt>Lowest median balance</dt>
-            <dd>{median === null ? "—" : formatPaise(median)}</dd>
-            <span>
-              {dateLabel(payload.median_low.date)}
-              {baselineMedian !== null ? ` · before ${formatPaise(baselineMedian)}` : ""}
-            </span>
-          </div>
-          {scenario && (
-            <>
-              <div>
-                <dt>Before changes</dt>
-                <dd>{floorSet ? percent(scenario.baseline.floor_probability) : "—"}</dd>
-                <span>
-                  {scenario.baseline.first_floor_crossing
-                    ? `crossing ${dateLabel(scenario.baseline.first_floor_crossing)}`
-                    : "no crossing within horizon"}
-                </span>
-              </div>
-              <div>
-                <dt>Safe to spend</dt>
-                <dd>{safeAmount !== null ? formatPaise(safeAmount) : "—"}</dd>
-                <span>
-                  {baselineSafe !== null
-                    ? `before ${formatPaise(baselineSafe)}`
-                    : "baseline unavailable"}
-                </span>
-              </div>
-            </>
-          )}
-        </dl>
-      )}
-
-      <div className="receipt-foot">
-        <span className="fine">
-          {payload.horizon_days}-day projection
-          {!gated && floorSet && floorText ? ` · floor ${floorText}` : ""}
-        </span>
-        <span className="receipt-actions">
-          <WorkbookLink request={payload.request} />
-          {onEvidence && (
-            <>
-              {!gated && (
-                <button type="button" className="ghost small" onClick={() => openPlanner(payload)}>
-                  <SlidersHorizontal size={14} strokeWidth={2} aria-hidden="true" />
-                  Planner
-                </button>
-              )}
-              <button
-                type="button"
-                className="ghost small"
-                onClick={() => onEvidence(payload)}
-              >
-                <FileSearch size={14} strokeWidth={1.8} aria-hidden="true" />
-                Sources and assumptions
-              </button>
-            </>
-          )}
-        </span>
-      </div>
-
-      {!onEvidence && (
-        <details
-          className="receipt-more"
-          open={open}
-          onToggle={(event) => setOpen(event.currentTarget.open)}
-        >
-          <summary>{gated ? "Data quality and sources" : "Open the curve, tradeoffs, and sources"}</summary>
-          {open && (
-            <>
-              {!gated && <ProjectionChart payload={payload} />}
-              {!gated && payload.tradeoffs?.length ? (
-                <Tradeoffs tradeoffs={payload.tradeoffs} />
-              ) : null}
-              {!gated && payload.goals?.length ? <Goals goals={payload.goals} /> : null}
-              {(gated || safeAmount === null) && <DataQuality payload={payload} />}
-              <Citations payload={payload} />
-            </>
-          )}
-        </details>
-      )}
-    </motion.figure>
   );
 }

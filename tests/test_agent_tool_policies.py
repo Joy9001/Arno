@@ -20,7 +20,6 @@ from pydantic_ai.models.test import TestModel
 
 from arno.agent.deps import AgentDeps
 from arno.agent.history import save_records
-from arno.agent.presentation import PresentationError, keep_last_answer
 from arno.agent.toolset import build_read_toolset
 from arno.agent.turns import (
     _this_turn,
@@ -293,6 +292,66 @@ async def test_setup_asks_first_and_the_server_runs_the_call_it_stored(session_c
     assert await demo_ledger.fetchval("SELECT floor_paise FROM settings WHERE id = 1") == 3_100_000
 
 
+async def test_edited_approval_uses_only_the_stored_action(session_client, demo_ledger):
+    thread_id = "thread-gate-edited"
+    setup = {"entity": "settings", "action": "update", "data": {"floor_rupees": 31_000}}
+
+    def script(messages: list[Any], info: AgentInfo) -> ModelResponse:
+        if not _tool_answered(messages, "update_setup"):
+            return ModelResponse(parts=[ToolCallPart("update_setup", setup, "call_edit")])
+        return ModelResponse(parts=[TextPart("Saved.")])
+
+    first = {
+        "id": thread_id,
+        "trigger": "submit-message",
+        "messages": [_user("edit-user", "change floor")],
+    }
+    with session_client.app.state.agent.override(model=streaming_model(script)):
+        assert session_client.post("/api/chat", json=first).status_code == 200
+        part = _card_approval_part("call_edit", approved=True, tool="update_setup", args={})
+        body = {
+            "id": thread_id,
+            "trigger": "submit-message",
+            "messages": [*first["messages"], {"id": "reply", "role": "assistant", "parts": [part]}],
+        }
+        before = await demo_ledger.fetchval("SELECT floor_paise FROM settings WHERE id = 1")
+        for edits in (
+            {},
+            {"call_edit": {"floor_rupees": True}},
+            {"call_edit": {"floor_rupees": 1, "entity": "account"}},
+            {"other": {"floor_rupees": 1}},
+        ):
+            refused = session_client.post("/api/chat", json={**body, "approval_edits": edits})
+            assert refused.status_code == 422, refused.text
+            assert (
+                await demo_ledger.fetchval("SELECT floor_paise FROM settings WHERE id = 1")
+                == before
+            )
+        denied = {**part, "approval": {"id": "call_edit", "approved": False}}
+        denied_body = {
+            **body,
+            "messages": [
+                *first["messages"],
+                {"id": "reply", "role": "assistant", "parts": [denied]},
+            ],
+            "approval_edits": {"call_edit": {"floor_rupees": 42000}},
+        }
+        assert session_client.post("/api/chat", json=denied_body).status_code == 422
+        accepted = session_client.post(
+            "/api/chat", json={**body, "approval_edits": {"call_edit": {"floor_rupees": 42_000}}}
+        )
+        assert accepted.status_code == 200, accepted.text
+        assert "Saved." in accepted.text
+        assert (
+            session_client.post(
+                "/api/chat",
+                json={**body, "approval_edits": {"call_edit": {"floor_rupees": 42_000}}},
+            ).status_code
+            == 200
+        )
+    assert await demo_ledger.fetchval("SELECT floor_paise FROM settings WHERE id = 1") == 4_200_000
+
+
 async def test_a_duplicate_approval_post_replays_and_never_writes_twice(
     session_client, demo_ledger
 ):
@@ -378,7 +437,6 @@ async def test_a_denied_approval_writes_nothing_and_the_thread_keeps_working(
 async def test_a_second_turn_on_one_thread_is_refused():
     from types import SimpleNamespace
 
-    import pytest
     from pydantic_ai.ui.vercel_ai import VercelAIAdapter
 
     from arno.agent.deps import AgentDeps
@@ -513,28 +571,6 @@ def test_the_eval_test_template_is_isolated_per_process():
 
 
 # --- One composed answer per reply -------------------------------------------------------------
-
-
-def test_a_second_composed_answer_replaces_the_first():
-    cards = [
-        {"type": "data-card", "data": {"card": "spending", "total": 1}},
-        {"type": "data-card", "data": {"card": "answer", "results": ["first"]}},
-        {"type": "data-card", "data": {"card": "answer", "results": ["second"]}},
-    ]
-    kept = keep_last_answer(cards)
-    assert [card["data"].get("results") for card in kept if card["data"]["card"] == "answer"] == [
-        ["second"]
-    ]
-    assert any(card["data"]["card"] == "spending" for card in kept)
-
-
-def test_the_answer_tree_error_shows_one_valid_answer(demo_ledger):
-    """e6 F8: the error names a shape the caller can copy."""
-    from arno.agent.presentation import ResultRegistry, build_answer
-
-    with pytest.raises(PresentationError) as excinfo:
-        build_answer(ResultRegistry(), {"_type": "Stack", "children": [{"result_id": "res_1"}]})
-    assert '"result_id": "res_1"' in str(excinfo.value)
 
 
 # --- A scheduled answer carries the number note -----------------------------------------------
@@ -686,11 +722,8 @@ def _return(name: str, call_id: str, content: Any) -> Any:
 def _run_ctx(conn: Any) -> Any:
     from types import SimpleNamespace
 
-    from arno.agent.presentation import ResultRegistry
-
     return SimpleNamespace(
         deps=SimpleNamespace(
-            presentation=ResultRegistry(),
             conversation_id="cnv_chart",
             flagged=False,
         )
@@ -929,23 +962,6 @@ async def test_the_saved_reply_and_replay_separate_text_parts(demo_ledger):
 
 
 # --- 7. One card per answer, not one per calculation ------------------------------------------
-
-
-def test_a_script_that_read_the_same_data_twice_shows_one_card():
-    first = {
-        "type": "data-card",
-        "data": {"card": "result", "result_id": "res_1", "snapshot": {"kind": "spending"}},
-    }
-    second = {
-        "type": "data-card",
-        "data": {"card": "result", "result_id": "res_2", "snapshot": {"kind": "spending"}},
-    }
-    other = {
-        "type": "data-card",
-        "data": {"card": "result", "result_id": "res_3", "snapshot": {"kind": "context"}},
-    }
-    kept = keep_last_answer([first, second, other])
-    assert [card["data"]["snapshot"]["kind"] for card in kept] == ["spending", "context"]
 
 
 async def test_the_tool_descriptions_name_their_shapes():

@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import * as Popover from "@radix-ui/react-popover";
+import { Popover } from "radix-ui";
 import {
   AssistantRuntimeProvider,
   AuiConfig,
@@ -29,9 +29,7 @@ import {
 import { Flag, History, Plus, Scan, Square, X } from "lucide-react";
 import { api, errorMessage } from "../api";
 import { Typing } from "../Loading";
-import type { ProjectionPayload } from "../projection";
 import { takeSharedImage } from "../share";
-import { ConversationSkeleton } from "../Skeleton";
 import { Button } from "@/components/ui/button";
 import { ComposerAddAttachment } from "@/components/attachment.aui";
 import { Thread, type ThreadComponents } from "@/components/thread.aui";
@@ -51,6 +49,7 @@ import {
 } from "./parts";
 import { ChatSurfaceContext, type ChatSurfaceState } from "./surface";
 import {
+  ApprovalEdits,
   ChatTransport,
   CHAT_JOIN_STRATEGY,
   ServerDictationAdapter,
@@ -63,9 +62,7 @@ import {
 import { photoAttachmentAdapter } from "./photo-attachment";
 import { statementAttachmentAdapter } from "./statement-attachment";
 import { StreamCheckpoints, createThreadStreamStorage } from "./streams";
-import { FOLLOW_REPLY_EVENT } from "../run/runData";
 import { CHAT_TOOLKIT } from "./tools";
-import type { ThreadList } from "./types";
 
 const attachmentAdapter = new CompositeAttachmentAdapter([
   statementAttachmentAdapter,
@@ -348,68 +345,27 @@ type AssistantProps = {
   onAttachmentsConsumed?: () => void;
   onClose?: () => void;
   onActivity?: () => void;
-  onEvidence?: (payload: ProjectionPayload) => void;
   /** Each increment opens a fresh conversation (the Ask home). */
   newChatSignal?: number;
   /** Show the conversation list beside the thread instead of behind History. */
   listInline?: boolean;
   /** A reply started; Ask hands the conversation over to Chats. */
   onConversationStarted?: () => void;
-  /** The open conversation was left (New, or another thread); panels about it close. */
-  onConversationLeft?: () => void;
 };
 
 export function Assistant(props: AssistantProps) {
   const [activeId, setActiveId] = useState<string | undefined>(
     () => props.focusThreadId ?? sessionStorage.getItem(THREAD_STORAGE) ?? undefined,
   );
-  // A new chat getting its first id is not leaving one, so only a known id that changes counts.
-  const previousId = useRef(activeId);
-  const { onConversationLeft } = props;
-  useEffect(() => {
-    if (previousId.current !== undefined && previousId.current !== activeId) {
-      onConversationLeft?.();
-    }
-    previousId.current = activeId;
-  }, [activeId, onConversationLeft]);
-  const [boot, setBoot] = useState(() => Boolean(props.focusThreadId));
-  const [bootError, setBootError] = useState<string | null>(null);
   const [focusMessage, setFocusMessage] = useState<{ id: string; token: number } | null>(null);
   const focusToken = useRef(0);
-  const bootStarted = useRef(false);
-  const focusSeen = useRef(false);
 
   const { focusThreadId, focusMessageId, onFocusHandled } = props;
-
-  useEffect(() => {
-    if (bootStarted.current || focusThreadId) return;
-    bootStarted.current = true;
-    const saved = sessionStorage.getItem(THREAD_STORAGE);
-    api<ThreadList>("/api/threads")
-      .then((list) => {
-        const wanted = list.threads.some((thread) => thread.id === saved)
-          ? saved ?? list.threads[0]?.id
-          : list.threads[0]?.id;
-        if (focusSeen.current) return;
-        if (wanted) setActiveId(wanted);
-        setBoot(true);
-      })
-      .catch((caught: unknown) => {
-        if (focusSeen.current) return;
-        setBootError(errorMessage(caught));
-        if (saved) setActiveId(saved);
-        setBoot(true);
-      });
-    // Focus is checked once at mount; later deep links arrive through the prop.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     if (!focusThreadId) return;
-    focusSeen.current = true;
     setActiveId(focusThreadId);
-    setBoot(true);
     setFocusMessage(
       focusMessageId ? { id: focusMessageId, token: ++focusToken.current } : null,
     );
@@ -418,35 +374,26 @@ export function Assistant(props: AssistantProps) {
   }, [focusThreadId]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
-  if (!boot) {
-    return (
-      <section className="assistant aui-chat dark">
-        <div className="chat-loading">
-          <ConversationSkeleton />
-        </div>
-      </section>
-    );
-  }
-
   return (
     <AssistantChat
       {...props}
       activeId={activeId}
       onActiveId={setActiveId}
       focusMessage={focusMessage}
-      bootError={bootError}
     />
   );
 }
 
 function useArnoThreadRuntime({
   voice,
+  approvalEdits,
   checkpoints,
   setCapture,
   onCaptureRetry,
   onFinish,
 }: {
   voice: VoiceAttachments;
+  approvalEdits: ApprovalEdits;
   checkpoints: StreamCheckpoints;
   setCapture: (threadId: string, value: ChatSurfaceState["capture"]) => void;
   onCaptureRetry: ReportCapture;
@@ -455,6 +402,10 @@ function useArnoThreadRuntime({
   const aui = useAui();
   const threadId = useAuiState((state) => state.threadListItem.id);
   const remoteId = useAuiState((state) => state.threadListItem.remoteId);
+  const storage = useMemo(
+    () => createThreadStreamStorage(() => aui.threadListItem.getState()),
+    [aui],
+  );
   const history = useMemo(
     () =>
       createHistoryAdapter(aui, (running) => {
@@ -463,24 +414,18 @@ function useArnoThreadRuntime({
         if (running) {
           // A reply the server started (an inbox follow-up, a task report) is still
           // streaming when the thread opens: follow it instead of showing a silent thread.
-          window.dispatchEvent(new CustomEvent(FOLLOW_REPLY_EVENT, { detail: { threadId: id } }));
+          if (storage.getStreamId(id) === null) storage.setStreamId(id, id);
           return;
         }
         // A finished turn is already saved; keeping its checkpoint would offer
         // a Resume that can only replay the transcript.
         checkpoints.clear(id);
       }),
-    [aui, checkpoints],
-  );
-  // One storage per thread runtime; its key follows the thread's identity as
-  // the local id is replaced by the server id.
-  const storage = useMemo(
-    () => createThreadStreamStorage(() => aui.threadListItem.getState()),
-    [aui],
+    [aui, checkpoints, storage],
   );
   const transport = useMemo(
-    () => new ChatTransport({ voice, storage }),
-    [storage, voice],
+    () => new ChatTransport({ voice, storage, approvalEdits }),
+    [storage, voice, approvalEdits],
   );
 
   useEffect(() => {
@@ -491,20 +436,6 @@ function useArnoThreadRuntime({
     checkpoints.set(id, storage);
     return () => checkpoints.release(id, storage);
   }, [checkpoints, storage, threadId, remoteId]);
-
-  // A reply the server started (a task report arrived while no one was chatting) has no
-  // checkpoint here. Giving it one is the library's idle-follower path: the runtime attaches
-  // to `GET /chat/{id}/stream` and replays the reply into this thread.
-  useEffect(() => {
-    const follow = (event: Event) => {
-      const target = (event as CustomEvent<{ threadId?: string }>).detail?.threadId;
-      if (!target || aui.threadListItem.getState().remoteId !== target) return;
-      if (storage.getStreamId(target) !== null) return;
-      storage.setStreamId(target, target);
-    };
-    window.addEventListener(FOLLOW_REPLY_EVENT, follow);
-    return () => window.removeEventListener(FOLLOW_REPLY_EVENT, follow);
-  }, [aui, storage]);
 
   const resolveThreadId = useCallback(async () => {
     const item = aui.threadListItem;
@@ -562,14 +493,12 @@ type AssistantChatProps = AssistantProps & {
   activeId: string | undefined;
   onActiveId: (id: string | undefined) => void;
   focusMessage: { id: string; token: number } | null;
-  bootError: string | null;
 };
 
 function AssistantChat({
   activeId,
   onActiveId,
   focusMessage,
-  bootError,
   seed,
   focusSignal,
   onSeedConsumed,
@@ -577,13 +506,13 @@ function AssistantChat({
   onAttachmentsConsumed,
   onClose,
   onActivity,
-  onEvidence,
   newChatSignal,
   listInline,
   onConversationStarted,
 }: AssistantChatProps) {
   const queryRef = useRef("");
   const voice = useMemo(() => new VoiceAttachments(), []);
+  const approvalEdits = useMemo(() => new ApprovalEdits(), []);
   const checkpoints = useMemo(() => new StreamCheckpoints(), []);
   const changedRef = useRef<() => void>(() => {});
   const captureRetryRef = useRef<ReportCapture | null>(null);
@@ -631,6 +560,7 @@ function AssistantChat({
     // eslint-disable-next-line react-hooks/rules-of-hooks
     useArnoThreadRuntime({
       voice,
+      approvalEdits,
       checkpoints,
       setCapture,
       onCaptureRetry,
@@ -654,6 +584,7 @@ function AssistantChat({
       <ChatShell
         activeId={activeId}
         voice={voice}
+        approvalEdits={approvalEdits}
         checkpoints={checkpoints}
         queryRef={queryRef}
         changedRef={changedRef}
@@ -663,7 +594,6 @@ function AssistantChat({
         captures={captures}
         surfaceErrors={surfaceErrors}
         focusMessage={focusMessage}
-        bootError={bootError}
         seed={seed}
         focusSignal={focusSignal}
         onSeedConsumed={onSeedConsumed}
@@ -671,7 +601,6 @@ function AssistantChat({
         onAttachmentsConsumed={onAttachmentsConsumed}
         onClose={onClose}
         onActivity={onActivity}
-        onEvidence={onEvidence}
         newChatSignal={newChatSignal}
         listInline={listInline}
         onConversationStarted={onConversationStarted}
@@ -687,6 +616,7 @@ function AssistantChat({
 type ChatShellProps = {
   activeId: string | undefined;
   voice: VoiceAttachments;
+  approvalEdits: ApprovalEdits;
   checkpoints: StreamCheckpoints;
   queryRef: { current: string };
   changedRef: { current: () => void };
@@ -696,7 +626,6 @@ type ChatShellProps = {
   captures: Record<string, ChatSurfaceState["capture"] | undefined>;
   surfaceErrors: Record<string, string | undefined>;
   focusMessage: { id: string; token: number } | null;
-  bootError: string | null;
   seed?: { id: number; text: string; send?: boolean } | null;
   focusSignal?: number;
   onSeedConsumed?: () => void;
@@ -704,7 +633,6 @@ type ChatShellProps = {
   onAttachmentsConsumed?: () => void;
   onClose?: () => void;
   onActivity?: () => void;
-  onEvidence?: (payload: ProjectionPayload) => void;
   newChatSignal?: number;
   listInline?: boolean;
   onConversationStarted?: () => void;
@@ -714,6 +642,7 @@ type ChatShellProps = {
 function ChatShell({
   activeId,
   voice,
+  approvalEdits,
   checkpoints,
   queryRef,
   changedRef,
@@ -723,7 +652,6 @@ function ChatShell({
   captures,
   surfaceErrors,
   focusMessage,
-  bootError,
   seed,
   focusSignal,
   onSeedConsumed,
@@ -731,7 +659,6 @@ function ChatShell({
   onAttachmentsConsumed,
   onClose,
   onActivity,
-  onEvidence,
   newChatSignal,
   listInline = false,
   onConversationStarted,
@@ -1102,10 +1029,10 @@ function ChatShell({
       capture: surfaceError ? { kind: "error", message: surfaceError } : capture,
       onRetryCapture: (kind, attachmentId, messageId) =>
         void retryCapture(kind, attachmentId, messageId),
-      onEvidence: onEvidence,
       onStop: (originId) => void onStop(originId),
+      onApprovalEdit: (callId, edit) => { if (threadId) approvalEdits.set(threadId, callId, edit); },
     }),
-    [capture, onEvidence, onStop, retryCapture, surfaceError],
+    [capture, onStop, retryCapture, surfaceError, threadId, approvalEdits],
   );
 
   const switchDetail = switchError ? errorMessage(switchError.error) : "";
@@ -1194,12 +1121,6 @@ function ChatShell({
           </Popover.Content>
         </Popover.Portal>
       </Popover.Root>
-
-      {bootError && (
-        <p className="error aui-boot-error" role="alert">
-          {bootError}
-        </p>
-      )}
 
       <ChatSurfaceContext.Provider value={surface}>
         <div className="aui-thread-shell">

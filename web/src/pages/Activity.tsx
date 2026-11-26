@@ -1,4 +1,4 @@
-import * as Tabs from "@radix-ui/react-tabs";
+import { Tabs } from "radix-ui";
 import { ImportsPanel } from "../panels/Imports";
 import { InboxPanel } from "../panels/Inbox";
 import { LedgerPanel } from "../panels/Ledger";

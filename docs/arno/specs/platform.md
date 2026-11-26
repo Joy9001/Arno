@@ -56,7 +56,7 @@ The following table summarizes every API router and endpoint group mounted in
 | Chat and threads | `POST /api/chat` (`VercelAIAdapter` with `sdk_version=7`, `manage_message_history="server"`, `allowed_file_url_schemes=frozenset()`), `GET /api/chat/{thread_id}/stream` (reconnect to detached turn), `POST /api/chat/{thread_id}/stop`, and thread list, read, rename, search, and reply flagging |
 | Home | `GET /api/home` composes account summary, 90-day default projection (configurable `horizon_days`), inbox preview, and recent activity |
 | Ledger | Accounts (`GET/POST/PATCH/DELETE /api/accounts`, `POST /api/accounts/{id}/statement-balance`), movements (`GET/POST /api/movements`, `GET /api/movements/{id}`, `POST /api/movements/{id}/correct`, `GET /api/ledger/span`), categories and rules (`/api/categories`, `/api/category-rules`), uncategorized queue (`GET /api/uncategorized`, `POST /api/uncategorized/answer`), schedules and payment evidence (`/api/schedules`, `GET /api/schedules/upcoming`, `GET /api/schedules/{id}/occurrences/{date}`, `POST/DELETE .../payments`), goals (`/api/goals`), people and payees (`/api/people`, `/api/payees`), settings and memory (`GET/PATCH /api/settings`, `PATCH /api/preferences/{id}/content`), and undo (`POST /api/undo`, `POST /api/undo/{undo_id}`) |
-| Projection | `GET /api/projection` and `GET /api/projection/workbook` (`.xlsx`, calculation version `2`): `horizon_days` 1–3,650, optional what-if `changes`, and hypothetical purchase terms (`amount_paise` and `emi_fee_paise` capped at `MAX_PAISE`, `emi_months` 2–48) |
+| Projection | `GET /api/projection` and `GET /api/projection/workbook` (`.xlsx`, calculation version `2`) accept `horizon_days` from 1–3,650, `cut_percent` from 0–50 for reducible everyday spending, optional what-if `changes`, and hypothetical purchase terms (`amount_paise` and `emi_fee_paise` capped at `MAX_PAISE`, `emi_months` 2–48) |
 | Attachments and imports | `POST /api/attachments` (accepts `purpose="statement"` or `"photo"`, up to 25 MB), `DELETE /api/attachments/{id}` (purges stored statement bytes), `GET /api/attachments/{id}` (serves photos and audio with `Cache-Control: private, no-store`), `GET /api/imports`, `GET /api/import-history` (keyset paginated), `GET /api/imports/{id}`, `PATCH /api/imports/{id}/lines/{line_id}`, `POST /api/imports/{id}/password`, `POST /api/imports/{id}/opening`, `POST /api/imports/{id}/commit`, `POST /api/imports/{id}/reject`, and `POST /api/imports/{id}/undo` |
 | Capture | `POST /api/transcribe` and `POST /api/transcribe/{attachment_id}` (audio upload and retry, up to 25 MB). Photos attach to chat turns and reach the main agent natively |
 | Recaps | `GET /api/recaps`, `GET /api/recaps/unseen`, `GET /api/recaps/{period_id}`, `GET /api/recaps/{period_id}/rows`, and `POST /api/recaps/{period_id}/seen` |
@@ -72,11 +72,9 @@ Projection, affordability, and `.xlsx` workbook builds run off the event loop vi
 `src/arno/tools/` functions and write the same audit log, so any edit is undoable from either
 surface.
 
-The web app consumes these routes using React, Vite, `@assistant-ui/react`, `@assistant-ui/ai-sdk`,
-`@assistant-ui/react-streamdown`, `@radix-ui/themes`, `motion`, and `zustand`
-([`web-interface.md#frontend-stack`](web-interface.md#frontend-stack)). Under **Settings →
-Background work → Models and diagnostics**, `RuntimeInfo.tsx` displays each role's configured model
-and host and renders an **Open Phoenix** button when `ARNO_PHOENIX_UI_URL` is configured.
+The web app consumes these routes with the [frontend stack](web-interface.md#frontend-stack).
+**Settings → Diagnostics** shows each role's configured model and host, with an **Open Phoenix**
+link when `ARNO_PHOENIX_UI_URL` is configured.
 
 **Deployment and backups summary:** Arno ships as a Docker Compose stack (`api`, `db`, plus
 optional `local-llm` and `obs` profiles; `obs` is stock Phoenix) published only on loopback and

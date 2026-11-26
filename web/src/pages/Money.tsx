@@ -1,4 +1,4 @@
-import * as Tabs from "@radix-ui/react-tabs";
+import { Tabs } from "radix-ui";
 import { useEffect, useRef } from "react";
 import { AccountsPanel } from "../panels/Accounts";
 import { GoalsPanel } from "../panels/Goals";

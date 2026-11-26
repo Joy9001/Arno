@@ -1,6 +1,4 @@
 import { Fragment, useCallback, useEffect, useState } from "react";
-import * as Dialog from "@radix-ui/react-dialog";
-import { Theme } from "@radix-ui/themes";
 import {
   AlertCircle,
   CirclePlay,
@@ -11,22 +9,16 @@ import {
   Wallet,
   type LucideIcon,
 } from "lucide-react";
-import { AnimatePresence, motion } from "motion/react";
 import { api, errorMessage } from "./api";
 import { ASK_EVENT, ATTACH_EVENT, type AskDetail } from "./ask";
 import { logout, type User } from "./auth";
 import { Assistant } from "./chat/Chat";
-import { EvidencePanel } from "./EvidencePanel";
-import { EVIDENCE_EVENT, PLANNER_EVENT, RUN_EVENT } from "./evidence";
-import { RunPage, RunPanel } from "./run/Run";
 import { NAVIGATE_EVENT, UserContext, type PageId } from "./nav";
 import { Orb } from "./Orb";
 import { ActivityPage, type ActivityTab } from "./pages/Activity";
 import { MoneyPage, type MoneyTab } from "./pages/Money";
-import { PlannerPanel } from "./panels/Planner";
 import { RecapsPage } from "./pages/Recaps";
 import { SettingsPanel } from "./panels/Settings";
-import type { ProjectionPayload } from "./projection";
 import type { NotificationList, RecapList } from "./types";
 
 const NAV: Array<{ id: PageId; label: string; title: string; Icon: LucideIcon }> = [
@@ -77,7 +69,6 @@ function readHash(): {
   thread: string | null;
   message: string | null;
   importId: string | null;
-  runId: string | null;
 } {
   const [rawPage, rawTab, rawMessage] = window.location.hash.slice(1).split("/");
   const legacyHome = rawPage === "home";
@@ -102,14 +93,8 @@ function readHash(): {
     THREAD_ID.test(rawMessage)
       ? rawMessage
       : null;
-  const runId =
-    page === "activity" && rawTab === "run" && rawMessage && TASK_ID.test(rawMessage)
-      ? rawMessage
-      : null;
-  return { page, money, activity, thread, message, importId, runId };
+  return { page, money, activity, thread, message, importId };
 }
-
-const TASK_ID = /^[0-9a-f]{32}$/;
 
 function openThreadDetail(detail: OpenThreadDetail): {
   thread: string;
@@ -145,24 +130,10 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
   const [seed, setSeed] = useState<{ id: number; text: string; send?: boolean } | null>(null);
   const [attachments, setAttachments] = useState<{ id: number; files: File[] } | null>(null);
   const [focusSignal, setFocusSignal] = useState(0);
-  const [evidence, setEvidence] = useState<ProjectionPayload | null>(null);
-  const [planner, setPlanner] = useState<ProjectionPayload | null>(null);
-  const [runTask, setRunTask] = useState<string | null>(null);
-  /** The canvas is about the open conversation, so leaving it closes the canvas. */
-  const closeCanvas = useCallback(() => {
-    setEvidence(null);
-    setPlanner(null);
-    setRunTask(null);
-  }, []);
-  const [runPage, setRunPage] = useState<string | null>(initial.runId);
   const compact = useCompactViewport();
   const talking = page === "ask" || page === "chats";
 
   const go = useCallback((next: PageId, sub?: string) => {
-    setEvidence(null);
-    setPlanner(null);
-    setRunTask(null);
-    setRunPage(next === "activity" && sub?.startsWith("run/") ? sub.slice(4) : null);
     setPage(next);
     if (!(next === "activity" && sub?.startsWith("imports/"))) {
       setFocusImportId(null);
@@ -180,9 +151,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
       setMoneyTab(next.money);
       setActivityTab(next.activity);
       setFocusImportId(next.importId);
-      setRunPage(next.runId);
-      setEvidence(null);
-      if (next.thread) {
+        if (next.thread) {
         void threadExists(next.thread).then((exists) => {
           setFocusThreadId(exists ? next.thread : null);
           setFocusMessageId(exists ? next.message : null);
@@ -274,8 +243,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
       const ask = typeof detail === "string" ? { text: detail, send: false } : detail;
       setSeed(ask.text ? { id: Date.now(), ...ask } : null);
       setFocusSignal((value) => value + 1);
-      setEvidence(null);
-      if (page !== "ask" && page !== "chats") go("chats");
+        if (page !== "ask" && page !== "chats") go("chats");
     };
     window.addEventListener(ASK_EVENT, onAsk);
     return () => window.removeEventListener(ASK_EVENT, onAsk);
@@ -287,44 +255,11 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
       if (!files.length) return;
       setAttachments({ id: Date.now(), files });
       setFocusSignal((value) => value + 1);
-      setEvidence(null);
-      if (page !== "ask" && page !== "chats") go("chats");
+        if (page !== "ask" && page !== "chats") go("chats");
     };
     window.addEventListener(ATTACH_EVENT, onAttach);
     return () => window.removeEventListener(ATTACH_EVENT, onAttach);
   }, [page, go]);
-
-  useEffect(() => {
-    const onEvidence = (event: Event) => {
-      const payload = (event as CustomEvent<ProjectionPayload>).detail;
-      if (!payload || !Array.isArray(payload.curve)) return;
-      setPlanner(null);
-      setRunTask(null);
-      setEvidence(payload);
-    };
-    const onPlanner = (event: Event) => {
-      const payload = (event as CustomEvent<ProjectionPayload>).detail;
-      if (!payload || !Array.isArray(payload.curve)) return;
-      setEvidence(null);
-      setRunTask(null);
-      setPlanner(payload);
-    };
-    const onRun = (event: Event) => {
-      const taskId = (event as CustomEvent<string>).detail;
-      if (!TASK_ID.test(taskId ?? "")) return;
-      setEvidence(null);
-      setPlanner(null);
-      setRunTask(taskId);
-    };
-    window.addEventListener(EVIDENCE_EVENT, onEvidence);
-    window.addEventListener(PLANNER_EVENT, onPlanner);
-    window.addEventListener(RUN_EVENT, onRun);
-    return () => {
-      window.removeEventListener(EVIDENCE_EVENT, onEvidence);
-      window.removeEventListener(PLANNER_EVENT, onPlanner);
-      window.removeEventListener(RUN_EVENT, onRun);
-    };
-  }, []);
 
   // The inbox and recap badges refresh on a slow timer.
   useEffect(() => {
@@ -365,31 +300,6 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
     void refreshRecaps();
   }
 
-  const plannerPanel = planner ? (
-    <PlannerPanel key={JSON.stringify(planner.hypothetical ?? null)} seed={planner} onClose={() => setPlanner(null)} />
-  ) : null;
-
-  const evidencePanel = evidence ? (
-    <EvidencePanel
-      payload={evidence}
-      onClose={() => setEvidence(null)}
-      onOpenProjection={() => {
-        setEvidence(null);
-        setMoneyTab("timeline");
-        go("money", "timeline");
-      }}
-      onAsk={() => {
-        setEvidence(null);
-        setFocusSignal((value) => value + 1);
-      }}
-    />
-  ) : null;
-
-  const runPanel = runTask ? (
-    <RunPanel key={runTask} taskId={runTask} onClose={() => setRunTask(null)} />
-  ) : null;
-
-  const canvasPanel = plannerPanel ?? evidencePanel ?? runPanel;
   const current = PAGES.find((item) => item.id === page) ?? NAV[0];
 
   return (
@@ -458,7 +368,6 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
           <div
             className={talking ? "talk" : "talk talk-hidden"}
             data-mode={page === "chats" ? "chats" : "ask"}
-            data-canvas={canvasPanel && !compact ? "open" : undefined}
             hidden={!talking}
           >
             <Assistant
@@ -478,25 +387,8 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
               onConversationStarted={() => {
                 if (page === "ask") go("chats");
               }}
-              onConversationLeft={closeCanvas}
               onActivity={() => void refreshUnread()}
-              onEvidence={setEvidence}
             />
-            <AnimatePresence initial={false}>
-              {talking && !compact && canvasPanel && (
-                <motion.aside
-                  key="canvas"
-                  className="canvas"
-                  aria-label="Canvas"
-                  initial={{ opacity: 0, x: 24 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: 16 }}
-                  transition={{ duration: 0.3, ease: [0.22, 1, 0.36, 1] }}
-                >
-                  {canvasPanel}
-                </motion.aside>
-              )}
-            </AnimatePresence>
           </div>
 
           {page === "money" && (
@@ -508,8 +400,7 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
               }}
             />
           )}
-          {page === "activity" && runPage && <RunPage key={runPage} taskId={runPage} />}
-          {page === "activity" && !runPage && (
+          {page === "activity" && (
             <ActivityPage
               tab={activityTab}
               importId={focusImportId}
@@ -529,33 +420,6 @@ export function Shell({ user, onSignedOut }: { user: User | null; onSignedOut: (
           {page === "recaps" && <RecapsPage />}
           {page === "settings" && <SettingsPanel onSignOut={() => void signOut()} />}
         </div>
-
-        {compact && canvasPanel && (
-          <Dialog.Root
-            open
-            onOpenChange={(open) => {
-              if (open) return;
-              closeCanvas();
-            }}
-          >
-            <Dialog.Portal>
-              <Dialog.Overlay className="dialog-overlay sheet-overlay" />
-              <Dialog.Content className="sheet-dialog evidence-sheet" aria-describedby={undefined}>
-                <Dialog.Title className="sr-only">Canvas</Dialog.Title>
-                <Theme
-                  appearance="dark"
-                  accentColor="lime"
-                  grayColor="olive"
-                  radius="large"
-                  hasBackground={false}
-                  className="sheet-theme"
-                >
-                  {canvasPanel}
-                </Theme>
-              </Dialog.Content>
-            </Dialog.Portal>
-          </Dialog.Root>
-        )}
 
         <nav className="tabbar" aria-label="Primary" data-testid="mobile-nav">
           {TABBAR.map((id) => {

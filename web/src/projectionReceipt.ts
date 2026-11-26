@@ -64,6 +64,7 @@ const scenario = z.object({
 /** The arguments one projection was asked with, echoed by the tool for the workbook link. */
 const request = z.object({
   horizon_days: number.int().nullable().optional(),
+  cut_percent: number.int().min(0).max(50).optional(),
   hypothetical: z.object({
     amount_paise: number.optional(),
     date: optionalText,

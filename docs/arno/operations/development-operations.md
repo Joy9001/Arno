@@ -73,7 +73,7 @@ uv run pytest -q
 
 # Web lint, typecheck, answer-contract tests, interaction tests, and build
 pnpm --dir web lint && pnpm --dir web typecheck
-pnpm --dir web test:answers && pnpm --dir web test:web && pnpm --dir web build
+pnpm --dir web test:web && pnpm --dir web build
 
 # Financial invariants on a scratch _test database (after ledger/, tools/, importers/, engine/ edits)
 uv run arno migrate && uv run arno demo seed && uv run python -m tests.invariants

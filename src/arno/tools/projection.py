@@ -61,6 +61,7 @@ from arno.engine.projection import (
     SeriesForecast,
     SourceRef,
     SpendRow,
+    reduce_categories,
 )
 from arno.engine.projection import (
     project as run_projection,
@@ -1241,6 +1242,7 @@ async def project_with_inputs(
     conn: Connection,
     *,
     horizon_days: int | None = None,
+    cut_percent: int = 0,
     hypothetical: ProjectHypothetical | dict[str, Any] | Hypothetical | None = None,
     changes: Sequence[ProjectChange | dict[str, Any]] | None = None,
     as_of: date | None = None,
@@ -1250,6 +1252,8 @@ async def project_with_inputs(
     horizon_limit_days: int = MAX_HORIZON_DAYS,
 ) -> tuple[ProjectionInput, Projection]:
     """The full projection or affordability result, including the daily curve and sources."""
+    if not 0 <= cut_percent <= 50:
+        raise ValueError("cut_percent must be between 0 and 50")
     base = as_of or ledger_today()
     purchase = _hypothetical(hypothetical)
     parsed_changes = _parse_raw_changes(changes, as_of=base) if changes is not None else None
@@ -1276,6 +1280,8 @@ async def project_with_inputs(
         known_then=known_then,
         horizon_limit_days=horizon_limit_days,
     )
+    if cut_percent:
+        inputs, _ = reduce_categories(inputs, cut_percent / 100)
     if parsed_changes is not None:
         specs, income_source_ids = await _resolve_changes(
             conn, inputs, parsed_changes, as_of=base, known_then=known_then
@@ -1288,11 +1294,24 @@ async def project_with_inputs(
             income_source_ids=income_source_ids,
             runs=runs,
             seed=seed,
+            allow_cut_tradeoffs=not bool(cut_percent),
         )
     elif purchase is not None:
-        result = await run_compute(afford, inputs, purchase, runs=runs, seed=seed)
+        result = await run_compute(
+            afford,
+            inputs,
+            purchase,
+            runs=runs,
+            seed=seed,
+            allow_cut_tradeoffs=not bool(cut_percent),
+        )
     else:
         result = await run_compute(run_projection, inputs, runs=runs, seed=seed)
+    if cut_percent:
+        result["data_quality"].setdefault("gaps", []).append(
+            f"Reducible everyday spending is cut by {cut_percent}% throughout this projection; "
+            "additional spending cuts are not included in affordability tradeoffs."
+        )
     return inputs, result
 
 

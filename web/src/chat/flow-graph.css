@@ -1,0 +1,5 @@
+﻿.flow-graph .react-flow__node { background: var(--surface-2); border: 1px solid rgba(255, 255, 255, .12); border-radius: 14px; color: var(--text); width: 200px; text-align: left; }
+.flow-graph .react-flow__node p { margin: .4rem 0; overflow-wrap: anywhere; }
+.flow-graph .react-flow__node button { color: inherit; text-align: left; }
+.flow-graph .react-flow__node button:focus-visible { outline: 2px solid var(--lime); outline-offset: 3px; }
+.flow-graph .react-flow__controls button { background: var(--surface-2); color: var(--text); fill: currentColor; border-color: rgba(255, 255, 255, .12); }

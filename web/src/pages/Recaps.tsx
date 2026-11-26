@@ -1,4 +1,4 @@
-import { useEffect, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { ChevronLeft, ChevronRight, Upload } from "lucide-react";
 import { api } from "../api";
 import { askAgent } from "../ask";
@@ -111,7 +111,7 @@ function bigText(story: RecapStory): string {
   return displayText(story.figure.text ?? "");
 }
 
-export function RecapsPage() {
+export function RecapsPage({ inline = false, periodId }: { inline?: boolean; periodId?: string } = {}) {
   const list = useApi<RecapList>("/api/recaps");
   if (!list.data && !list.error) {
     return (
@@ -136,16 +136,20 @@ export function RecapsPage() {
     );
   }
   const periods = list.data?.periods ?? [];
+  if (periodId && !periods.some((period) => period.id === periodId)) {
+    return <p>That recap is not available.</p>;
+  }
   if (!periods.length || periods.every((entry) => !entry.spent || entry.spent.paise === 0)) {
     return <RecapsEmpty />;
   }
-  return <RecapStories periods={periods} />;
+  return <RecapStories periods={periods} inline={inline} periodId={periodId} />;
 }
 
-function RecapStories({ periods: initial }: { periods: RecapPeriod[] }) {
+export function RecapStories({ periods: initial, inline = false, periodId }: { periods: RecapPeriod[]; inline?: boolean; periodId?: string }) {
   const [periods, setPeriods] = useState(initial);
-  const [selected, setSelected] = useState(() => initialPeriod(initial).id);
+  const [selected, setSelected] = useState(() => initial.find((period) => period.id === periodId)?.id ?? initialPeriod(initial).id);
   const [index, setIndex] = useState(0);
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
   const [sheet, setSheet] = useState<{
     reference: { story: string; key: string | null };
     title: string;
@@ -178,7 +182,7 @@ function RecapStories({ periods: initial }: { periods: RecapPeriod[] }) {
     setSelected(id);
     setIndex(0);
     setSheet(null);
-    window.history.replaceState(null, "", "#recaps/" + id);
+    if (!inline) window.history.replaceState(null, "", "#recaps/" + id);
   }
 
   function openRows(reference: { story: string; key: string | null }, title: string) {
@@ -198,8 +202,8 @@ function RecapStories({ periods: initial }: { periods: RecapPeriod[] }) {
   const peak = Math.max(...(story?.bars ?? []).map((bar) => bar.amount.paise), 1);
 
   return (
-    <section className="recaps">
-      <aside className="recap-list" aria-label="Recaps">
+    <section className="recaps" style={inline ? { display: "block" } : undefined}>
+      {!inline && <aside className="recap-list" aria-label="Recaps">
         <h2>Recaps</h2>
         <p className="fine">Built from your ledger rows. Every figure is a sum you can open.</p>
         {KINDS.map((kind) => {
@@ -233,9 +237,9 @@ function RecapStories({ periods: initial }: { periods: RecapPeriod[] }) {
             </div>
           );
         })}
-      </aside>
+      </aside>}
 
-      <nav className="recap-picker" aria-label="Recap periods">
+      <nav className="recap-picker" aria-label="Recap periods" style={inline ? { display: "flex" } : undefined}>
         {periods.map((entry) => (
           <button
             key={entry.id}
@@ -261,6 +265,15 @@ function RecapStories({ periods: initial }: { periods: RecapPeriod[] }) {
           aria-roledescription="story"
           aria-label={`${displayText(period.title)}, story ${index + 1} of ${stories.length || 1}`}
           onKeyDown={onKey}
+          onTouchStart={(event) => { const touch = event.touches[0]; touchStart.current = { x: touch.clientX, y: touch.clientY }; }}
+          onTouchEnd={(event) => {
+            const start = touchStart.current;
+            const touch = event.changedTouches[0];
+            touchStart.current = null;
+            if (!start || !touch) return;
+            const dx = touch.clientX - start.x;
+            if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(touch.clientY - start.y)) step(dx < 0 ? 1 : -1);
+          }}
         >
           <div className="story-progress" aria-hidden="true">
             {(stories.length ? stories : [null]).map((_, position) => (

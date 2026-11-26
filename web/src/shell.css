@@ -87,40 +87,6 @@ h3 {
   font: 800 10px/17px var(--font);
 }
 
-.rail-job {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  width: 64px;
-  padding: 8px 0 7px;
-  border: 0;
-  border-radius: 18px;
-  background: transparent;
-  color: var(--blue-text);
-  font: 700 10px/1.1 var(--font);
-  cursor: pointer;
-}
-
-.rail-job:hover {
-  background: var(--surface);
-  color: var(--text);
-}
-
-.job-spin {
-  display: grid;
-  place-items: center;
-  height: 21px;
-  color: var(--blue-text);
-}
-
-.rail-job-label {
-  max-width: 62px;
-  overflow-wrap: anywhere;
-  text-align: center;
-  line-height: 1.15;
-}
-
 .stage {
   position: relative;
   display: flex;
@@ -223,14 +189,6 @@ h3 {
 
 .talk[data-mode="ask"] .aui-thread-viewport {
   padding-top: 69px;
-}
-
-.canvas {
-  width: min(48%, 680px);
-  min-width: 420px;
-  overflow-y: auto;
-  border-left: 1px solid var(--line);
-  background: var(--surface);
 }
 
 /* The user's own voice is cobalt; the agent writes on the ground. */
@@ -1334,12 +1292,6 @@ h3 {
   display: none;
 }
 
-@media (max-width: 1180px) {
-  .canvas {
-    display: none;
-  }
-}
-
 @media (max-width: 900px) {
   .app {
     grid-template-columns: minmax(0, 1fr);
@@ -1468,42 +1420,12 @@ h3 {
     width: auto;
     min-width: 0;
   }
-
-  .tabbar-job {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    color: var(--blue-text);
-    font: 700 10px/1 var(--font);
-    cursor: pointer;
-  }
-
-  .tabbar-job .job-spin {
-    height: 22px;
-  }
-
-  .tabbar-job .rail-job-label {
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 10px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .tl-line,
   .tl-band {
     animation: none;
-  }
-
-  .rail-job .busy-dot,
-  .tabbar-job .busy-dot {
-    display: none;
   }
 }
 
@@ -1588,140 +1510,6 @@ h3 {
   padding: 22px 26px 28px;
 }
 
-.planner-head {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.planner-head h2 {
-  margin: 0;
-  font-size: 24px;
-}
-
-.planner-close {
-  display: grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  margin-left: auto;
-  border: 0;
-  border-radius: 50%;
-  background: var(--surface-2);
-  color: var(--text);
-  cursor: pointer;
-}
-
-.planner-controls {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-}
-
-.planner-field {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin: 0;
-  color: var(--sub);
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.planner-field > span:first-child {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-}
-
-.planner-field b {
-  color: var(--text);
-  font-size: 22px;
-  font-weight: 800;
-  letter-spacing: -0.03em;
-}
-
-.planner-field input[type="range"] {
-  width: 100%;
-  height: 10px;
-  margin: 4px 0;
-  padding: 0;
-  border: 0;
-  border-radius: 99px;
-  background: linear-gradient(90deg, #2b59ff, #1ec8a5, #d4ff3a);
-  appearance: none;
-  accent-color: var(--lime);
-}
-
-.planner-field input[type="range"]::-webkit-slider-thumb {
-  width: 26px;
-  height: 26px;
-  border: 5px solid var(--lime);
-  border-radius: 50%;
-  background: var(--text);
-  appearance: none;
-  cursor: grab;
-}
-
-.planner-field input[type="range"]::-moz-range-thumb {
-  width: 18px;
-  height: 18px;
-  border: 5px solid var(--lime);
-  border-radius: 50%;
-  background: var(--text);
-}
-
-.planner-ticks {
-  display: flex;
-  justify-content: space-between;
-  color: var(--ter);
-  font-size: 11px;
-}
-
-.planner-ticks i {
-  font-style: normal;
-}
-
-.planner-seg {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  padding: 4px;
-  border-radius: 16px;
-  background: var(--surface-2);
-}
-
-.planner-seg button {
-  flex: 1;
-  padding: 9px 10px;
-  border: 0;
-  border-radius: 12px;
-  background: transparent;
-  color: var(--sub);
-  font: 700 13px/1 var(--font);
-  cursor: pointer;
-}
-
-.planner-seg button.on {
-  background: var(--text);
-  color: #111;
-}
-
-.planner-seg.small button {
-  flex: none;
-}
-
-.planner-gate {
-  color: var(--sun);
-  font-weight: 600;
-}
-
-.planner-result {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
 .planner-gauge {
   position: relative;
   display: grid;
@@ -1749,56 +1537,6 @@ h3 {
   font-size: 12px;
   font-weight: 700;
   text-align: center;
-}
-
-.planner-verdict {
-  margin: 0;
-  font-size: 28px;
-  font-weight: 800;
-  letter-spacing: -0.035em;
-  text-align: center;
-}
-
-.planner-verdict span {
-  display: block;
-  margin-top: 6px;
-  color: var(--sub);
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: 0;
-}
-
-.planner-facts {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-  margin: 0;
-}
-
-.planner-facts div {
-  padding: 10px 12px;
-  border-radius: 16px;
-  background: var(--surface-2);
-}
-
-.planner-facts dt {
-  color: var(--sub);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.planner-facts dd {
-  margin: 4px 0 0;
-  font-size: 20px;
-  font-weight: 800;
-  letter-spacing: -0.03em;
-}
-
-.planner-foot {
-  margin: 0;
-  color: var(--ter);
-  font-size: 12px;
-  font-weight: 600;
 }
 
 /* Settings sits in the same frame as the other areas. */

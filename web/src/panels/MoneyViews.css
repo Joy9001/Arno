@@ -278,38 +278,6 @@
   background: var(--surface);
 }
 
-.moneyv-field {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  min-width: 0;
-  margin: 0;
-}
-
-.moneyv-field > span {
-  color: var(--sub);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.moneyv-field input,
-.moneyv-field select {
-  width: 100%;
-  min-width: 0;
-  padding: 7px 9px;
-  font-size: 13px;
-}
-
-.moneyv-field select {
-  padding-right: 28px;
-}
-
-.moneyv-field-hint {
-  color: var(--ter);
-  font-size: 11.5px;
-  line-height: 1.4;
-}
-
 .moneyv-form-actions {
   display: flex;
   flex-wrap: wrap;
@@ -325,108 +293,8 @@
   line-height: 1.5;
 }
 
-.moneyv-facts {
-  max-width: 72ch;
-  margin: 9px 0 0;
-  color: var(--ter);
-  font-size: 12.5px;
-  line-height: 1.55;
-}
-
-.moneyv-verdict {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 13px;
-}
-
-.moneyv-verdict-note {
-  flex-basis: 100%;
-  max-width: 72ch;
-  margin: 0;
-  color: var(--sub);
-  font-size: 12.5px;
-  line-height: 1.5;
-}
-
-.moneyv-assumption {
-  margin: 0 0 12px;
-  padding: 9px 11px;
-  border: 1px solid var(--line-soft);
-  border-radius: 10px;
-  color: var(--sub);
-  font-size: 12.5px;
-  line-height: 1.5;
-}
-
-.moneyv-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px 18px;
-  margin: 0 0 6px;
-  color: var(--ter);
-  font-size: 11.5px;
-}
-
-.moneyv-legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.moneyv-legend i {
-  width: 13px;
-  height: 2px;
-  border-radius: 999px;
-  background: var(--blue);
-}
-
-.moneyv-legend i.band {
-  height: 7px;
-  background: rgba(212, 255, 58, 0.24);
-}
-
-.moneyv-legend i.floor {
-  height: 0;
-  border-top: 2px dashed var(--red);
-  background: transparent;
-}
-
 /* The shared ProjectionBody still owns the chart, tradeoffs, goals, quality, and sources. Its
    duplicate summary is shown as the strip above this block by the panel. */
-.moneyv-projection-body {
-  margin-top: 4px;
-}
-
-.moneyv-projection-body .projection-head,
-.moneyv-projection-body .projection-facts,
-.moneyv-projection-body > .fine {
-  display: none;
-}
-
-.moneyv-projection-body .projection-block {
-  margin-top: 20px;
-}
-
-.moneyv-progress {
-  height: 6px;
-  margin: 9px 0 7px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: var(--surface-3);
-}
-
-.moneyv-progress span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--sub);
-}
-
-.moneyv-progress.done span {
-  background: var(--green);
-}
 
 .moneyv-chip {
   display: inline-block;
@@ -968,24 +836,14 @@
     padding-left: 0;
   }
 
-  
-
-  
-
-  
-
-  .moneyv-form {
+.moneyv-form {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
 @media (max-width: 520px) {
-  
 
-  .moneyv-form {
-    grid-template-columns: 1fr;
-  }
-
+.moneyv-form,
   .moneyv-row {
     grid-template-columns: 1fr;
   }

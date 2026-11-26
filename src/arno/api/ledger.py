@@ -628,6 +628,7 @@ async def delete_goal(goal_id: str, conn: Database) -> dict[str, Any]:
 async def _projection_request(
     conn: Database,
     horizon_days: int | None = Query(default=None, ge=1, le=3650),
+    cut_percent: int = Query(default=0, ge=0, le=50),
     amount_paise: int | None = Query(default=None, gt=0, le=MAX_PAISE),
     date: Date | None = None,
     method: Literal["account", "card", "emi"] | None = None,
@@ -666,10 +667,15 @@ async def _projection_request(
         inputs, result = await projection_tools.project_with_inputs(
             conn,
             horizon_days=horizon_days,
+            cut_percent=cut_percent,
             hypothetical=hypothetical,
             changes=parsed_changes,
         )
-        return inputs, result, {"hypothetical": hypothetical, "changes": parsed_changes}
+        return (
+            inputs,
+            result,
+            {"hypothetical": hypothetical, "changes": parsed_changes, "cut_percent": cut_percent},
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

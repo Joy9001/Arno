@@ -66,6 +66,19 @@ afterEach(() => {
 });
 
 describe("the statement password card", () => {
+  it("opens the same password flow in review-only mode without loading history", async () => {
+    installFetch((url) => {
+      if (url === "/api/accounts") return respond({ accounts: [] });
+      if (url === "/api/imports/imp_1") return respond(record("imp_1", "needs_password"));
+      return undefined;
+    });
+    render(<ImportsPanel importId="imp_1" reviewOnly />);
+    expect(await screen.findByPlaceholderText("Statement password")).toBeTruthy();
+    expect(screen.queryByText("Bring in a statement")).toBeNull();
+    expect(screen.queryByText("Recent imports")).toBeNull();
+    expect(vi.mocked(fetch).mock.calls.some(([url]) => String(url).startsWith("/api/import-history"))).toBe(false);
+  });
+
   it("forgets a typed password when the user opens another import", async () => {
     installFetch((url) => {
       if (url.startsWith("/api/import-history")) return respond({ items: [] });

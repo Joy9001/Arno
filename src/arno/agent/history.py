@@ -15,6 +15,7 @@ from typing import Any
 
 from pydantic_ai.messages import (
     BinaryContent,
+    ModelMessage,
     ModelMessagesTypeAdapter,
     ModelRequest,
     ModelResponse,
@@ -23,21 +24,92 @@ from pydantic_ai.messages import (
     ToolReturnPart,
     UserPromptPart,
 )
+from pydantic_ai.ui.vercel_ai import VercelAIAdapter
+from pydantic_ai.ui.vercel_ai.response_types import DataChunk
 
-from arno.agent.cards import (
-    attach_to_last_assistant,
-    cards_for_transcript,
-    cards_from_messages,
-    run_timing,
-    ui_messages,
-    with_data,
-)
-from arno.agent.presentation import keep_last_answer
 from arno.db.conn import Connection
 from arno.ledger.audit import new_id
 
 RUN_STATUS = {"complete": "complete", "cancelled": "cancelled", "failed": "error"}
 IMAGE_PLACEHOLDER = "[Image omitted from stored history]"
+
+
+def merge_assistant_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """One assistant UI message per run: a turn's responses are consecutive."""
+    merged: list[dict[str, Any]] = []
+    for message in messages:
+        previous = merged[-1] if merged else None
+        if (
+            message.get("role") == "assistant"
+            and previous is not None
+            and previous.get("role") == "assistant"
+        ):
+            previous.setdefault("parts", []).extend(message.get("parts") or [])
+            continue
+        merged.append(message)
+    return merged
+
+
+def _epoch_ms(value: Any) -> int | None:
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if not isinstance(value, datetime):
+        return None
+    return int((value if value.tzinfo else value.replace(tzinfo=UTC)).timestamp() * 1000)
+
+
+def run_timing(
+    messages: list[ModelMessage],
+    *,
+    started_at: Any = None,
+    finished_at: Any = None,
+) -> dict[str, int] | None:
+    """The run's recorded span, for `"Worked for …"` on a reload.
+
+    `started_at` is the run marker the thread already keeps; the responses' own timestamps are
+    the fallback when a turn is saved outside the chat endpoint.
+    """
+    moments = [
+        message.timestamp
+        for message in messages
+        if isinstance(message, ModelResponse) and message.timestamp is not None
+    ]
+    start = _epoch_ms(started_at) or _epoch_ms(moments[0] if moments else None)
+    end = _epoch_ms(finished_at) or _epoch_ms(moments[-1] if moments else None)
+    if start is None or end is None:
+        return None
+    return {"streamStartTime": start, "totalStreamTime": max(0, end - start)}
+
+
+def ui_messages(messages: list[ModelMessage]) -> list[dict[str, Any]]:
+    """The persisted transcript for one turn, as Vercel AI UI messages."""
+    dumped = [
+        message.model_dump(mode="json", by_alias=True)
+        for message in VercelAIAdapter.dump_messages(messages, sdk_version=7)
+    ]
+    return merge_assistant_messages(dumped)
+
+
+def data_part(chunk: DataChunk) -> dict[str, Any]:
+    payload = {"type": chunk.type, "data": chunk.data}
+    # The UI chunk schema makes these optional, not nullable.
+    if chunk.id is not None:
+        payload["id"] = chunk.id
+    if chunk.transient is not None:
+        payload["transient"] = chunk.transient
+    return payload
+
+
+def with_data(
+    message: dict[str, Any], type_name: str, data: Any, identifier: str | None = None
+) -> None:
+    part = {"type": type_name, "data": data}
+    if identifier is not None:
+        part["id"] = identifier
+    message.setdefault("parts", []).append(part)
 
 
 def _dump(messages: list[Any]) -> list[dict[str, Any]]:
@@ -350,14 +422,14 @@ async def save_records(
         for message in ui_messages(_transcript_view(turn_messages))
         if message.get("role") == "assistant"
     ]
-    # The dump carries a tool's own card with its call. A resumed turn holds the result alone, so
-    # its card, and the cards a script nested in its return, come from the stored returns.
+    # Resumed calls have their original call in a previous turn; keep their UI metadata.
     answers = _answers_to_earlier_calls(turn_messages)
-    cards = [
-        *cards_from_messages(turn_messages),
-        *cards_for_transcript([ModelRequest(parts=[part]) for part in answers]),
-    ]
-    ui = attach_to_last_assistant(ui, keep_last_answer(cards))
+    for part in answers:
+        chunks = part.metadata if isinstance(part.metadata, (list, tuple)) else [part.metadata]
+        if ui:
+            for item in chunks:
+                if isinstance(item, DataChunk):
+                    ui[-1].setdefault("parts", []).append(data_part(item))
     reply: dict[str, Any] | None = ui[-1] if ui else None
     if reply is None and (save_note or ending in {"failed", "cancelled"}):
         reply = {"id": await new_id(conn, "msg"), "role": "assistant", "parts": []}

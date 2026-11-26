@@ -79,9 +79,7 @@ full set.
   their affected test files with `-n 0`; the coordinator runs the single full suite after all edits
   land.
 - `web/` change: `pnpm --dir web lint`, `pnpm --dir web typecheck`, and `pnpm --dir web test:web`.
-  Before finishing, run `pnpm --dir web build`. A change to answer or result cards in
-  `web/src/chat/` also needs
-  `pnpm --dir web test:answers` (it reads fixtures from `tests/fixtures/presentation_contract.py`).
+  Before finishing, run `pnpm --dir web build`.
 - `ledger/`, `tools/`, `importers/`, or `engine/` change: after `uv run arno demo seed`, run
   `uv run python -m tests.invariants` on a scratch `_test` database and keep the invariant tests
   green.

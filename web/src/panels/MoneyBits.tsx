@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
 import { AlertCircle, ChevronLeft, ChevronRight, MessageCircle } from "lucide-react";
-import { Button, Skeleton } from "@radix-ui/themes";
 import { useReducedMotion } from "motion/react";
 import { askAgent } from "../ask";
 import { Busy } from "../Loading";
@@ -121,9 +120,9 @@ export function MoneyError({
         <strong>{title}</strong>
         <p>{message}</p>
       </div>
-      <Button variant="soft" color="gray" size="2" onClick={onRetry}>
+      <button type="button" className="ghost small" onClick={onRetry}>
         Retry
-      </Button>
+      </button>
     </div>
   );
 }
@@ -151,23 +150,23 @@ export function MoneyPager({
         Showing {start}–{end} of {total}
       </span>
       <div className="moneyv-pager-actions">
-        <Button variant="soft" color="gray" size="2" disabled={page <= 0} onClick={() => onPage(page - 1)}>
+        <button type="button" className="ghost small" disabled={page <= 0} onClick={() => onPage(page - 1)}>
           <ChevronLeft size={14} strokeWidth={1.8} aria-hidden="true" />
           Previous
-        </Button>
+        </button>
         <span className="moneyv-pager-count">
           {page + 1} / {pages}
         </span>
-        <Button
-          variant="soft"
-          color="gray"
-          size="2"
+        <button type="button" className="ghost small"
+
+
+
           disabled={page >= pages - 1}
           onClick={() => onPage(page + 1)}
         >
           Next
           <ChevronRight size={14} strokeWidth={1.8} aria-hidden="true" />
-        </Button>
+        </button>
       </div>
     </nav>
   );
@@ -193,33 +192,33 @@ export function MoneyPageSkeleton({
       <div className="moneyv-summary moneyv-skeleton-summary">
         {Array.from({ length: summary }, (_, index) => (
           <div className="moneyv-summary-cell" key={index}>
-            <Skeleton className="moneyv-sk moneyv-sk-label" />
-            <Skeleton className="moneyv-sk moneyv-sk-value" />
-            <Skeleton className="moneyv-sk moneyv-sk-note" />
+            <div className="moneyv-sk moneyv-sk-label" />
+            <div className="moneyv-sk moneyv-sk-value" />
+            <div className="moneyv-sk moneyv-sk-note" />
           </div>
         ))}
       </div>
       {chart && (
         <div className="moneyv-section">
           <div className="moneyv-section-head">
-            <Skeleton className="moneyv-sk moneyv-sk-heading" />
+            <div className="moneyv-sk moneyv-sk-heading" />
           </div>
-          <Skeleton className="moneyv-sk moneyv-sk-chart" />
+          <div className="moneyv-sk moneyv-sk-chart" />
         </div>
       )}
       {rows > 0 && (
         <div className="moneyv-section">
           <div className="moneyv-section-head">
-            <Skeleton className="moneyv-sk moneyv-sk-heading" />
+            <div className="moneyv-sk moneyv-sk-heading" />
           </div>
           <div className="moneyv-list">
             {Array.from({ length: rows }, (_, index) => (
               <div className="moneyv-row moneyv-skeleton-row" key={index}>
                 <div className="moneyv-row-main">
-                  <Skeleton className="moneyv-sk moneyv-sk-title" />
-                  <Skeleton className="moneyv-sk moneyv-sk-meta" />
+                  <div className="moneyv-sk moneyv-sk-title" />
+                  <div className="moneyv-sk moneyv-sk-meta" />
                 </div>
-                <Skeleton className="moneyv-sk moneyv-sk-amount" />
+                <div className="moneyv-sk moneyv-sk-amount" />
               </div>
             ))}
           </div>

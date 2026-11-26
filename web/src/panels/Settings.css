@@ -145,81 +145,6 @@
   max-width: 320px;
 }
 
-.stg-inline {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 12px;
-  margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid var(--line-soft);
-}
-
-.stg-inline label {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  margin: 0;
-}
-
-.stg-inline input,
-.stg-inline select {
-  width: auto;
-  min-width: 170px;
-}
-
-.stg-category-add {
-  align-items: flex-start;
-}
-
-.stg-inline-field {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  min-width: 0;
-}
-
-.stg-inline-field label {
-  margin: 0;
-}
-
-.stg-inline-field .error {
-  margin-top: 2px;
-}
-
-.stg-check {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 38px;
-  margin-top: 22px;
-}
-
-.stg-check input[type="checkbox"] {
-  flex: none;
-  width: auto;
-  min-width: 0;
-  margin: 0;
-  padding: 0;
-  accent-color: var(--lime);
-}
-
-.stg-check label {
-  display: inline-block;
-  margin: 0;
-  color: var(--sub);
-  font-size: 13px;
-  cursor: pointer;
-}
-
-.stg-category-add > button[type="submit"] {
-  margin-top: 22px;
-}
-
-.stg-category-add-notice {
-  margin-top: 12px;
-}
-
 .stg-actions {
   display: flex;
   flex-wrap: wrap;
@@ -293,47 +218,6 @@
   margin-top: 1px;
 }
 
-.stg-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 12px 0 4px;
-}
-
-button.stg-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  width: auto;
-  margin: 0;
-  padding: 6px 10px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--sub);
-  font-size: 12px;
-  font-weight: 500;
-}
-
-button.stg-chip:hover {
-  background: rgba(118, 118, 128, 0.14);
-}
-
-button.stg-chip[aria-pressed="true"] {
-  border-color: rgba(72, 209, 124, 0.35);
-  background: rgba(72, 209, 124, 0.08);
-  color: var(--green);
-}
-
-.stg-chip-state {
-  color: var(--ter);
-  font-size: 11px;
-}
-
-button.stg-chip[aria-pressed="true"] .stg-chip-state {
-  color: #9fdcb0;
-}
-
 .stg-subhead {
   display: flex;
   align-items: baseline;
@@ -353,31 +237,6 @@ button.stg-chip[aria-pressed="true"] .stg-chip-state {
   text-align: right;
 }
 
-.stg-filter {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 12px;
-  margin: 12px 0;
-}
-
-.stg-filter label {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  margin: 0;
-}
-
-.stg-filter input,
-.stg-filter select {
-  width: auto;
-  min-width: 180px;
-}
-
-.stg-filter input[type="search"] {
-  width: min(100%, 300px);
-}
-
 .stg-empty {
   padding: 16px 0;
   color: var(--sub);
@@ -386,13 +245,6 @@ button.stg-chip[aria-pressed="true"] .stg-chip-state {
 
 .stg-empty p {
   margin: 0;
-}
-
-.stg-scroll-hint {
-  display: none;
-  margin: 0 0 6px;
-  color: var(--ter);
-  font-size: 12px;
 }
 
 .stg-table-region {
@@ -452,107 +304,12 @@ button.stg-chip[aria-pressed="true"] .stg-chip-state {
   align-items: start;
 }
 
-.stg-status-line {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 14px;
-  margin: 0;
-}
-
-.stg-table-sub {
-  display: block;
-  margin-top: 2px;
-}
-
-.stg-nothing-running {
-  margin: 0;
-}
-
-.stg-running {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.stg-running-row {
-  padding: 12px 14px;
-  border: 1px solid var(--line-soft);
-  border-radius: 12px;
-  background: rgba(0, 0, 0, 0.18);
-}
-
-.stg-running-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px 16px;
-}
-
-.stg-running-head strong {
-  font-size: 14px;
-}
-
-.stg-running-head > .fine {
-  margin: 0;
-  text-align: right;
-}
-
-.stg-progress {
-  height: 4px;
-  margin-top: 9px;
-  overflow: hidden;
-  border-radius: 99px;
-  background: var(--surface-3);
-}
-
-.stg-progress > span {
-  display: block;
-  width: 35%;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--blue-text);
-  animation: stg-progress 1.4s ease-in-out infinite;
-}
-
 @keyframes stg-progress {
   from {
     transform: translateX(-100%);
   }
   to {
     transform: translateX(320%);
-  }
-}
-
-.stg-job-error {
-  margin-top: 6px;
-  color: var(--sub);
-  font-size: 12.5px;
-}
-
-.stg-job-error summary {
-  cursor: pointer;
-  color: var(--ter);
-}
-
-.stg-job-error p {
-  margin: 6px 0 0;
-  overflow-wrap: anywhere;
-}
-
-.stg-job-retry {
-  margin-top: 8px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .stg-progress > span {
-    width: 100%;
-    opacity: 0.5;
-    animation: none;
   }
 }
 
@@ -569,10 +326,7 @@ button.stg-chip[aria-pressed="true"] .stg-chip-state {
   color: var(--ter);
 }
 
-.stg-status.bad {
-  color: var(--orange);
-}
-
+.stg-status.bad,
 .stg-status.bad svg {
   color: var(--orange);
 }
@@ -725,63 +479,6 @@ button.stg-chip[aria-pressed="true"] .stg-chip-state {
   font-size: 14px;
   font-weight: 500;
   overflow-wrap: anywhere;
-}
-
-.memory-intro {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  padding: 24px;
-  margin-bottom: 20px;
-  border-radius: 28px;
-  background: var(--surface);
-}
-
-.memory-intro h3 { margin: 0 0 6px; font-size: 28px; letter-spacing: -0.03em; }
-.memory-intro p { margin: 0; color: var(--sub); font-size: 14px; }
-.memory-row { grid-template-columns: 110px minmax(0, 1fr) auto; gap: 16px; padding: 20px 4px; }
-.memory-filter { margin: 6px 0 16px; }
-.memory-type {
-  align-self: start;
-  padding: 4px 10px;
-  border: 0;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--lime) 12%, transparent);
-  color: var(--lime);
-  font: 500 11px var(--mono);
-  text-align: center;
-  appearance: none;
-  cursor: pointer;
-}
-.memory-type:focus-visible { outline: 2px solid var(--lime); outline-offset: 2px; }
-.memory-type-wrap { position: relative; align-self: start; justify-self: start; }
-.memory-type-wrap .memory-type { padding-right: 24px; }
-.memory-type-wrap svg {
-  position: absolute;
-  top: 50%;
-  right: 8px;
-  color: var(--lime);
-  transform: translateY(-50%);
-  pointer-events: none;
-}
-.memory-type option { background: var(--surface-2); color: var(--text); }
-.memory-type:disabled { cursor: default; opacity: 0.6; }
-
-@media (max-width: 1100px) {
-  .memory-row { grid-template-columns: 110px minmax(0, 1fr); }
-  .memory-row .stg-list-actions { grid-column: 2; justify-content: flex-start; }
-}
-
-@media (max-width: 620px) {
-  .memory-intro { gap: 12px; padding: 20px 16px; }
-  .memory-intro h3 { font-size: 23px; }
-  .memory-row { grid-template-columns: 1fr; }
-  .memory-row .stg-list-actions { grid-column: 1; }
-  .memory-type { justify-self: start; }
-}
-
-.stg-list-row.off .stg-memory-body {
-  color: var(--ter);
 }
 
 .stg-list-meta {
@@ -957,7 +654,6 @@ button.stg-chip[aria-pressed="true"] .stg-chip-state {
     font-size: 15px;
   }
 
-  
 }
 
 /* Older browsers without container queries still get the phone selector. */
@@ -1007,47 +703,6 @@ button.stg-chip[aria-pressed="true"] .stg-chip-state {
     max-width: none;
   }
 
-  .stg-inline {
-    display: block;
-  }
-
-  .stg-inline label {
-    margin-top: 12px;
-  }
-
-  .stg-inline label:first-child {
-    margin-top: 0;
-  }
-
-  .stg-inline input,
-  .stg-inline select {
-    width: 100%;
-    min-width: 0;
-  }
-
-  .stg-inline button {
-    width: 100%;
-    justify-content: center;
-    min-height: 40px;
-    margin-top: 12px;
-  }
-
-  .stg-inline .stg-check {
-    display: flex;
-    align-items: center;
-    min-height: 0;
-    margin-top: 12px;
-  }
-
-  .stg-inline .stg-check label {
-    margin-top: 0;
-  }
-
-  .stg-inline .stg-check input[type="checkbox"] {
-    width: auto;
-    min-width: 0;
-  }
-
   .stg-actions button,
   .stg-export-row button {
     min-height: 40px;
@@ -1070,20 +725,6 @@ button.stg-chip[aria-pressed="true"] .stg-chip-state {
 
   .stg-list-actions {
     justify-content: flex-start;
-  }
-
-  .stg-filter input,
-  .stg-filter select {
-    width: 100%;
-    min-width: 0;
-  }
-
-  .stg-filter label {
-    flex: 1 1 160px;
-  }
-
-  .stg-scroll-hint {
-    display: block;
   }
 
   .stg-table-region table {
@@ -1124,13 +765,6 @@ button.stg-chip[aria-pressed="true"] .stg-chip-state {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 18px;
-}
-
-.stg-session {
-  margin-top: 16px;
-  padding: 12px 14px;
-  border: 1px solid var(--line-soft);
-  border-radius: 12px;
 }
 
 .stg-question-edit {

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-
-from arno.agent.presentation import ResultRegistry
+from dataclasses import dataclass
 
 
 @dataclass
@@ -25,8 +23,6 @@ class AgentDeps:
     # True when ImageAttachments hydrates any attached image onto a request (including follow-ups).
     image_attachments: tuple[str, ...] = ()
     saw_images: bool = False
-    # Bounded result snapshots for this turn. IDs are never reused across turns.
-    presentation: ResultRegistry = field(default_factory=ResultRegistry)
     # How many lasting writes the user approved in this turn, for the trace's tap rate.
     approvals: int = 0
     # How many approval cards this turn offered. Offered and approved read as two states.

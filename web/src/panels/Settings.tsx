@@ -1,14 +1,11 @@
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
-import { AlertDialog, Button, Skeleton } from "@radix-ui/themes";
+import { AlertDialog } from "radix-ui";
 import {
   Activity,
   Bell,
   Brain,
   CalendarClock,
-  ChevronLeft,
-  ChevronDown,
-  ChevronRight,
   CircleAlert,
   CircleCheck,
   Database,
@@ -21,13 +18,10 @@ import {
   Pencil,
   Play,
   Plus,
-  Power,
-  PowerOff,
   RefreshCw,
   RotateCcw,
   Save,
   ShieldCheck,
-  Tag,
   Tags,
   Trash2,
   UserRound,
@@ -35,19 +29,19 @@ import {
 } from "lucide-react";
 import { motion, useReducedMotion } from "motion/react";
 import { api, errorMessage } from "../api";
+import { askAgent } from "../ask";
 import { NAVIGATE_EVENT } from "../nav";
 import { RuntimeInfo } from "./RuntimeInfo";
+import { ActivityPager } from "./ActivityPager";
 import type { Preference, PreferenceList } from "../chat/types";
 import { formatMoment } from "../format";
 import { MemoryPrevious } from "./MemoryPrevious";
 import { Busy } from "../Loading";
-import { Orb } from "../Orb";
 import { ExportScope } from "./ExportScope";
 import { DeletionPreviewNote, DeletionScope } from "./DeletionScope";
 import { HistoryPanel } from "./History";
 import type {
   BackupStatus,
-  Category,
   CategoryTree,
   DeletionPreview,
   ScheduledQuestion,
@@ -87,7 +81,6 @@ const SECTION_GROUPS: Array<{
 const SECTIONS = SECTION_GROUPS.flatMap((group) => group.items);
 const RULE_PAGE_SIZE = 25;
 const MEMORY_PAGE_SIZE = 10;
-const MEMORY_MAX_LENGTH = 2000;
 const QUESTION_PAGE_SIZE = 10;
 
 function sectionFromHash(): string {
@@ -194,21 +187,21 @@ function SettingsSkeleton({
 }) {
   return (
     <div className="stg-skeleton" role="status">
-      <Skeleton className="sk stg-sk stg-sk-title" />
-      <Skeleton className="sk stg-sk stg-sk-line" />
+      <div className="sk stg-sk stg-sk-title" />
+      <div className="sk stg-sk stg-sk-line" />
       {fields && (
         <>
-          <Skeleton className="sk stg-sk stg-sk-field" />
-          <Skeleton className="sk stg-sk stg-sk-field" />
+          <div className="sk stg-sk stg-sk-field" />
+          <div className="sk stg-sk stg-sk-field" />
         </>
       )}
       {Array.from({ length: rows }, (_, index) => (
         <div className="stg-skeleton-row" key={index}>
-          <Skeleton className="sk stg-sk stg-sk-line stg-sk-line-short" />
-          <Skeleton className="sk stg-sk stg-sk-value" />
+          <div className="sk stg-sk stg-sk-line stg-sk-line-short" />
+          <div className="sk stg-sk stg-sk-value" />
         </div>
       ))}
-      {fields && <Skeleton className="sk stg-sk stg-sk-button" />}
+      {fields && <div className="sk stg-sk stg-sk-button" />}
       <span className="sr-only">{label}</span>
     </div>
   );
@@ -261,46 +254,9 @@ function Pager({
   onPage: (next: number) => void;
 }) {
   if (total === 0) return null;
-  const first = page * pageSize + 1;
-  const last = Math.min(total, (page + 1) * pageSize);
-  return (
-    <div className="stg-pager">
-      <span className="stg-pager-count">
-        {first}–{last} of {total}
-      </span>
-      <div className="stg-pager-buttons" role="group" aria-label="Pagination">
-        <button
-          type="button"
-          className="ghost small"
-          disabled={page === 0}
-          onClick={() => onPage(page - 1)}
-        >
-          <ChevronLeft size={14} strokeWidth={1.8} aria-hidden="true" />
-          Previous
-        </button>
-        <span className="stg-page-number">
-          Page {page + 1} of {pageCount}
-        </span>
-        <button
-          type="button"
-          className="ghost small"
-          disabled={page >= pageCount - 1}
-          onClick={() => onPage(page + 1)}
-        >
-          Next
-          <ChevronRight size={14} strokeWidth={1.8} aria-hidden="true" />
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function TableRegion({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <div className="stg-table-region" role="region" aria-label={label} tabIndex={0}>
-      {children}
-    </div>
-  );
+  return <ActivityPager label="Pagination" info={`${page * pageSize + 1}–${Math.min(total, (page + 1) * pageSize)} of ${total} · Page ${page + 1} of ${pageCount}`}
+    previousDisabled={page === 0} nextDisabled={page >= pageCount - 1}
+    onPrevious={() => onPage(page - 1)} onNext={() => onPage(page + 1)} />;
 }
 
 /** A Radix confirmation for destructive settings actions; the action fires only on confirm. */
@@ -329,14 +285,14 @@ function ConfirmButton({
         {icon}
         {label}
       </button>
-      <AlertDialog.Content maxWidth="440px">
+      <AlertDialog.Portal>
+        <AlertDialog.Overlay className="dialog-overlay" />
+        <AlertDialog.Content className="sheet-dialog" style={{ maxWidth: 440 }}>
         <AlertDialog.Title>{title}</AlertDialog.Title>
-        <AlertDialog.Description size="2">{description}</AlertDialog.Description>
+        <AlertDialog.Description>{description}</AlertDialog.Description>
         {open && preview && <DeletionPreviewNote scope={preview.scope} id={preview.id} />}
         <div className="stg-confirm-actions">
-          <AlertDialog.Cancel>
-            <Button variant="soft" color="gray"><X size={14} aria-hidden="true" />Cancel</Button>
-          </AlertDialog.Cancel>
+          <AlertDialog.Cancel className="ghost small"><X size={14} aria-hidden="true" />Cancel</AlertDialog.Cancel>
           <AlertDialog.Action
             className="ghost small stg-danger"
             onClick={() => {
@@ -344,10 +300,11 @@ function ConfirmButton({
               onConfirm();
             }}
           >
-            <Button color="red">{icon}{confirmLabel}</Button>
+            {icon}{confirmLabel}
           </AlertDialog.Action>
         </div>
-      </AlertDialog.Content>
+        </AlertDialog.Content>
+      </AlertDialog.Portal>
     </AlertDialog.Root>
   );
 }
@@ -537,629 +494,67 @@ function ProfileCard({
 }
 
 function CategoriesSection({ tree }: { tree: ApiState<CategoryTree> }) {
-  return (
-    <SettingsSection
-      id="categories"
-      title="Categories"
-      description="Mark the categories an affordability tradeoff may suggest cutting, and review the merchant rules that assign them."
-    >
-      <Loadable
-        state={tree}
-        label="categories and rules"
-        skeleton={<SettingsSkeleton label="Loading categories and rules…" rows={5} />}
-      >
-        {(data) => <CategoriesCard tree={data} onChanged={tree.reload} />}
-      </Loadable>
-    </SettingsSection>
-  );
+  return <SettingsSection id="categories" title="Categories" description="Review categories and merchant rules. Ask Arno to change them.">
+    <Loadable state={tree} label="categories and rules" skeleton={<SettingsSkeleton label="Loading categories and rules…" rows={5} />}>
+      {(data) => <CategoriesCard tree={data} onChanged={tree.reload} />}
+    </Loadable>
+  </SettingsSection>;
 }
 
 function CategoriesCard({ tree, onChanged }: { tree: CategoryTree; onChanged: () => void }) {
-  const [newCategoryName, setNewCategoryName] = useState("");
-  const [newCategoryReducible, setNewCategoryReducible] = useState(false);
-  const [newCategoryError, setNewCategoryError] = useState<string | null>(null);
-  const [newCategoryNotice, setNewCategoryNotice] = useState<string | null>(null);
-  const [creatingCategory, setCreatingCategory] = useState(false);
-  const newCategoryInputRef = useRef<HTMLInputElement | null>(null);
-  const addNameId = useId();
-  const addReducibleId = useId();
-  const addErrorId = useId();
+  const [page, setPage] = useState(0);
   const [merchant, setMerchant] = useState("");
   const [categoryId, setCategoryId] = useState("");
-  const [ruleQuery, setRuleQuery] = useState("");
-  const [rulePage, setRulePage] = useState(0);
-  const [busyCategoryId, setBusyCategoryId] = useState<string | null>(null);
-  const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
-  const [categoryName, setCategoryName] = useState("");
-  const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
-  const [ruleCategoryId, setRuleCategoryId] = useState("");
-  const [saving, setSaving] = useState(false);
+  const [choices, setChoices] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const pageCount = Math.max(1, Math.ceil(tree.rules.length / RULE_PAGE_SIZE));
+  const current = Math.min(page, pageCount - 1);
+  const active = tree.categories.filter((category) => category.active);
 
-  const activeCategories = tree.categories.filter((category) => category.active);
-  const archivedCategories = tree.categories.filter((category) => !category.active);
-  const selectedCategoryId =
-    categoryId && activeCategories.some((category) => category.id === categoryId)
-      ? categoryId
-      : (activeCategories[0]?.id ?? "");
-  const rules = [...tree.rules].sort(
-    (a, b) => b.hits - a.hits || a.pattern.localeCompare(b.pattern),
-  );
-  const query = ruleQuery.trim().toLowerCase();
-  const filteredRules = query
-    ? rules.filter(
-        (rule) =>
-          rule.pattern.toLowerCase().includes(query) ||
-          rule.category_name.toLowerCase().includes(query),
-      )
-    : rules;
-  const pageCount = Math.max(1, Math.ceil(filteredRules.length / RULE_PAGE_SIZE));
-  const currentPage = Math.min(rulePage, pageCount - 1);
-  const visibleRules = filteredRules.slice(
-    currentPage * RULE_PAGE_SIZE,
-    (currentPage + 1) * RULE_PAGE_SIZE,
-  );
-
-  async function createCategory(event: FormEvent) {
-    event.preventDefault();
-    const trimmed = newCategoryName.trim();
-    if (!trimmed) {
-      setNewCategoryError("Enter a category name.");
-      newCategoryInputRef.current?.focus();
-      return;
-    }
-    const existing = tree.categories.find(
-      (item) => item.name.toLowerCase() === trimmed.toLowerCase(),
-    );
-    if (existing) {
-      setNewCategoryError(
-        existing.active
-          ? `“${existing.name}” already exists.`
-          : `“${existing.name}” is archived below. Restore it to use it again.`,
-      );
-      newCategoryInputRef.current?.focus();
-      return;
-    }
-    setCreatingCategory(true);
-    setNewCategoryError(null);
-    setNewCategoryNotice(null);
-    setError(null);
-    setMessage(null);
+  async function saveRule(body: object) {
+    setBusy(true); setError(null); setMessage(null);
     try {
-      const created = await api<Category & { undo_id?: string | null }>("/api/categories", {
-        method: "POST",
-        body: JSON.stringify({ name: trimmed, reducible: newCategoryReducible }),
-      });
-      setNewCategoryName("");
-      setNewCategoryReducible(false);
-      setNewCategoryNotice(`Added “${created.name}”.`);
+      await api("/api/category-rules", { method: "POST", body: JSON.stringify(body) });
+      setMessage("Rule saved. Your rules take priority over agent guesses; past labels stay unchanged.");
       onChanged();
-    } catch (caught) {
-      setNewCategoryError(errorMessage(caught));
-      newCategoryInputRef.current?.focus();
-    } finally {
-      setCreatingCategory(false);
-    }
+      return true;
+    } catch (caught) { setError(errorMessage(caught)); return false; }
+    finally { setBusy(false); }
   }
 
-  async function toggleReducible(category: CategoryTree["categories"][number]) {
-    setBusyCategoryId(category.id);
-    setError(null);
-    setMessage(null);
+  async function removeRule(id: string) {
+    setBusy(true); setError(null); setMessage(null);
     try {
-      await api(`/api/categories/${category.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ reducible: !category.reducible }),
-      });
-      setMessage(
-        category.reducible
-          ? `“${category.name}” is protected from affordability cuts.`
-          : `“${category.name}” may be suggested for cutting.`,
-      );
+      await api(`/api/category-rules/${encodeURIComponent(id)}`, { method: "DELETE" });
+      setMessage("Rule deleted. Past labels stay unchanged; you can undo this in History.");
       onChanged();
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusyCategoryId(null);
-    }
+    } catch (caught) { setError(errorMessage(caught)); }
+    finally { setBusy(false); }
   }
 
-  async function saveCategoryName(category: CategoryTree["categories"][number]) {
-    const name = categoryName.trim();
-    if (!name) {
-      setError("A category needs a name.");
-      return;
-    }
-    if (name === category.name) {
-      setEditingCategoryId(null);
-      return;
-    }
-    setBusyCategoryId(category.id);
-    setError(null);
-    setMessage(null);
-    try {
-      await api(`/api/categories/${category.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ name }),
-      });
-      setEditingCategoryId(null);
-      setMessage(`Renamed to “${name}”. Existing rows keep this category.`);
-      onChanged();
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusyCategoryId(null);
-    }
-  }
-
-  async function setCategoryActive(
-    category: CategoryTree["categories"][number],
-    active: boolean,
-  ) {
-    setBusyCategoryId(category.id);
-    setError(null);
-    setMessage(null);
-    try {
-      await api(`/api/categories/${category.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ active }),
-      });
-      setMessage(
-        active
-          ? `“${category.name}” restored.`
-          : `“${category.name}” archived. Existing rows and rules keep the label.`,
-      );
-      onChanged();
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusyCategoryId(null);
-    }
-  }
-
-  async function addRule(event: FormEvent) {
-    event.preventDefault();
-    if (!merchant.trim() || !selectedCategoryId) return;
-    setSaving(true);
-    setError(null);
-    setMessage(null);
-    try {
-      await api("/api/category-rules", {
-        method: "POST",
-        body: JSON.stringify({
-          pattern: merchant.trim(),
-          category_id: selectedCategoryId,
-          source: "user",
-        }),
-      });
-      setMerchant("");
-      setMessage("Rule saved. Your rules always take priority over an agent guess.");
-      onChanged();
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function saveRule(rule: CategoryTree["rules"][number]) {
-    if (!ruleCategoryId) return;
-    setSaving(true);
-    setError(null);
-    setMessage(null);
-    try {
-      await api("/api/category-rules", {
-        method: "POST",
-        body: JSON.stringify({
-          pattern: rule.pattern,
-          category_id: ruleCategoryId,
-          source: "user",
-        }),
-      });
-      setEditingRuleId(null);
-      setMessage(
-        rule.source === "llm"
-          ? `“${rule.pattern}” is now your rule and beats the agent's guess.`
-          : `“${rule.pattern}” now uses the selected category.`,
-      );
-      onChanged();
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function removeRule(rule: CategoryTree["rules"][number]) {
-    setError(null);
-    setMessage(null);
-    try {
-      await api(`/api/category-rules/${rule.id}`, { method: "DELETE" });
-      setMessage(`Rule for “${rule.pattern}” deleted. Past labels stay unchanged.`);
-      onChanged();
-    } catch (caught) {
-      setError(errorMessage(caught));
-    }
-  }
-
-  return (
-    <div className="stg-card">
-      <h4>Categories</h4>
-      <p className="stg-hint">
-        A reducible category may be suggested when an affordability tradeoff needs a cut. Renaming
-        or archiving a category keeps its identity on existing rows.
-      </p>
-      <div className="stg-list">
-        {activeCategories.map((category) => {
-          const editing = editingCategoryId === category.id;
-          return (
-            <div className="stg-list-row" key={category.id}>
-              <div className="stg-list-body">
-                {editing ? (
-                  <input
-                    aria-label={`Name for ${category.name}`}
-                    value={categoryName}
-                    maxLength={100}
-                    onChange={(event) => setCategoryName(event.target.value)}
-                  />
-                ) : (
-                  <p className="stg-question">{category.name}</p>
-                )}
-                <p className="stg-list-meta">
-                  {category.reducible
-                    ? "Reducible · an affordability tradeoff may suggest cutting it."
-                    : "Protected · not suggested for affordability cuts."}
-                </p>
-              </div>
-              <div className="stg-list-actions">
-                {editing ? (
-                  <>
-                    <button
-                      type="button"
-                      className="ghost small"
-                      disabled={busyCategoryId === category.id || !categoryName.trim()}
-                      onClick={() => void saveCategoryName(category)}
-                    >
-                      <Save size={14} strokeWidth={1.8} aria-hidden="true" />
-                      Save
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost small"
-                      onClick={() => setEditingCategoryId(null)}
-                    >
-                      <X size={14} strokeWidth={1.8} aria-hidden="true" />
-                      Cancel
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      className="ghost small"
-                      aria-pressed={category.reducible}
-                      disabled={busyCategoryId === category.id}
-                      title="Toggle whether this category is reducible"
-                      onClick={() => void toggleReducible(category)}
-                    >
-                      <Tag size={14} strokeWidth={1.8} aria-hidden="true" />
-                      {category.reducible ? "Reducible" : "Protected"}
-                    </button>
-                    <button
-                      type="button"
-                      className="ghost small"
-                      onClick={() => {
-                        setEditingCategoryId(category.id);
-                        setCategoryName(category.name);
-                        setError(null);
-                      }}
-                    >
-                      <Pencil size={14} strokeWidth={1.8} aria-hidden="true" />
-                      Rename
-                    </button>
-                    <ConfirmButton
-                      label="Archive"
-                      icon={<Trash2 size={14} strokeWidth={1.8} aria-hidden="true" />}
-                      title={`Archive “${category.name}”?`}
-                      description="It will not be offered for new movements, but existing rows and rules keep the label. You can restore it below."
-                      confirmLabel="Archive category"
-                      onConfirm={() => void setCategoryActive(category, false)}
-                    />
-                  </>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      <form
-        className="stg-inline stg-category-add"
-        aria-label="Add category"
-        noValidate
-        onSubmit={(event) => void createCategory(event)}
-      >
-        <div className="stg-inline-field">
-          <label htmlFor={addNameId}>New category</label>
-          <input
-            ref={newCategoryInputRef}
-            id={addNameId}
-            name="category_name"
-            type="text"
-            value={newCategoryName}
-            maxLength={100}
-            placeholder="Household Help"
-            enterKeyHint="done"
-            required
-            aria-invalid={newCategoryError ? "true" : "false"}
-            aria-describedby={newCategoryError ? addErrorId : undefined}
-            onChange={(event) => {
-              setNewCategoryName(event.target.value);
-              if (newCategoryError) setNewCategoryError(null);
-            }}
-          />
-          {newCategoryError && (
-            <span id={addErrorId} className="error" role="alert">
-              {newCategoryError}
-            </span>
-          )}
-        </div>
-        <div className="stg-check">
-          <input
-            id={addReducibleId}
-            name="category_reducible"
-            type="checkbox"
-            checked={newCategoryReducible}
-            onChange={(event) => setNewCategoryReducible(event.target.checked)}
-          />
-          <label htmlFor={addReducibleId}>Reducible in tradeoffs</label>
-        </div>
-        <button type="submit" disabled={creatingCategory}>
-          {creatingCategory ? (
-            <>
-              <Busy />
-              Adding…
-            </>
-          ) : (
-            <>
-              <Plus size={15} strokeWidth={1.8} aria-hidden="true" />
-              Add category
-            </>
-          )}
-        </button>
-      </form>
-
-      {newCategoryNotice && (
-        <div className="stg-notice stg-category-add-notice" role="status">
-          <CircleCheck size={16} strokeWidth={1.8} aria-hidden="true" />
-          <p>{newCategoryNotice}</p>
-        </div>
-      )}
-
-      {archivedCategories.length > 0 && (
-        <>
-          <div className="stg-subhead">
-            <h4>Archived categories</h4>
-            <span className="stg-hint">{archivedCategories.length} archived</span>
-          </div>
-          <p className="stg-hint">
-            Archived categories stay on existing rows and rules. Restore one to offer it again.
-          </p>
-          <div className="stg-list">
-            {archivedCategories.map((category) => (
-              <div className="stg-list-row" key={category.id}>
-                <div className="stg-list-body">
-                  <p className="stg-question">{category.name}</p>
-                </div>
-                <div className="stg-list-actions">
-                  <button
-                    type="button"
-                    className="ghost small"
-                    disabled={busyCategoryId === category.id}
-                    onClick={() => void setCategoryActive(category, true)}
-                  >
-                    <RotateCcw size={14} strokeWidth={1.8} aria-hidden="true" />
-                    Restore
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-
-      <div className="stg-subhead">
-        <h4>Merchant rules</h4>
-        {rules.length > 0 && <span className="stg-hint">{rules.length} rules · most used first</span>}
-      </div>
-      <p className="stg-hint">
-        Your rules win over the agent&apos;s guesses. Agent rules are guesses the categorizer saved;
-        changing one makes it your rule. Past labels are not rewritten.
-      </p>
-
-      {rules.length > 0 && (
-        <div className="stg-filter">
-          <label>
-            Filter rules
-            <input
-              type="search"
-              value={ruleQuery}
-              placeholder="Merchant or category"
-              onChange={(event) => {
-                setRuleQuery(event.target.value);
-                setRulePage(0);
-              }}
-            />
-          </label>
-        </div>
-      )}
-
-      {filteredRules.length === 0 ? (
-        <div className="stg-empty">
-          <p>
-            {rules.length === 0
-              ? "No rules yet. Add a user rule below; it will apply to future captures."
-              : `No rules match “${ruleQuery.trim()}”.`}
-          </p>
-        </div>
-      ) : (
-        <>
-          <p className="stg-scroll-hint">Scroll the table sideways to see every column.</p>
-          <TableRegion label="Merchant category rules">
-            <table>
-              <thead>
-                <tr>
-                  <th>Merchant</th>
-                  <th>Category</th>
-                  <th>Source</th>
-                  <th>Hits</th>
-                  <th>
-                    <span className="sr-only">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {visibleRules.map((rule) => (
-                  <tr key={rule.id}>
-                    <td>{rule.pattern}</td>
-                    <td>
-                      {editingRuleId === rule.id ? (
-                        <select
-                          aria-label={`Category for ${rule.pattern}`}
-                          value={ruleCategoryId}
-                          onChange={(event) => setRuleCategoryId(event.target.value)}
-                        >
-                          {tree.categories
-                            .filter(
-                              (category) => category.active || category.id === rule.category_id,
-                            )
-                            .map((category) => (
-                              <option key={category.id} value={category.id}>
-                                {category.name}
-                                {category.active ? "" : " (archived)"}
-                              </option>
-                            ))}
-                        </select>
-                      ) : (
-                        rule.category_name
-                      )}
-                    </td>
-                    <td>
-                      <span className={`badge ${rule.source === "user" ? "muted" : "warn"}`}>
-                        {rule.source === "user" ? "You" : rule.source === "llm" ? "Agent" : "Seed"}
-                      </span>
-                    </td>
-                    <td className="num">{rule.hits}</td>
-                    <td>
-                      <div className="stg-list-actions">
-                        {editingRuleId === rule.id ? (
-                          <>
-                            <button
-                              type="button"
-                              className="ghost small"
-                              disabled={saving || !ruleCategoryId}
-                              onClick={() => void saveRule(rule)}
-                            >
-                              <Save size={14} strokeWidth={1.8} aria-hidden="true" />
-                              Save
-                            </button>
-                            <button
-                              type="button"
-                              className="ghost small"
-                              onClick={() => setEditingRuleId(null)}
-                            >
-                              <X size={14} strokeWidth={1.8} aria-hidden="true" />
-                              Cancel
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <button
-                              type="button"
-                              className="ghost small"
-                              onClick={() => {
-                                setEditingRuleId(rule.id);
-                                setRuleCategoryId(rule.category_id);
-                                setError(null);
-                              }}
-                            >
-                              <Pencil size={14} strokeWidth={1.8} aria-hidden="true" />
-                              Edit
-                            </button>
-                            <ConfirmButton
-                              label="Delete"
-                              icon={<Trash2 size={14} strokeWidth={1.8} aria-hidden="true" />}
-                              title={`Delete the rule for “${rule.pattern}”?`}
-                              description="Future captures stop using this rule. Labels already on past movements stay unchanged."
-                              confirmLabel="Delete rule"
-                              onConfirm={() => void removeRule(rule)}
-                            />
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </TableRegion>
-          <Pager
-            page={currentPage}
-            pageCount={pageCount}
-            total={filteredRules.length}
-            pageSize={RULE_PAGE_SIZE}
-            onPage={setRulePage}
-          />
-        </>
-      )}
-
-      <form
-        className="stg-inline"
-        aria-label="Add merchant rule"
-        onSubmit={(event) => void addRule(event)}
-      >
-        <label>
-          Merchant
-          <input
-            value={merchant}
-            placeholder="Swiggy"
-            required
-            onChange={(event) => setMerchant(event.target.value)}
-          />
-        </label>
-        <label>
-          Category
-          <select
-            value={selectedCategoryId}
-            required
-            onChange={(event) => setCategoryId(event.target.value)}
-          >
-            {activeCategories.map((category) => (
-              <option key={category.id} value={category.id}>
-                {category.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <button type="submit" disabled={saving || !merchant.trim() || !selectedCategoryId}>
-          {saving ? (
-            <>
-              <Busy />
-              Saving…
-            </>
-          ) : (
-            <>
-              <Plus size={15} strokeWidth={1.8} aria-hidden="true" />
-              Add user rule
-            </>
-          )}
-        </button>
-      </form>
-
-      <Feedback error={error} message={message} />
-    </div>
-  );
+  return <div className="stg-list">
+    <button type="button" className="ghost small" onClick={() => askAgent("Help me add or change a category.")}>Ask Arno to manage categories</button>
+    {tree.categories.map((category) => <div className="stg-list-row" key={category.id}><div className="stg-list-body"><strong>{category.name}</strong><p>{category.active ? "Active" : "Archived"} · {category.reducible ? "Reducible" : "Not reducible"}</p></div><button type="button" className="ghost small" onClick={() => askAgent(`Help me change category ${JSON.stringify(category.name)} (ID ${category.id}).`)}>Ask about {category.name}</button></div>)}
+    <h4>Merchant rules</h4>
+    <p className="stg-hint">Your rules take priority over agent guesses. Changes affect future captures, not past labels.</p>
+    {tree.rules.length === 0 ? <p>No merchant rules yet.</p> : tree.rules.slice(current * RULE_PAGE_SIZE, (current + 1) * RULE_PAGE_SIZE).map((rule) => <div className="stg-list-row" key={rule.id}>
+      <div className="stg-list-body"><strong>{rule.pattern}</strong><p>{rule.match} · {rule.source} · {rule.hits} matches</p></div>
+      <div className="stg-list-actions"><select aria-label={`Category for rule ${rule.pattern}`} value={choices[rule.id] ?? rule.category_id} onChange={(event) => setChoices((old) => ({ ...old, [rule.id]: event.target.value }))}>
+        {tree.categories.filter((category) => category.active || category.id === rule.category_id).map((category) => <option key={category.id} value={category.id}>{category.name}{category.active ? "" : " (archived)"}</option>)}
+      </select>
+      <button type="button" className="ghost small" disabled={busy} onClick={() => void saveRule({ pattern: rule.pattern, match: rule.match, priority: rule.priority, category_id: choices[rule.id] ?? rule.category_id, source: "user" })}>{rule.source === "llm" ? "Save as your rule" : "Save rule"}</button>
+      <ConfirmButton label="Delete" icon={<Trash2 size={14} aria-hidden="true" />} title={`Delete the rule for “${rule.pattern}”?`} description="Future captures stop using this rule. Past labels stay unchanged." confirmLabel="Delete rule" onConfirm={() => void removeRule(rule.id)} />
+      </div></div>)}
+    <Pager page={current} pageCount={pageCount} total={tree.rules.length} pageSize={RULE_PAGE_SIZE} onPage={setPage} />
+    <form className="stg-inline" aria-label="Add merchant rule" onSubmit={(event) => { event.preventDefault(); if (merchant.trim() && categoryId) void saveRule({ pattern: merchant.trim(), category_id: categoryId, source: "user" }).then((saved) => { if (saved) setMerchant(""); }); }}>
+      <label>Merchant<input value={merchant} maxLength={200} required onChange={(event) => setMerchant(event.target.value)} /></label>
+      <label>Category<select required value={categoryId} onChange={(event) => setCategoryId(event.target.value)}><option value="">Choose a category</option>{active.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}</select></label>
+      <button type="submit" disabled={busy}>Add rule</button>
+    </form>
+    <Feedback error={error} message={message} />
+  </div>;
 }
 
 function NotificationsSection({ settings }: { settings: ApiState<SettingsPayload> }) {
@@ -1895,330 +1290,32 @@ function DeletionSection() {
 }
 
 function MemorySection({ preferences }: { preferences: ApiState<PreferenceList> }) {
-  return (
-    <SettingsSection
-      id="memory"
-      title="Agent memory"
-      description="Saved preferences, facts, and rules injected into answers on this instance. Turning one off keeps it listed and reversible."
-    >
-      <Loadable
-        state={preferences}
-        label="agent memory"
-        skeleton={<SettingsSkeleton label="Loading agent memory…" rows={4} />}
-      >
-        {(data) => <MemoryCard data={data} onChanged={preferences.reload} />}
-      </Loadable>
-    </SettingsSection>
-  );
+  return <SettingsSection id="memory" title="Agent memory" description="Review saved memories or ask Arno to change them.">
+    <Loadable state={preferences} label="agent memory" skeleton={<SettingsSkeleton label="Loading agent memory…" rows={4} />}>
+      {(data) => <MemoryCard data={data} onChanged={preferences.reload} />}
+    </Loadable>
+  </SettingsSection>;
 }
 
 function MemoryCard({ data, onChanged }: { data: PreferenceList; onChanged: () => void }) {
-  const [query, setQuery] = useState("");
-  const [source, setSource] = useState<"all" | "agent" | "user">("all");
-  const [kind, setKindFilter] = useState<"all" | Preference["kind"]>("all");
   const [page, setPage] = useState(0);
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [editing, setEditing] = useState<{ id: string; body: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
-
-  const needle = query.trim().toLowerCase();
-  const filtered = data.preferences.filter((item) => {
-    if (source !== "all" && item.created_by !== source) return false;
-    if (kind !== "all" && item.kind !== kind) return false;
-    return !needle || item.body.toLowerCase().includes(needle);
-  });
-  const kindFilters: Array<{ value: "all" | Preference["kind"]; label: string; count: number }> = [
-    { value: "all", label: "All", count: data.preferences.length },
-    {
-      value: "preference",
-      label: "Preferences",
-      count: data.preferences.filter((item) => item.kind === "preference").length,
-    },
-    {
-      value: "fact",
-      label: "Facts",
-      count: data.preferences.filter((item) => item.kind === "fact").length,
-    },
-    {
-      value: "rule",
-      label: "Rules",
-      count: data.preferences.filter((item) => item.kind === "rule").length,
-    },
-  ];
-  const pageCount = Math.max(1, Math.ceil(filtered.length / MEMORY_PAGE_SIZE));
-  const currentPage = Math.min(page, pageCount - 1);
-  const visible = filtered.slice(
-    currentPage * MEMORY_PAGE_SIZE,
-    (currentPage + 1) * MEMORY_PAGE_SIZE,
-  );
-
-  async function toggle(item: Preference) {
-    setBusyId(item.id);
-    setError(null);
-    try {
-      await api(`/api/preferences/${item.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({ active: !item.active }),
-      });
-      onChanged();
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  async function changeKind(item: Preference, next: Preference["kind"]) {
-    setBusyId(item.id);
-    setError(null);
-    try {
-      await api(`/api/preferences/${item.id}/kind`, {
-        method: "PATCH",
-        body: JSON.stringify({ kind: next }),
-      });
-      onChanged();
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  async function saveEdit(item: Preference) {
-    const text = editing && editing.id === item.id ? editing.body.trim() : "";
-    if (!text) {
-      setError("A memory cannot be empty.");
-      return;
-    }
-    setBusyId(item.id);
-    setError(null);
-    try {
-      await api(`/api/preferences/${item.id}/content`, {
-        method: "PATCH",
-        body: JSON.stringify({ body: text }),
-      });
-      setEditing(null);
-      onChanged();
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusyId(null);
-    }
-  }
-
+  const count = Math.max(1, Math.ceil(data.preferences.length / MEMORY_PAGE_SIZE));
+  const current = Math.min(page, count - 1);
   async function remove(item: Preference) {
-    setBusyId(item.id);
     setError(null);
-    try {
-      await api(`/api/preferences/${item.id}`, { method: "DELETE" });
-      if (editing?.id === item.id) setEditing(null);
-      onChanged();
-    } catch (caught) {
-      setError(errorMessage(caught));
-    } finally {
-      setBusyId(null);
-    }
+    try { await api(`/api/preferences/${encodeURIComponent(item.id)}`, { method: "DELETE" }); onChanged(); }
+    catch (caught) { setError(errorMessage(caught)); }
   }
-
-  return (
-    <div className="memory-workspace">
-      <div className="memory-intro">
-        <Orb size={56} />
-        <div>
-          <h3>What I remember about you</h3>
-          <p>{data.preferences.length} saved {data.preferences.length === 1 ? "memory" : "memories"}. Review what shapes the agent’s answers.</p>
-        </div>
-      </div>
-      <p className="stg-hint">
-        Turning a memory off is reversible. Deleting it for good blanks the text in the audit log and cannot be undone.
-      </p>
-
-      {data.preferences.length > 0 && (
-        <div className="memory-filter subtabs" role="radiogroup" aria-label="Filter by kind">
-          {kindFilters.map((filter) => (
-            <button
-              key={filter.value}
-              type="button"
-              role="radio"
-              className="subtab"
-              aria-checked={kind === filter.value}
-              data-state={kind === filter.value ? "active" : undefined}
-              onClick={() => {
-                setKindFilter(filter.value);
-                setPage(0);
-              }}
-            >
-              {filter.label} {filter.count}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {data.preferences.length > 0 && (
-        <div className="stg-filter">
-          <label>
-            Filter memory
-            <input
-              type="search"
-              value={query}
-              placeholder="Search saved text"
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setPage(0);
-              }}
-            />
-          </label>
-          <label>
-            Saved by
-            <select
-              value={source}
-              onChange={(event) => {
-                setSource(event.target.value as "all" | "agent" | "user");
-                setPage(0);
-              }}
-            >
-              <option value="all">Anyone</option>
-              <option value="agent">The agent</option>
-              <option value="user">You</option>
-            </select>
-          </label>
-        </div>
-      )}
-
-      {data.preferences.length === 0 ? (
-        <div className="stg-empty">
-          <p>Nothing remembered yet. The agent will add memories as you use it.</p>
-        </div>
-      ) : filtered.length === 0 ? (
-        <div className="stg-empty">
-          <p>No memories match these filters.</p>
-        </div>
-      ) : (
-        <>
-          <div className="stg-list">
-            {visible.map((item) => (
-              <div className={item.active ? "stg-list-row memory-row" : "stg-list-row memory-row off"} key={item.id}>
-                <span className="memory-type-wrap">
-                  <select
-                    className="memory-type"
-                    aria-label={"Kind of memory: " + item.body}
-                    value={item.kind}
-                    disabled={busyId === item.id}
-                    onChange={(event) =>
-                      void changeKind(item, event.target.value as Preference["kind"])
-                    }
-                  >
-                    <option value="preference">Preference</option>
-                    <option value="fact">Fact</option>
-                    <option value="rule">Rule</option>
-                  </select>
-                  <ChevronDown size={12} strokeWidth={2.4} aria-hidden="true" />
-                </span>
-                <div className="stg-list-body">
-                  {editing?.id === item.id ? (
-                    <>
-                      <input
-                        aria-label="Memory text"
-                        value={editing.body}
-                        maxLength={MEMORY_MAX_LENGTH}
-                        autoFocus
-                        onChange={(event) =>
-                          setEditing({ id: item.id, body: event.target.value })
-                        }
-                        onKeyDown={(event) => {
-                          if (event.key === "Escape") {
-                            setEditing(null);
-                            setError(null);
-                          }
-                          if (event.key === "Enter") void saveEdit(item);
-                        }}
-                      />
-                      <div className="stg-actions">
-                        <button
-                          type="button"
-                          className="ghost small"
-                          disabled={busyId === item.id}
-                          onClick={() => void saveEdit(item)}
-                        >
-                          <Save size={14} strokeWidth={1.8} aria-hidden="true" />
-                          Save
-                        </button>
-                        <button
-                          type="button"
-                          className="ghost small"
-                          disabled={busyId === item.id}
-                          onClick={() => {
-                            setEditing(null);
-                            setError(null);
-                          }}
-                        >
-                          <X size={14} strokeWidth={1.8} aria-hidden="true" />
-                          Cancel
-                        </button>
-                      </div>
-                    </>
-                  ) : (
-                    <p className="stg-memory-body">{item.body || "(deleted)"}</p>
-                  )}
-                  <p className="stg-list-meta">
-                    Saved {item.kind} · This instance ·{" "}
-                    {item.created_by === "agent" ? "Saved by the agent" : "Saved by you"} ·{" "}
-                    {formatMoment(item.created_at)} · {item.active ? "on" : "off"}
-                  </p>
-                  <MemoryPrevious previous={item.previous} />
-                </div>
-                <div className="stg-list-actions">
-                  <button
-                    type="button"
-                    className="ghost small"
-                    disabled={busyId === item.id}
-                    onClick={() => {
-                      setEditing({ id: item.id, body: item.body });
-                      setError(null);
-                    }}
-                  >
-                    <Pencil size={14} strokeWidth={1.8} aria-hidden="true" />
-                    Edit
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost small"
-                    disabled={busyId === item.id}
-                    onClick={() => void toggle(item)}
-                  >
-                    {item.active ? (
-                      <PowerOff size={14} strokeWidth={1.8} aria-hidden="true" />
-                    ) : (
-                      <Power size={14} strokeWidth={1.8} aria-hidden="true" />
-                    )}
-                    {item.active ? "Turn off" : "Turn on"}
-                  </button>
-                  <ConfirmButton
-                    label="Delete for good"
-                    icon={<Trash2 size={14} strokeWidth={1.8} aria-hidden="true" />}
-                    title="Delete this memory for good?"
-                    description="Its text is blanked in the audit log and this cannot be undone."
-                    confirmLabel="Delete for good"
-                    preview={{ scope: "memory", id: item.id }}
-                    onConfirm={() => void remove(item)}
-                  />
-                </div>
-              </div>
-            ))}
-          </div>
-          <Pager
-            page={currentPage}
-            pageCount={pageCount}
-            total={filtered.length}
-            pageSize={MEMORY_PAGE_SIZE}
-            onPage={setPage}
-          />
-        </>
-      )}
-
-      <Feedback error={error} message={null} />
-    </div>
-  );
+  return <div className="memory-workspace"><p className="stg-hint">Deleting a memory for good blanks its text in the audit log and cannot be undone.</p>
+    {data.preferences.length === 0 && <p>Nothing remembered yet.</p>}
+    <div className="stg-list">{data.preferences.slice(current * MEMORY_PAGE_SIZE, (current + 1) * MEMORY_PAGE_SIZE).map((item) => <div className="stg-list-row" key={item.id}>
+      <div className="stg-list-body"><p>{item.body || "(deleted)"}</p><p className="stg-list-meta">{item.kind} · {item.active ? "on" : "off"} · {item.created_by === "agent" ? "Saved by the agent" : "Saved by you"} · {formatMoment(item.created_at)}</p><MemoryPrevious previous={item.previous} /></div>
+      <div className="stg-list-actions"><button type="button" className="ghost small" onClick={() => askAgent(`Help me change memory ${item.id}: ${JSON.stringify(item.body)}`)}>Ask to change</button>
+        <ConfirmButton label="Delete for good" icon={<Trash2 size={14} aria-hidden="true" />} title="Delete this memory for good?" description="Its text is blanked in the audit log and this cannot be undone." confirmLabel="Delete for good" preview={{ scope: "memory", id: item.id }} onConfirm={() => void remove(item)} />
+      </div></div>)}</div>
+    <Pager page={current} pageCount={count} total={data.preferences.length} pageSize={MEMORY_PAGE_SIZE} onPage={setPage} /><Feedback error={error} message={null} />
+  </div>;
 }
 
 export function SettingsPanel({ onSignOut }: { onSignOut: () => void }) {
